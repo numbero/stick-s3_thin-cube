@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — Open Contour / 冰川</title>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#E3EDF3" />
+  <path d="M342 799V269C342 228 369 201 410 201H614C655 201 682 228 682 269V799" fill="none" stroke="#243F56" stroke-width="30" stroke-linecap="round" />
+  <rect x="390" y="253" width="244" height="378" rx="22" fill="#9AB5C8" />
+  <rect x="415" y="714" width="194" height="34" rx="17" fill="#0878FF" />
+</svg>

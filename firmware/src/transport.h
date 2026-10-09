@@ -1,0 +1,16 @@
+#pragma once
+#include "transport_policy.h"
+#include <mutex>
+void transportBegin();
+void transportStarted(uint32_t now);
+void transportTick(uint32_t now);
+TransportMode transportMode();
+const TransportRecord& transportRecord();
+bool transportBusy();
+bool transportBootVerified();
+const char* requestTransportSwitch(TransportMode target,const char* source,const char* requestId);
+bool transportCommit(const char* requestId);
+
+void transportProvisioningOverride();
+
+std::mutex& transportAdmission();

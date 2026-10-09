@@ -1,0 +1,25 @@
+# macOS metadata
+.DS_Store
+._*
+
+# Build output and caches
+/artifacts/
+.build/
+.swiftpm/
+.pio/
+DerivedData/
+__pycache__/
+*.py[cod]
+
+# Local configuration and signing credentials
+.env
+.env.*
+!.env.example
+*.p12
+*.pfx
+*.key
+*.mobileprovision
+
+# Device flash dumps and archived source snapshots (kept locally)
+/firmware-backup/*.bin
+/firmware-backup/*.tar.gz

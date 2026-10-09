@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — flat StickS3 device icon</title>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#EEF2F7"/>
+  <path d="M360 232 408 208H664L616 232Z" fill="#4B596B"/>
+  <path d="M616 232 664 208V784L616 808Z" fill="#1B2433"/>
+  <rect x="360" y="232" width="256" height="576" fill="#354154"/>
+  <rect x="400" y="272" width="176" height="312" rx="8" fill="#101824"/>
+  <rect x="448" y="648" width="80" height="80" rx="10" fill="#278BFF"/>
+</svg>

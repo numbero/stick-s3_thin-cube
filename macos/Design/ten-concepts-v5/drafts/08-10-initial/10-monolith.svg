@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — 出界</title>
+  <desc>A large upright front view continues beyond the bottom edge. The pale screen is cut from a deep ink monolith and anchored by one luminous horizontal blue key.</desc>
+  <defs>
+    <clipPath id="tile"><rect x="80" y="80" width="864" height="864" rx="190"/></clipPath>
+  </defs>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#DFE7C6"/>
+  <g clip-path="url(#tile)">
+    <rect x="322" y="190" width="380" height="840" rx="66" fill="#222C3A"/>
+    <rect x="360" y="230" width="304" height="458" rx="30" fill="#DFE7C6"/>
+    <rect x="420" y="752" width="184" height="44" rx="22" fill="#247AFF"/>
+  </g>
+</svg>

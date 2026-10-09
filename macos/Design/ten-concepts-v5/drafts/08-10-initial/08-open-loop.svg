@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — 开环</title>
+  <desc>A slender upright device becomes a generous open C. A tall negative-space screen and azure horizontal key retain the StickS3 identity.</desc>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#14252D"/>
+  <path d="M630 606V261C630 237.252 610.748 218 587 218H437C413.252 218 394 237.252 394 261V763C394 786.748 413.252 806 437 806H587C610.748 806 630 786.748 630 763V724" fill="none" stroke="#F6F3EA" stroke-width="56" stroke-linecap="round"/>
+  <rect x="440" y="704" width="144" height="38" rx="19" fill="#378FFF"/>
+</svg>

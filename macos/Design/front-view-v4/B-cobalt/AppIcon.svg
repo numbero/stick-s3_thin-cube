@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — front view, cobalt</title>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#2563EB"/>
+  <rect x="336" y="176" width="352" height="672" rx="64" fill="#17212E"/>
+  <rect x="384" y="220" width="256" height="456" rx="24" fill="#F7FAFF"/>
+  <rect x="424" y="744" width="176" height="28" rx="14" fill="#55B6FF"/>
+</svg>

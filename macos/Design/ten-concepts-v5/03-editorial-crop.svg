@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — Editorial Crop</title>
+  <defs><clipPath id="tile"><rect x="80" y="80" width="864" height="864" rx="190"/></clipPath></defs>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#DFEBF9"/>
+  <g clip-path="url(#tile)">
+    <rect x="390" y="28" width="440" height="1060" rx="88" fill="#132B49"/>
+    <rect x="440" y="134" width="340" height="604" rx="28" fill="#DFEBF9"/>
+    <rect x="470" y="836" width="280" height="52" rx="26" fill="#146DFF"/>
+  </g>
+</svg>

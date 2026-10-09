@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — 拼合</title>
+  <desc>Four bold corner modules define a long screen. The detached lower deck and blue horizontal key turn the front of StickS3 into a compact graphic system.</desc>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#EA694E"/>
+  <path d="M494 196H400C366.863 196 340 222.863 340 256V402H396V265C396 257.82 401.82 252 409 252H494Z" fill="#FFF4DF"/>
+  <path d="M530 196H624C657.137 196 684 222.863 684 256V402H628V265C628 257.82 622.18 252 615 252H530Z" fill="#FFF4DF"/>
+  <path d="M340 438V584C340 617.137 366.863 644 400 644H494V588H409C401.82 588 396 582.18 396 575V438Z" fill="#FFF4DF"/>
+  <path d="M684 438V584C684 617.137 657.137 644 624 644H530V588H615C622.18 588 628 582.18 628 575V438Z" fill="#FFF4DF"/>
+  <rect x="412" y="268" width="200" height="304" rx="12" fill="#242733"/>
+  <rect x="340" y="680" width="344" height="148" rx="42" fill="#242733"/>
+  <rect x="436" y="735" width="152" height="38" rx="19" fill="#3F91FF"/>
+</svg>

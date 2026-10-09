@@ -1,0 +1,6 @@
+[
+  {"id":"01","name":"蓝桥","slug":"blue-bridge","description":"以机身下缘的蓝色横键构成记忆点，让瘦长的正面轮廓成为紧凑的品牌符号。","svgFile":"01-blue-bridge.svg"},
+  {"id":"02","name":"回线","slug":"continuous-ribbon","description":"一条连续线从外壳内旋至屏幕，把设备变成可识别的线性标记；蓝色横键是视觉锚点。","svgFile":"02-continuous-ribbon.svg"},
+  {"id":"03","name":"近景","slug":"editorial-crop","description":"放大并偏置设备正面，以应用图标的边缘裁切机身，用屏幕与蓝色横键建立鲜明的版式。","svgFile":"03-editorial-crop.svg"},
+  {"id":"04","name":"环域","slug":"orbit-field","description":"圆形深色场域包围浅色设备，圆与长方的几何对比强调 thin 的比例。","svgFile":"04-orbit-field.svg"}
+]

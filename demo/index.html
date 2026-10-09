@@ -1,0 +1,858 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>stick-s3 · clawd · stage 2 mockup</title>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#08080A;--bg2:#1A1A1E;--panel:#222228;--panel2:#282010;
+    --border:#3A3A42;--text:#E8E8E8;--dim:#888890;
+    --accent:#F8B000;--glow:#FFC94D;--accent-dim:#B07C00;
+    --ok:#3DDC97;--warn:#FFCC00;--err:#FF3344;--rec:#FF2200;
+  }
+  body{
+    background:var(--bg);color:var(--text);
+    font-family:-apple-system,BlinkMacSystemFont,'SF Pro Display','Segoe UI',Roboto,sans-serif;
+    min-height:100vh;display:flex;flex-direction:column;align-items:center;
+    padding:24px 16px;overflow-x:hidden;
+  }
+  .page-head{text-align:center;margin-bottom:20px}
+  .page-head h1{
+    font-size:22px;font-weight:800;letter-spacing:6px;color:var(--accent);
+    text-shadow:0 0 30px rgba(248,176,0,.4),0 0 60px rgba(248,176,0,.15);
+  }
+  .page-head .sub{font-size:11px;color:#555;margin-top:4px;letter-spacing:2px}
+
+  /* ─── Layout ─── */
+  .layout{display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap;justify-content:center}
+  .device-col{display:flex;flex-direction:column;align-items:center}
+  .side-col{display:flex;flex-direction:column;gap:12px;width:252px}
+  .side-panel{background:#111114;border:1px solid #252528;border-radius:12px;overflow:hidden}
+  .side-head{
+    padding:10px 14px;font-size:11px;font-weight:700;color:var(--accent);
+    border-bottom:1px solid #1e1e22;letter-spacing:2px;
+  }
+  .side-body{padding:8px 14px}
+  .krow{
+    display:flex;justify-content:space-between;align-items:center;gap:10px;
+    padding:3px 0;font-size:11px;color:#888890;
+  }
+  .krow .act{color:#666;text-align:right}
+  .krow kbd{
+    display:inline-block;padding:1px 5px;background:#1a1a1a;border:1px solid #333;
+    border-radius:3px;font-size:9px;color:#888890;font-family:inherit;margin-right:2px;
+  }
+  .note{margin-top:10px;font-size:10px;color:#444;letter-spacing:.5px;line-height:1.8}
+
+  /* ─── Device ─── */
+  .device{
+    background:linear-gradient(160deg,#222 0%,#181818 40%,#111 100%);
+    border-radius:20px;padding:18px 16px 14px;
+    border:1px solid #333;
+    box-shadow:0 24px 80px rgba(0,0,0,.9),0 0 0 1px rgba(255,255,255,.04) inset,
+      0 2px 0 rgba(255,255,255,.06) inset;
+    position:relative;
+  }
+  .device::before{
+    content:'';position:absolute;top:7px;left:50%;transform:translateX(-50%);
+    width:44px;height:3px;border-radius:2px;background:#2a2a2a;
+  }
+  .brand{
+    text-align:center;font-size:9px;color:#444;letter-spacing:4px;
+    margin-bottom:10px;font-weight:600;text-transform:uppercase;
+  }
+  .screen-wrap{
+    border-radius:6px;overflow:hidden;border:2px solid #2a2a2a;
+    background:#0D0D0D;box-shadow:0 0 20px rgba(0,0,0,.6);
+  }
+  canvas{display:block}
+
+  /* ─── Hardware buttons ─── */
+  .btn-row{display:flex;justify-content:center;align-items:center;gap:16px;margin-top:14px}
+  .hw-btn{
+    width:46px;height:46px;border-radius:50%;border:2px solid #3a3a3a;
+    background:linear-gradient(180deg,#2c2c2c 0%,#1e1e1e 100%);
+    color:#777;font-size:12px;font-weight:700;cursor:pointer;
+    transition:all .1s;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;gap:1px;
+    user-select:none;-webkit-user-select:none;outline:none;
+    box-shadow:0 4px 12px rgba(0,0,0,.5),0 1px 0 rgba(255,255,255,.06) inset;
+    font-family:inherit;
+  }
+  .hw-btn .lbl{font-size:7px;letter-spacing:1px;opacity:.5}
+  .hw-btn.pressed{
+    transform:scale(.92);
+    border-color:var(--accent);color:var(--accent);
+    box-shadow:0 0 20px rgba(248,176,0,.35),0 2px 4px rgba(0,0,0,.4);
+    background:linear-gradient(180deg,#333 0%,#252525 100%);
+  }
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>CLAWD</h1>
+  <div class="sub">STICK-S3 · 阶段 2 浏览器 MOCKUP · 逻辑像素 135×240 · FREESANS 无衬线</div>
+</div>
+
+<div class="layout">
+  <div class="device-col">
+    <div class="device">
+      <div class="brand">M5Stick S3</div>
+      <div class="screen-wrap"><canvas id="scr"></canvas></div>
+      <div class="btn-row">
+        <div class="hw-btn" id="btnA">A<span class="lbl">POKE</span></div>
+        <div class="hw-btn" id="btnB">B<span class="lbl">PAGE</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="side-col">
+    <div class="side-panel">
+      <div class="side-head">KEYS</div>
+      <div class="side-body">
+        <div class="krow"><span><kbd>A</kbd></span><span class="act">逗它</span></div>
+        <div class="krow"><span><kbd>A</kbd>长按</span><span class="act">菜单</span></div>
+        <div class="krow"><span><kbd>B</kbd></span><span class="act">切页</span></div>
+        <div class="krow"><span><kbd>B</kbd>长按</span><span class="act">睡眠</span></div>
+        <div class="krow"><span><kbd>←</kbd><kbd>→</kbd><kbd>↑</kbd><kbd>↓</kbd></span><span class="act">倾斜</span></div>
+        <div class="krow"><span><kbd>空格</kbd></span><span class="act">摇晃</span></div>
+        <div class="krow"><span><kbd>F</kbd>按住</span><span class="act">屏幕朝下 → 睡</span></div>
+        <div class="krow"><span><kbd>V</kbd>按住</span><span class="act">环境噪声</span></div>
+        <div class="krow"><span><kbd>C</kbd></span><span class="act">吹气</span></div>
+        <div class="krow"><span><kbd>U</kbd></span><span class="act">插拔 USB</span></div>
+        <div class="krow"><span><kbd>N</kbd></span><span class="act">Wi-Fi 可选层</span></div>
+        <div class="krow"><span><kbd>P</kbd></span><span class="act">配网页</span></div>
+        <div class="krow"><span><kbd>O</kbd></span><span class="act">OTA 页</span></div>
+        <div class="krow"><span><kbd>S</kbd></span><span class="act">扫描线</span></div>
+        <div class="krow"><span><kbd>M</kbd></span><span class="act">静音</span></div>
+        <div class="krow"><span><kbd>-</kbd><kbd>=</kbd></span><span class="act">缩放</span></div>
+      </div>
+    </div>
+    <div class="note">
+      屏幕文字与几何全部按 135×240 逻辑像素绘制。设备端计划用 M5GFX 内置的 FreeSans
+      （Helvetica 系现代无衬线，9/12/18/24pt）；小爪的矩形几何取自参考形象 1:1 换算，
+      姿态、声音、电量均为演示模拟，未做实机验证。
+    </div>
+  </div>
+</div>
+
+<script>
+/* ============================================================
+   屏幕画布：135×240 逻辑像素
+   字体：FreeSans —— 设备端 M5GFX 内置的 Helvetica 系无衬线
+        浏览器里用 Helvetica Neue / Arial 近似（字宽与 FreeSans 接近）
+   ============================================================ */
+const W = 135, H = 240;
+const FONT_STACK = '"Helvetica Neue",Helvetica,Arial,sans-serif';
+
+/* UI 调色板：琥珀主色 + 语义色，只用于界面文字与控件；生物的配色见 CRABCOL */
+const PAL = {
+  ink:'#F8B000',        // 主字色（琥珀）
+  glow:'#FFC94D',       // 高光 / 最新动态
+  dim:'#B07C00',        // 暗琥珀（标签、历史行）
+  dim2:'#6B4C00',       // 更暗（装饰、睡眠态）
+  ok:'#3DDC97', warn:'#FFCC00', err:'#FF3344',
+  panel:'#282010',      // 选中行底色
+  screen:'#0D0D0D',
+};
+
+/* ---------------- 画布 ---------------- */
+let SCALE = 2;
+const canvas = document.getElementById('scr');
+let ctx = canvas.getContext('2d');
+function applyScale(){
+  canvas.width = W * SCALE;
+  canvas.height = H * SCALE;
+  canvas.style.width = (W * SCALE) + 'px';
+  canvas.style.height = (H * SCALE) + 'px';
+  ctx = canvas.getContext('2d');
+  ctx.setTransform(SCALE, 0, 0, SCALE, 0, 0);
+}
+applyScale();
+
+/* ---------------- 文字（按像素排版，非字符网格） ---------------- */
+let curFont = '';
+function setFont(size, weight, italic){
+  const f = (italic ? 'italic ' : '') + (weight || 400) + ' ' + size + 'px ' + FONT_STACK;
+  if (f !== curFont){ ctx.font = f; curFont = f; }
+}
+function textW(s, size, weight, italic){ setFont(size, weight, italic); return ctx.measureText(s).width; }
+function text(s, x, y, color, size = 9.5, weight = 400, italic = false){
+  setFont(size, weight, italic); ctx.fillStyle = color; ctx.textBaseline = 'top';
+  ctx.fillText(s, x, y);
+}
+function textRight(s, rightX, y, color, size = 9.5, weight = 400, italic = false){
+  text(s, rightX - textW(s, size, weight, italic), y, color, size, weight, italic);
+}
+function textCenter(s, cx, y, color, size = 9.5, weight = 400, italic = false){
+  text(s, cx - textW(s, size, weight, italic) / 2, y, color, size, weight, italic);
+}
+function clip(s, maxW, size, weight, italic){
+  if (textW(s, size, weight, italic) <= maxW) return s;
+  let t = s;
+  while (t.length > 1 && textW(t + '..', size, weight, italic) > maxW) t = t.slice(0, -1);
+  return t + '..';
+}
+function rule(y, color){
+  ctx.fillStyle = color || PAL.dim2;
+  ctx.fillRect(4, y, W - 8, 1);
+}
+function segBar(x, y, segs, on, off){
+  const w = 4, gap = 1.5, h = 4, n = 10;
+  for (let i = 0; i < n; i++){
+    ctx.fillStyle = i < segs ? on : off;
+    ctx.fillRect(x + i * (w + gap), y, w, h);
+  }
+}
+
+/* ---------------- 图形基元 ---------------- */
+function px(x, y, w, h, color){
+  ctx.fillStyle = color;
+  ctx.fillRect(Math.round(x), Math.round(y), w, h);
+}
+function dither(x, y, w, h, color){
+  ctx.fillStyle = color;
+  for (let j = 0; j < h; j++){
+    const off = j & 1;
+    for (let i = off; i < w; i += 2) ctx.fillRect(x + i, y + j, 1, 1);
+  }
+}
+function outlineRound(x, y, w, h, r, color){
+  ctx.strokeStyle = color; ctx.lineWidth = 1;
+  const o = 0.5;
+  ctx.beginPath();
+  ctx.moveTo(x + r + o, y + o);
+  ctx.lineTo(x + w - r - o, y + o);
+  ctx.quadraticCurveTo(x + w - o, y + o, x + w - o, y + r + o);
+  ctx.lineTo(x + w - o, y + h - r - o);
+  ctx.quadraticCurveTo(x + w - o, y + h - o, x + w - r - o, y + h - o);
+  ctx.lineTo(x + r + o, y + h - o);
+  ctx.quadraticCurveTo(x + o, y + h - o, x + o, y + h - r - o);
+  ctx.lineTo(x + o, y + r + o);
+  ctx.quadraticCurveTo(x + o, y + o, x + r + o, y + o);
+  ctx.stroke();
+}
+function line(x0, y0, x1, y1, color){
+  ctx.strokeStyle = color; ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(x0 + 0.5, y0 + 0.5); ctx.lineTo(x1 + 0.5, y1 + 0.5);
+  ctx.stroke();
+}
+function disc(cx, cy, r, color){
+  ctx.fillStyle = color;
+  ctx.beginPath(); ctx.arc(cx + 0.5, cy + 0.5, r, 0, Math.PI * 2); ctx.fill();
+}
+function discOutline(cx, cy, r, color){
+  ctx.strokeStyle = color; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(cx + 0.5, cy + 0.5, r, 0, Math.PI * 2); ctx.stroke();
+}
+function ditherDisc(cx, cy, r, color){
+  ctx.fillStyle = color;
+  for (let j = -r; j <= r; j++){
+    const half = Math.floor(Math.sqrt(Math.max(0, r * r - j * j)));
+    for (let i = -half; i <= half; i++) if (((i + j) & 1) === 0) ctx.fillRect(cx + i, cy + j, 1, 1);
+  }
+}
+function spiral(cx, cy, r0, k, turns, phase, color){
+  ctx.strokeStyle = color; ctx.lineWidth = 1;
+  ctx.beginPath();
+  const max = turns * Math.PI * 2;
+  for (let th = 0; th <= max; th += 0.1){
+    const r = r0 + k * th;
+    const x = cx + Math.cos(th + phase) * r, y = cy + Math.sin(th + phase) * r;
+    if (th === 0) ctx.moveTo(x + 0.5, y + 0.5); else ctx.lineTo(x + 0.5, y + 0.5);
+  }
+  ctx.stroke();
+}
+
+/* ---------------- 小家伙：小爪（块状像素生物） ----------------
+   几何照 Claude Code 的小爪（ClaudeCrabIcon）1:1 换算：
+   单位空间 66×52 —— 身体 54×39、两侧 6×13 小触角、四条 6×13 腿（x=6/18/42/54）、
+   两颗 6×6.5 方眼睛。全部是直角矩形，不做圆角、不做抖动，保持像素质感。 */
+const CRAB = {
+  unitW: 66, unitH: 52, s: 1.35,
+  body: { x: 6, y: 0, w: 54, h: 39 },
+  antY: 13, antW: 6, antH: 13, antL: 0, antR: 60,
+  eyeY: 13, eyeW: 6, eyeH: 6.5, eyeL: 12, eyeR: 48,
+  legY: 39, legW: 6, legH: 13, legX: [6, 18, 42, 54],
+};
+const PET_OX = (W - CRAB.unitW * CRAB.s) / 2;   // 23
+const PET_DEF_Y = 78;
+
+/* 小爪自己的配色，整族 terracotta，不掺琥珀（UI 色不参与生物绘制） */
+const CRABCOL = {
+  body:   '#D97757',   // 参考图原色
+  bodyDim:'#8A4A34',   // 睡眠时的身体
+  deep:   '#5A2F22',   // 睡眠时的眼睛
+  lite:   '#E8A184',   // 情绪符号 / 碎屑
+  eye:    '#140E0A',
+  brow:   '#8C3A2A',
+  blush:  'rgba(255,176,146,0.55)',
+  blushBad:'rgba(206,74,54,0.55)',
+};
+
+function drawPet(t, oyBase = PET_DEF_Y){
+  const st = S.state;
+  const asleep = st === 'SLEEP';
+  const skin = asleep ? CRABCOL.bodyDim : CRABCOL.body;
+  const dark = asleep ? CRABCOL.deep : CRABCOL.eye;
+
+  // 位移：IDLE 呼吸 / CURIOUS 探头 / EXCITED 蹦 / UPSET 抖 / DIZZY 乱晃
+  let dx = 0, dy = 0;
+  if (asleep) dy = Math.sin(t / 1500) * 1;
+  else if (st === 'IDLE') dy = Math.sin(t / 700) * 1.5;
+  else if (st === 'CURIOUS'){ dy = -1; dx = S.tilt.x * 3; }
+  else if (st === 'EXCITED') dy = -Math.abs(Math.sin(t / 170)) * 6;
+  else if (st === 'UPSET') dx = Math.sin(t / 60) * 1.6;
+  else if (st === 'EATING') dy = Math.abs(Math.sin(t / 150)) * 1.5;
+  else if (st === 'DIZZY'){ dx = Math.sin(t / 55) * 5; dy = Math.sin(t / 100) * 2; }
+
+  const ox = PET_OX + dx, oy = oyBase + dy;
+  const P = (x, y, w, h, c) => px(ox + x * CRAB.s, oy + y * CRAB.s, w * CRAB.s, h * CRAB.s, c);
+
+  // 走路/咀嚼：四条腿交替升降（腿根固定在身体下沿，只改长度）
+  const legOffsets = [[3, -3, 3, -3], [0, 0, 0, 0], [-3, 3, -3, 3], [0, 0, 0, 0]];
+  const walking = (st === 'EXCITED' || st === 'DIZZY' || st === 'EATING');
+  const offs = walking ? legOffsets[Math.floor(t / 150) % 4] : [0, 0, 0, 0];
+  CRAB.legX.forEach((lx, i) => P(lx, CRAB.legY, CRAB.legW, CRAB.legH + offs[i], skin));
+
+  // 小触角（好奇/兴奋时向上竖起来一点）
+  const perk = (st === 'CURIOUS' || st === 'EXCITED') ? 3 : 0;
+  P(CRAB.antL, CRAB.antY - perk / 2, CRAB.antW, CRAB.antH + perk, skin);
+  P(CRAB.antR, CRAB.antY - perk / 2, CRAB.antW, CRAB.antH + perk, skin);
+
+  // 身体
+  P(CRAB.body.x, CRAB.body.y, CRAB.body.w, CRAB.body.h, skin);
+
+  // 方眼睛（闭眼 = 眼位下沿的一条横线）
+  const lookX = Math.max(-2, Math.min(2, S.tilt.x * 2));
+  const lookY = Math.max(-1, Math.min(1, S.tilt.y * 1.5)) + (st === 'EATING' ? 1 : 0);
+  const blink = !asleep && (t - S.blinkAt < 140);
+  if (asleep || blink){
+    P(CRAB.eyeL, CRAB.eyeY + 5, CRAB.eyeW, 1.6, dark);
+    P(CRAB.eyeR, CRAB.eyeY + 5, CRAB.eyeW, 1.6, dark);
+  } else {
+    P(CRAB.eyeL + lookX, CRAB.eyeY + lookY, CRAB.eyeW, CRAB.eyeH, dark);
+    P(CRAB.eyeR + lookX, CRAB.eyeY + lookY, CRAB.eyeW, CRAB.eyeH, dark);
+  }
+
+  // 不高兴：眉（内低外高的两段阶梯）
+  if (st === 'UPSET'){
+    P(11, 9, 4, 1.6, CRABCOL.brow);  P(15, 11, 4, 1.6, CRABCOL.brow);
+    P(51, 9, 4, 1.6, CRABCOL.brow);  P(47, 11, 4, 1.6, CRABCOL.brow);
+  }
+
+  // 腮红（我们加的，小方块；不高兴时转红）
+  if (!asleep){
+    const blush = st === 'UPSET' ? CRABCOL.blushBad : CRABCOL.blush;
+    P(7, 24, 5, 3, blush);
+    P(54, 24, 5, 3, blush);
+  }
+
+  // 情绪符号
+  const rightX = PET_OX + CRAB.unitW * CRAB.s;
+  if (st === 'EXCITED'){
+    const w1 = Math.sin(t / 220) * 2;
+    text('*', ox - 14, oy + 8 + w1, CRABCOL.body, 11, 700);
+    text('!', ox - 8, oy + 30 - w1, CRABCOL.lite, 11, 700);
+    text('+', rightX + dx + 2, oy + 6 + w1, CRABCOL.body, 11, 700);
+    text('*', rightX + dx + 6, oy + 28 - w1, CRABCOL.lite, 11, 700);
+  }
+  if (st === 'DIZZY'){
+    text('@', ox - 13, oy + 18, CRABCOL.body, 10, 700);
+    text('@', rightX + dx + 2, oy + 30, CRABCOL.brow, 10, 700);
+  }
+  if (asleep){
+    text('z', rightX + dx + 2, oy + 8, CRABCOL.bodyDim, 10, 700);
+    text('z', rightX + dx + 8, oy - 4, CRABCOL.deep, 10, 700);
+  }
+  if (st === 'EATING'){
+    for (let i = 0; i < 3; i++){
+      const q = ((t / 300) + i * 0.4) % 1;
+      px(ox + (26 + i * 6) * CRAB.s, oy + (44 + q * 5) * CRAB.s, 3, 3, CRABCOL.lite);
+    }
+  }
+}
+
+/* ---------------- 状态机 ---------------- */
+const S = {
+  boot: performance.now(),
+  state: 'IDLE',
+  since: 0,
+  energy: 78,
+  noise: 0,
+  noiseHold: 0,
+  link: false,
+  charging: false,
+  tilt: { x: 0, y: 0 },
+  idleFor: 0,
+  blinkAt: 0,
+  echo: 'ready',
+  log: [],
+  page: 0,          // 0 主界面 / 1 菜单 / 2 关于 / 3 配网 / 4 OTA
+  menuSel: 0,
+  prov: { stage: 0, t0: 0, tries: 0, cycle: 0, ssid: 'home-2g' },   // ap/wait/scan/verify/ok/fail
+  ota:  { stage: 0, t0: 0, pct: 0, ver: 'v0.2', err: '' },         // confirm/receiving/verifying/done/failed
+  scanlines: false,   // 默认关：实心块上叠扫描线会有条纹感，需要 CRT 味道时按 S 打开
+  muted: true,
+  arrowTimes: [],
+  faceDownFor: 0,
+  fHeld: false,
+  dizzyUntil: 0,
+};
+const MENU = ['scanlines', 'mute', 'sleep', 'about'];
+
+function log(m, k = 'info'){
+  const d = new Date();
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mm = String(d.getMinutes()).padStart(2, '0');
+  S.log.push({ t: hh + ':' + mm, m, k });
+  if (S.log.length > 40) S.log.shift();
+}
+function setState(st, echoText){
+  S.state = st; S.since = performance.now(); S.idleFor = 0;
+  if (echoText) S.echo = echoText;
+}
+
+/* ---------------- 声音（模拟喇叭） ---------------- */
+let audio = null;
+function blip(seq){
+  if (S.muted) return;
+  try{
+    if (!audio) audio = new (window.AudioContext || window.webkitAudioContext)();
+    if (audio.state === 'suspended') audio.resume();
+    const t0 = audio.currentTime;
+    seq.forEach(([f, d, at]) => {
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.type = 'square'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t0 + at);
+      g.gain.exponentialRampToValueAtTime(0.06, t0 + at + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + at + d);
+      o.connect(g); g.connect(audio.destination);
+      o.start(t0 + at); o.stop(t0 + at + d + 0.02);
+    });
+  }catch(e){}
+}
+const SND = {
+  wake:  () => blip([[520, .06, 0], [780, .09, .07]]),
+  poke:  () => blip([[300, .05, 0], [420, .08, .06]]),
+  dizzy: () => blip([[700, .05, 0], [500, .05, .06], [330, .12, .12]]),
+  upset: () => blip([[150, .18, 0], [130, .2, .2]]),
+  eat:   () => blip([[400, .06, 0], [600, .06, .07], [800, .12, .14]]),
+  sleep: () => blip([[600, .08, 0], [380, .14, .09]]),
+  ok:    () => blip([[880, .05, 0]]),
+};
+
+/* ---------------- 输入 ---------------- */
+const held = {};
+function pressBtn(which, on){
+  document.getElementById(which === 'A' ? 'btnA' : 'btnB').classList.toggle('pressed', on);
+}
+function onWakeCheck(src){
+  if (S.state === 'SLEEP'){
+    setState('CURIOUS', 'wake: ' + src);
+    log('wake by ' + src, 'info');
+    SND.wake();
+    return true;
+  }
+  return false;
+}
+function poke(){
+  if (onWakeCheck('btn')) return;
+  if (S.page === 1){ menuApply(); return; }
+  if (S.page === 3){ S.prov.stage = 0; S.prov.t0 = performance.now(); S.prov.tries = 0; return; }
+  if (S.page === 4){ otaAccept(); return; }
+  setState('EXCITED', 'btn.A click');
+  log('poke!', 'send');
+  SND.poke();
+}
+function otaAccept(){
+  if (S.ota.stage !== 0) return;
+  S.ota.stage = 1; S.ota.t0 = performance.now(); S.ota.pct = 0;
+  log('ota begin v0.2', 'send'); SND.ok();
+}
+
+document.addEventListener('keydown', e => {
+  if (e.repeat && e.key !== 'v' && e.key !== 'f'){ e.preventDefault(); return; }
+  const k = e.key;
+  if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(k)) e.preventDefault();
+
+  if (k === 'a' || k === 'A'){
+    if (!held.A){ held.A = performance.now(); pressBtn('A', true); }
+  } else if (k === 'b' || k === 'B'){
+    if (!held.B){ held.B = performance.now(); pressBtn('B', true); }
+  } else if (k === 'v' || k === 'V'){
+    S.noise = Math.min(100, S.noise + 9);
+  } else if (k === 'f' || k === 'F'){
+    S.fHeld = true;
+  } else if (k === 'c' || k === 'C'){
+    if (!onWakeCheck('blow')){
+      setState('EXCITED', 'blow');
+      log('whoa whoa', 'send');
+      SND.poke();
+    }
+  } else if (k === 'u' || k === 'U'){
+    S.charging = !S.charging;
+    S.echo = S.charging ? 'usb in' : 'usb out';
+    if (S.charging){ setState('EATING', 'usb in'); log('usb in, yum', 'ok'); SND.eat(); }
+    else { setState('UPSET', 'usb out'); log('unplugged :(', 'err'); SND.upset(); }
+  } else if (k === 'n' || k === 'N'){
+    S.link = !S.link;
+    S.echo = S.link ? 'link on' : 'link off';
+    log(S.link ? 'link up' : 'link down', S.link ? 'ok' : 'info');
+    if (S.link){ SND.ok(); setTimeout(() => { if (S.link) log('net time sync', 'info'); }, 900); }
+  } else if (k === 's' || k === 'S'){
+    S.scanlines = !S.scanlines; S.echo = 'scanlines ' + (S.scanlines ? 'on' : 'off');
+  } else if (k === 'm' || k === 'M'){
+    S.muted = !S.muted; S.echo = 'mute ' + (S.muted ? 'on' : 'off');
+  } else if (k === 'p' || k === 'P'){
+    S.page = 3; S.prov.stage = 0; S.prov.t0 = performance.now(); S.prov.tries = 0; S.prov.cycle = 0;
+    S.echo = 'wifi setup'; log('prov: hotspot up', 'ok');
+  } else if (k === 'o' || k === 'O'){
+    S.page = 4; S.ota.stage = 0; S.ota.t0 = performance.now(); S.ota.pct = 0; S.ota.err = '';
+    S.echo = 'ota session'; log('ota: waiting confirm', 'info');
+  } else if (k === '-' || k === '_'){
+    if (SCALE > 1){ SCALE--; applyScale(); }
+  } else if (k === '=' || k === '+'){
+    if (SCALE < 4){ SCALE++; applyScale(); }
+  } else if (k.startsWith('Arrow')){
+    const now = performance.now();
+    S.arrowTimes.push(now);
+    S.arrowTimes = S.arrowTimes.filter(x => now - x < 1400);
+    if (k === 'ArrowLeft')  S.tilt.x = -1;
+    if (k === 'ArrowRight') S.tilt.x = 1;
+    if (k === 'ArrowUp')    S.tilt.y = -1;
+    if (k === 'ArrowDown')  S.tilt.y = 1;
+    S.echo = 'tilt ' + k.slice(5).toLowerCase();
+    if (S.arrowTimes.length >= 4){ S.arrowTimes = []; shake(); }
+    else if (!onWakeCheck('tilt')){
+      if (S.state === 'IDLE') setState('CURIOUS', 'tilt');
+      setTimeout(() => { S.tilt.x = 0; S.tilt.y = 0; }, 700);
+    }
+  } else if (k === ' '){
+    shake();
+  }
+});
+document.addEventListener('keyup', e => {
+  const k = e.key;
+  if ((k === 'a' || k === 'A') && held.A){
+    const dur = performance.now() - held.A; held.A = 0; pressBtn('A', false);
+    if (dur >= 700){
+      S.page = 1; S.menuSel = 0; S.echo = 'menu';
+      if (!onWakeCheck('btn')) log('menu open', 'info');
+    } else poke();
+  } else if ((k === 'b' || k === 'B') && held.B){
+    const dur = performance.now() - held.B; held.B = 0; pressBtn('B', false);
+    if (dur >= 700){
+      asleep('btn'); S.page = 0;
+    } else if (!onWakeCheck('btn')){
+      if (S.page === 4 && S.ota.stage === 0){
+        S.ota.stage = 4; S.ota.err = 'cancelled'; S.ota.t0 = performance.now();
+        log('ota cancelled', 'err'); SND.upset();
+      } else if (S.page === 1){ S.menuSel = (S.menuSel + 1) % MENU.length; S.echo = MENU[S.menuSel]; }
+      else { S.page = (S.page + 1) % 5; S.echo = 'page ' + S.page; }
+      if (S.page !== 4 || S.ota.stage !== 4) SND.ok();
+    }
+  }
+});
+function shake(){
+  if (onWakeCheck('shake')) return;
+  setState('DIZZY', 'shake'); log('shaken, dizzy', 'warn'); SND.dizzy();
+  S.dizzyUntil = performance.now() + 1100;
+}
+function menuApply(){
+  const item = MENU[S.menuSel];
+  S.echo = item + ' ok';
+  if (item === 'scanlines') S.scanlines = !S.scanlines;
+  if (item === 'mute') S.muted = !S.muted;
+  if (item === 'sleep'){ S.page = 0; asleep('menu'); return; }
+  if (item === 'about') S.page = 2;
+  SND.ok();
+}
+function asleep(src){
+  setState('SLEEP', 'sleep'); log('nothing to do', 'info'); log('zzz', 'info'); SND.sleep();
+  S.faceDownFor = 0;
+}
+
+/* ---------------- 每帧更新 ---------------- */
+let lastT = 0;
+function update(now, dt){
+  const st = S.state;
+  S.idleFor += dt;
+
+  S.noise = Math.max(0, S.noise - dt * 0.022);
+  if (st !== 'SLEEP'){
+    if (S.noise > 45){
+      S.noiseHold += dt;
+      if (S.noiseHold > 1200 && st !== 'UPSET'){ setState('UPSET', 'noise ' + Math.round(S.noise)); log('too loud', 'warn'); SND.upset(); S.noiseHold = 0; }
+      else if (st === 'IDLE' && S.noise > 45) setState('CURIOUS', 'noise');
+    } else S.noiseHold = 0;
+  }
+
+  S.faceDownFor = S.fHeld ? S.faceDownFor + dt : 0;
+  if (S.faceDownFor > 1500 && st !== 'SLEEP'){ asleep('face'); }
+
+  if (st === 'IDLE' && now > S.blinkAt + 3200) S.blinkAt = now;
+
+  if (st === 'DIZZY' && now > S.dizzyUntil) setState('EXCITED', 'whew');
+  if ((st === 'EXCITED' || st === 'CURIOUS') && now - S.since > 2600) setState('IDLE');
+  if (st === 'UPSET' && now - S.since > 3000) setState('IDLE');
+  if (st === 'EATING' && !S.charging && now - S.since > 1200) setState('IDLE');
+
+  if (st === 'EATING') S.energy = Math.min(100, S.energy + dt * 0.0005);
+  else if (st !== 'SLEEP') S.energy = Math.max(4, S.energy - dt * 0.00003);
+
+  if (!S.noAutoSleep && S.page !== 3 && S.page !== 4 && st !== 'SLEEP' && S.idleFor > 25000) asleep('idle');
+
+  // 配网 / OTA：真机上这些阶段由 WiFi 事件与 httpd 回调驱动，这里按时间推进演示
+  if (S.page === 3){ tickProv(now); S.state = S.prov.stage === 4 ? 'EXCITED' : S.prov.stage === 5 ? 'UPSET' : 'CURIOUS'; }
+  else if (S.page === 4){ tickOta(now, dt); S.state = S.ota.stage === 3 ? 'EXCITED' : S.ota.stage === 4 ? 'UPSET' : S.ota.stage === 1 ? 'IDLE' : 'CURIOUS'; }
+}
+
+function tickProv(now){
+  const p = S.prov, dt = now - p.t0;
+  if (p.stage === 0 && dt > 1600){ p.stage = 1; p.t0 = now; }
+  else if (p.stage === 1 && dt > 3200){ p.stage = 2; p.t0 = now; log('prov: phone joined', 'info'); }
+  else if (p.stage === 2 && dt > 1400){ p.stage = 3; p.t0 = now; p.tries = 1; log('prov: verify ' + p.ssid, 'info'); }
+  else if (p.stage === 3 && dt > 1800){
+    p.t0 = now;
+    if (p.cycle % 3 === 2){ p.stage = 5; log('prov: auth failed', 'err'); SND.upset(); }
+    else { p.stage = 4; log('prov: saved, reboot', 'ok'); SND.ok(); }
+    p.cycle++;
+  }
+  else if (p.stage === 4 && dt > 2400){ p.stage = 1; p.t0 = now; }
+  else if (p.stage === 5 && dt > 2600){ p.stage = 1; p.t0 = now; }
+}
+function tickOta(now, dt){
+  const o = S.ota;
+  if (o.stage === 0){
+    if (now - o.t0 > 9000){ o.stage = 4; o.err = 'timeout'; o.t0 = now; log('ota: timeout', 'err'); }
+  } else if (o.stage === 1){
+    o.pct = Math.min(100, o.pct + dt / 45);
+    if (o.pct >= 100){ o.stage = 2; o.t0 = now; log('ota: verifying image', 'info'); }
+  } else if (o.stage === 2 && now - o.t0 > 1400){ o.stage = 3; o.t0 = now; log('ota: flash ok, reboot', 'ok'); SND.ok(); }
+  else if (o.stage === 3 && now - o.t0 > 3200){ o.stage = 0; o.pct = 0; o.t0 = now; }
+  else if (o.stage === 4 && now - o.t0 > 3200){ o.stage = 0; o.pct = 0; o.err = ''; o.t0 = now; }
+}
+
+/* ---------------- 渲染 ---------------- */
+const LOG_COLOR = { send: PAL.ink, ok: PAL.ok, info: PAL.dim, warn: PAL.warn, err: PAL.err };
+const CX = W / 2;
+
+function statusBar(){
+  const d = new Date();
+  const hhmm = String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  const asleep = S.state === 'SLEEP';
+  const x = 4, y = 1, bodyW = 34, h = 14;
+  const level = Math.max(0, Math.min(100, Math.round(S.energy)));
+  const fillW = Math.ceil(30 * level / 100), label = level + '%';
+  outlineRound(x, y, bodyW, h, 2, PAL.ink);
+  px(x + bodyW + 1, y + 4, 2, 6, PAL.ink);
+  if (fillW) px(x + 2, y + 2, fillW, 10, PAL.ok);
+  const tx = x + (bodyW - textW(label, 8, 600)) / 2;
+  text(label, tx, y + 3, PAL.ink, 8, 600);
+  if (fillW){
+    ctx.save();
+    ctx.beginPath();ctx.rect(x + 2, y + 2, fillW, 10);ctx.clip();
+    text(label, tx, y + 3, PAL.screen, 8, 600);
+    ctx.restore();
+  }
+  if (S.charging){
+    ctx.fillStyle = PAL.ok;
+    ctx.beginPath();
+    ctx.moveTo(x + 43, y + 3);ctx.lineTo(x + 40, y + 8);
+    ctx.lineTo(x + 43, y + 8);ctx.lineTo(x + 42, y + 12);
+    ctx.lineTo(x + 45, y + 7);ctx.lineTo(x + 42, y + 7);
+    ctx.closePath();ctx.fill();
+  }
+  const right = asleep ? 'L1 52uA  ' + hhmm : hhmm;
+  textRight(right, W - 4, 4, PAL.dim, 9.5, asleep ? 400 : 600);
+}
+function statLabel(s, x, y){ text(s, x, y, PAL.dim, 7.5, 600); }
+function vitals(){
+  const st = S.state;
+  const moodColor = st === 'UPSET' ? PAL.err : st === 'EATING' ? PAL.ok
+                  : st === 'SLEEP' ? PAL.dim : PAL.ink;
+  statLabel('MOOD', 4, 19);
+  text(clip(st.toLowerCase(), 60, 10, 600), 4, 29, moodColor, 10, 600);
+  statLabel('NOISE', 72, 19);
+  segBar(72, 31, Math.min(10, Math.round(S.noise / 10)), S.noise > 45 ? PAL.warn : PAL.ink, PAL.dim2);
+  statLabel('ENERGY', 4, 41);
+  segBar(4, 53, Math.round(S.energy / 10), S.energy < 30 ? PAL.warn : PAL.ink, PAL.dim2);
+  statLabel('LINK', 72, 41);
+  text(S.link ? 'wifi ok' : 'off', 72, 51, S.link ? PAL.ok : PAL.dim2, 10, 600);
+}
+function renderMain(t){
+  statusBar();
+  rule(16);
+  vitals();
+  const up = Math.floor((performance.now() - S.boot) / 1000);
+  const upStr = String(Math.floor(up / 60)).padStart(2, '0') + ':' + String(up % 60).padStart(2, '0');
+  textCenter('pid 0x012a   up ' + upStr, CX, 62, PAL.dim, 8.5);
+  drawPet(t);
+  // 小爪的独白：斜体，和终端自己的文字区分开
+  textCenter(thought(), CX, 152, PAL.dim, 9, 400, true);
+  text('> ' + clip(S.echo, 100, 10), 4, 164, PAL.ink, 10);
+  rule(178);
+  const lines = S.log.slice(-6);
+  lines.forEach((e, i) => {
+    const last = i === lines.length - 1;
+    const c = (last && e.k === 'info') ? PAL.glow : (LOG_COLOR[e.k] || PAL.dim);
+    text(clip('[' + e.t + '] ' + e.m, W - 8, 9), 4, 182 + i * 10, c, 9);
+  });
+}
+const THOUGHTS = {
+  IDLE: ['hmm', '...', 'nothing here', 'idle'],
+  CURIOUS: ['what was that'], EXCITED: ['again again'], UPSET: ['too loud'],
+  EATING: ['om nom nom'], DIZZY: ['blurgh'], SLEEP: ['dreaming'],
+};
+function thought(){
+  const list = THOUGHTS[S.state] || THOUGHTS.IDLE;
+  const i = S.state === 'IDLE' ? Math.floor((performance.now() - S.since) / 3000) % list.length : 0;
+  return list[i];
+}
+function logTail(from, n, size){
+  const lines = S.log.slice(-n);
+  lines.forEach((e, i) => {
+    text(clip('[' + e.t + '] ' + e.m, W - 8, size || 9), 4, from + i * 10,
+         LOG_COLOR[e.k] || PAL.dim, size || 9);
+  });
+}
+function renderMenu(){
+  text('MENU', 4, 8, PAL.ink, 13, 700);
+  rule(28);
+  const items = [['scanlines', S.scanlines ? 'on' : 'off'], ['mute', S.muted ? 'on' : 'off'],
+                 ['sleep', ''], ['about', '']];
+  items.forEach(([name, val], i) => {
+    const y = 38 + i * 19, sel = i === S.menuSel;
+    if (sel){ ctx.fillStyle = PAL.panel; ctx.fillRect(0, y - 6, W, 19); }
+    text(sel ? '>' : '', 4, y, sel ? PAL.glow : PAL.dim2, 11, 700);
+    text(name, 16, y, sel ? PAL.ink : PAL.dim, 10.5, sel ? 600 : 400);
+    if (val) textRight(val, W - 6, y, val === 'on' ? PAL.ok : PAL.dim, 10.5, sel ? 600 : 400);
+  });
+  rule(120);
+  text('A = ok      B = next', 4, 126, PAL.dim, 9);
+  text('hold B = sleep', 4, 138, PAL.dim, 9);
+  rule(154);
+  logTail(162, 7, 9);
+}
+function renderAbout(){
+  text('ABOUT', 4, 8, PAL.ink, 13, 700);
+  rule(28);
+  const rows = [
+    ['name', 'clawd v0.1'], ['chip', 'esp32-s3'], ['flash', '8mb'], ['psram', '8mb'],
+    ['lcd', '135x240'], ['imu', 'bmi270'], ['mic', 'mems'], ['spk', 'aw8737'],
+    ['power', 'm5pm1'], ['wifi', '2.4g opt'], ['ir', 'off'],
+  ];
+  rows.forEach(([k, v], i) => {
+    const y = 36 + i * 13.5;
+    text(k, 4, y, PAL.dim, 9.5);
+    text(v, 52, y, (k === 'ir' || k === 'wifi') ? PAL.dim : PAL.ink, 9.5, 600);
+  });
+  rule(190);
+  text('stage 2/3 mockup', 4, 196, PAL.dim, 9);
+  text('browser sim · values', 4, 208, PAL.dim2, 9);
+  text('pending real checks', 4, 220, PAL.dim2, 9);
+}
+function renderProv(t){
+  const p = S.prov;
+  const names = ['ap', 'wait', 'scan', 'verify', 'ok', 'fail'];
+  text('WIFI SETUP', 4, 8, PAL.ink, 13, 700);
+  rule(28);
+  const rows = [['stage', names[p.stage]], ['ssid', 'CLAWD-Setup'], ['pass', 'clawd1234']];
+  if (p.tries) rows.push(['target', p.ssid]);
+  rows.forEach(([k, v], i) => {
+    const y = 34 + i * 12, hot = (k === 'stage');
+    text(k, 4, y, PAL.dim, 9);
+    text(clip(v, 76, 10, 600), 44, y, hot && p.stage === 5 ? PAL.err : PAL.ink, 10, 600);
+  });
+  drawPet(t, 88);
+  // 广播波纹（等待手机/验密时）
+  if (p.stage === 1 || p.stage === 3){
+    const ph = Math.floor(t / 340) % 3;
+    for (let i = 0; i <= ph; i++) text(')', 117, 104 + i * 9, CRABCOL.lite, 10, 700);
+  }
+  const hint = [
+    ['hotspot starting',   'CLAWD-Setup'],
+    ['join hotspot then',  'open 192.168.4.1'],
+    ['portal /scan',       'waiting...'],
+    ['verifying password', 'try ' + p.tries + ' of 3'],
+    ['credentials saved',  'rebooting'],
+    ['connect failed',     'check password'],
+  ][p.stage];
+  textCenter(hint[0], CX, 162, PAL.dim, 9);
+  textCenter(hint[1], CX, 174, p.stage === 5 ? PAL.err : PAL.ink, 10, 600);
+  rule(188);
+  logTail(192, 3, 9);
+}
+function renderOta(t){
+  const o = S.ota;
+  const names = ['confirm', 'receiving', 'verifying', 'done', 'failed'];
+  text('FIRMWARE', 4, 8, PAL.ink, 13, 700);
+  rule(28);
+  text('target', 4, 34, PAL.dim, 9); text(o.ver, 44, 34, PAL.ink, 10, 600);
+  text('state', 4, 46, PAL.dim, 9);
+  text(names[o.stage], 44, 46, o.stage === 4 ? PAL.err : o.stage === 3 ? PAL.ok : PAL.ink, 10, 600);
+  if (o.stage >= 1 && o.stage <= 3){
+    text('flash', 4, 60, PAL.dim, 9);
+    textRight(Math.round(o.pct) + '%', W - 6, 60, PAL.glow, 10, 700);
+    segBar(4, 72, Math.round(o.pct / 10), o.stage === 3 ? PAL.ok : PAL.ink, PAL.dim2);
+  }
+  drawPet(t, 88);
+  if (o.stage === 0){
+    textCenter('A = yes    B = no', CX, 162, PAL.ink, 10, 600);
+    const left = Math.max(0, Math.ceil((9000 - (t - o.t0)) / 1000));
+    textRight('timeout ' + left + 's', W - 6, 174, PAL.dim, 9);
+  }
+  else if (o.stage === 1) textCenter('receiving ' + Math.round(o.pct) + '%', CX, 162, PAL.glow, 10, 600);
+  else if (o.stage === 2) textCenter('verifying image', CX, 162, PAL.dim, 9);
+  else if (o.stage === 3) textCenter('ok    rebooting', CX, 162, PAL.ok, 10, 600);
+  else textCenter('failed: ' + o.err, CX, 162, PAL.err, 10, 600);
+  rule(186);
+  logTail(190, 4, 9);
+}
+function scanlines(){
+  if (!S.scanlines) return;
+  ctx.fillStyle = 'rgba(0,0,0,0.08)';
+  for (let y = 0; y < H; y += 2) ctx.fillRect(0, y, W, 1);
+}
+function draw(t){
+  ctx.fillStyle = PAL.screen;
+  ctx.fillRect(0, 0, W, H);
+  if (S.page === 0) renderMain(t);
+  else if (S.page === 1) renderMenu();
+  else if (S.page === 2) renderAbout();
+  else if (S.page === 3) renderProv(t);
+  else renderOta(t);
+  if (S.state === 'SLEEP'){
+    ctx.fillStyle = 'rgba(0,0,0,0.35)';
+    ctx.fillRect(0, 0, W, H);
+  }
+  scanlines();
+}
+
+/* ---------------- 主循环 ---------------- */
+let last = performance.now();
+function frame(now){
+  requestAnimationFrame(frame);
+  const dt = Math.min(120, now - last); last = now;
+  if (now - lastT < 33) return;
+  lastT = now;
+  update(now, dt);
+  draw(now);
+}
+
+log('boot ok', 'ok');
+log('lcd 135x240', 'ok');
+log('imu bmi270', 'ok');
+log('mic mems', 'ok');
+log('spk aw8737', 'ok');
+log('power m5pm1', 'ok');
+log('clawd v0.1 up', 'send');
+window.STATE = S;   // 调试钩子：控制台里可直接读状态、驱动演示
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

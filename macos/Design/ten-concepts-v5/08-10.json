@@ -1,0 +1,23 @@
+[
+  {
+    "id": "08",
+    "name": "反相",
+    "slug": "counterchange",
+    "description": "用明暗对半的反相构图重塑正面机身，蓝色横键穿过分界线，形成鲜明而克制的图形记忆。",
+    "svgFile": "08-counterchange.svg"
+  },
+  {
+    "id": "09",
+    "name": "字形",
+    "slug": "letterform",
+    "description": "加宽上沿暗示 T，屏幕右侧开口暗示 C；把 ThinCube 的首字母藏入设备正面的几何结构。",
+    "svgFile": "09-letterform.svg"
+  },
+  {
+    "id": "10",
+    "name": "双环",
+    "slug": "linked-loops",
+    "description": "让长屏幕环与横向按键环相扣，以柔和起伏的双环轮廓代替常规矩形外壳。",
+    "svgFile": "10-linked-loops.svg"
+  }
+]

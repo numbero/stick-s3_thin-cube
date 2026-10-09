@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — Orbit Field</title>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#E6EBEE"/>
+  <circle cx="512" cy="512" r="306" fill="#14243B"/>
+  <rect x="372" y="181" width="280" height="662" rx="64" fill="#FAFBF7"/>
+  <rect x="407" y="229" width="210" height="374" rx="22" fill="#14243B"/>
+  <rect x="420" y="707" width="184" height="36" rx="18" fill="#126BFF"/>
+</svg>

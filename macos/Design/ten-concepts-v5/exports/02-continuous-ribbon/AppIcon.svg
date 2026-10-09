@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — Continuous Ribbon</title>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#142338"/>
+  <path d="M438 799H594C623 799 646 776 646 747V247C646 218 623 195 594 195H430C401 195 378 218 378 247V615C378 637 396 655 418 655H565C587 655 605 637 605 615V276C605 254 587 236 565 236H459C437 236 419 254 419 276V570" fill="none" stroke="#F4F5EF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round"/>
+  <rect x="418" y="710" width="188" height="38" rx="19" fill="#3A88FF"/>
+</svg>

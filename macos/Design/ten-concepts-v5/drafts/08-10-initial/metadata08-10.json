@@ -1,0 +1,23 @@
+[
+  {
+    "id": "08",
+    "name": "开环",
+    "slug": "open-loop",
+    "description": "把瘦长机身提炼成开口的 C 形轮廓；大块负形屏幕与蓝色横键，在克制中增加辨识度。",
+    "svgFile": "08-open-loop.svg"
+  },
+  {
+    "id": "09",
+    "name": "拼合",
+    "slug": "modules",
+    "description": "用四个粗角模块与独立底座重组设备正面；珊瑚色底形成更活泼、鲜明的品牌图形。",
+    "svgFile": "09-modules.svg"
+  },
+  {
+    "id": "10",
+    "name": "出界",
+    "slug": "monolith",
+    "description": "放大设备正面，让机身从底边延伸出去；柔和浅绿、深墨色与一枚蓝色横键构成安静而有力的图标。",
+    "svgFile": "10-monolith.svg"
+  }
+]

@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — 反相</title>
+  <desc>The centered upright device reverses its positive and negative colors across a vertical split. One blue horizontal button holds the two fields together.</desc>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#F3F0E8"/>
+  <path d="M512 80H754C858.934 80 944 165.066 944 270V754C944 858.934 858.934 944 754 944H512Z" fill="#202733"/>
+  <path d="M512 184H414C376.445 184 346 214.445 346 252V778C346 815.555 376.445 846 414 846H512Z" fill="#202733"/>
+  <path d="M512 184H610C647.555 184 678 214.445 678 252V778C678 815.555 647.555 846 610 846H512Z" fill="#F3F0E8"/>
+  <path d="M512 226H412C397.641 226 386 237.641 386 252V610C386 624.359 397.641 636 412 636H512Z" fill="#F3F0E8"/>
+  <path d="M512 226H612C626.359 226 638 237.641 638 252V610C638 624.359 626.359 636 612 636H512Z" fill="#202733"/>
+  <rect x="426" y="730" width="172" height="40" rx="20" fill="#2782FF"/>
+</svg>

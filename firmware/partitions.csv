@@ -1,0 +1,10 @@
+# clawd firmware 分区表（8MB flash，A/B 双槽 OTA）
+# 设计见 docs/wifi-prov-ota.md §3.1
+#   - nvs 仍在 0x9000（与出厂布局一致）
+#   - 不设 factory：otadata 空白时 bootloader 引导第一个 app 槽
+#   - 只 OTA app；bootloader 与分区表走 USB
+# Name,     Type, SubType, Offset,   Size,     Flags
+nvs,        data, nvs,     0x9000,   0x5000,
+otadata,    data, ota,     0xE000,   0x2000,
+app0,       app,  ota_0,   0x10000,  0x200000,
+app1,       app,  ota_1,   0x210000, 0x200000,

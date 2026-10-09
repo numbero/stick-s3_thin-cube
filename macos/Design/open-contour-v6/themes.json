@@ -1,0 +1,10 @@
+[
+  {"id":"A","name":"瓷白","slug":"porcelain","description":"暖白底与炭黑图形，延续 05 原版的干净与克制。","background":"#EFEDE7","contour":"#252B32","screen":"#252B32","button":"#0878FF","screenMode":"solid"},
+  {"id":"B","name":"石墨","slug":"graphite","description":"石墨灰底与柔白图形，适合深色桌面；蓝色条键保持鲜明。","background":"#252A32","contour":"#E9E8E2","screen":"#E9E8E2","button":"#4A9BFF","screenMode":"solid"},
+  {"id":"C","name":"冰川","slug":"glacier","description":"冷灰蓝底与低饱和屏幕，减轻实色块的重量，呈现清爽的仪器感。","background":"#E3EDF3","contour":"#243F56","screen":"#9AB5C8","button":"#0878FF","screenMode":"solid"},
+  {"id":"D","name":"电蓝","slug":"electric","description":"电蓝底与柔白图形，以浅蓝条键呼应硬件，更醒目、更有品牌色。","background":"#245FDF","contour":"#F4F5F7","screen":"#F4F5F7","button":"#9AD5FF","screenMode":"solid"},
+  {"id":"E","name":"苔雾","slug":"sage","description":"灰绿与深苔色形成安静的冷暖平衡，蓝色条键保留科技感。","background":"#E6EBE4","contour":"#344D45","screen":"#344D45","button":"#0878FF","screenMode":"solid"},
+  {"id":"F","name":"砂岩","slug":"sandstone","description":"暖砂底与棕灰轮廓，屏幕使用柔和的矿物色，偏向温暖的工业设计。","background":"#ECE2D4","contour":"#584B40","screen":"#B7A895","button":"#0878FF","screenMode":"solid"},
+  {"id":"G","name":"蓝图","slug":"blueprint","description":"用空心屏幕替代实色块，蓝灰线条与留白构成更轻盈的浅色主题。","background":"#F3F6FA","contour":"#294969","screen":"#294969","button":"#0878FF","screenMode":"outline"},
+  {"id":"H","name":"夜航","slug":"nightfall","description":"深午夜蓝底、冰蓝外框与低亮度空心屏幕，保留开放轮廓的呼吸感。","background":"#151E30","contour":"#C7D7EB","screen":"#587396","button":"#3A98FF","screenMode":"outline"}
+]

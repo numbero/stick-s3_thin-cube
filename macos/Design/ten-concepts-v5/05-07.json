@@ -1,0 +1,23 @@
+[
+  {
+    "id": "05",
+    "name": "开放轮廓",
+    "slug": "open-contour",
+    "description": "底边留空，用一根连续线和一块实色屏幕描出机身；蓝色横键成为视觉停顿。",
+    "svgFile": "05-open-contour.svg"
+  },
+  {
+    "id": "06",
+    "name": "模块拼构",
+    "slug": "modular-pair",
+    "description": "屏幕和按键区分为两块模块，用一道留白建立节奏，保留细长设备的比例。",
+    "svgFile": "06-modular-pair.svg"
+  },
+  {
+    "id": "07",
+    "name": "C 型留白",
+    "slug": "open-c",
+    "description": "让屏幕向右打开，将机身提炼成 C 型符号；蓝色条键保留硬件识别点。",
+    "svgFile": "07-open-c.svg"
+  }
+]

@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — Open C</title>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#20262D"/>
+  <path d="M419 194H622C663 194 686 218 686 258V282H425V620H686V760C686 804 663 830 619 830H419C375 830 346 804 346 760V264C346 220 375 194 419 194Z" fill="#F2F0E8"/>
+  <rect x="423" y="709" width="190" height="34" rx="17" fill="#2C8AFF"/>
+</svg>

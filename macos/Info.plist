@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>ThinCube</string>
+  <key>CFBundleIdentifier</key><string>app.thincube.mac</string>
+  <key>CFBundleName</key><string>ThinCube</string>
+  <key>CFBundleDisplayName</key><string>ThinCube</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.4.0</string>
+  <key>CFBundleVersion</key><string>21</string>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSLocalNetworkUsageDescription</key><string>ThinCube 需要发现并连接同一 Wi-Fi 下的设备，以接收麦克风音频、同步设置和升级固件。</string>
+  <key>NSBluetoothAlwaysUsageDescription</key><string>ThinCube 需要通过 BLE 发现并连接设备，以接收语音、按键和切换连接模式。</string>
+  <key>NSBonjourServices</key><array><string>_thincube._tcp</string></array>
+  <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/><key>NSAllowsArbitraryLoads</key><true/></dict>
+</dict></plist>

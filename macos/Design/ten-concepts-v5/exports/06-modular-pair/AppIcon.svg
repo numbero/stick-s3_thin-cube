@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>ThinCube — Modular Pair</title>
+  <rect x="80" y="80" width="864" height="864" rx="190" fill="#DCECF2"/>
+  <path d="M402 198H622C657 198 678 219 678 254V612C678 630 666 642 648 642H376C358 642 346 630 346 612V254C346 219 367 198 402 198Z" fill="#203943"/>
+  <rect x="390" y="242" width="244" height="354" rx="13" fill="#DCECF2"/>
+  <path d="M376 672H648C666 672 678 684 678 702V766C678 802 657 824 621 824H403C367 824 346 802 346 766V702C346 684 358 672 376 672Z" fill="#203943"/>
+  <rect x="409" y="723" width="206" height="32" rx="16" fill="#00A5FF"/>
+</svg>
