@@ -255,7 +255,10 @@ struct MainView: View {
                 Text("当前姿态：" + (model.status?.poseDescription ?? "等待设备连接"))
             }.disabled(!model.connected || model.updating || model.switching)
             Section("设备设置") {
-                HStack { Text("亮度"); Slider(value: $model.brightness, in: 8...255, step: 1); Button("保存") { Task { await model.apply(["brightness": Int(model.brightness)]) } } }
+                SettingsSliderRow(title: "亮度", value: $model.brightness, range: 8...255, step: 1,
+                                  valueLabel: "\(Int(model.brightness))") {
+                    Task { await model.apply(["brightness": Int(model.brightness)]) }
+                }
                 TextField("新的 Wi-Fi 名称", text: $model.wifiSSID)
                 SecureField("新的 Wi-Fi 密码（开放网络留空）", text: $model.wifiPassword)
                 Button("验证并切换 Wi-Fi") { Task { await model.changeWifi() } }.disabled(model.wifiSSID.isEmpty || model.currentTransport == "ble")
@@ -268,7 +271,10 @@ struct MainView: View {
                 Toggle("允许设备向 Mac 输入语音", isOn: Binding(get: { model.status?.allowed ?? false }, set: { value in Task { await model.apply(["allowed": value]) } }))
                 Toggle("静音 · 真正停止麦克风采集", isOn: Binding(get: { model.status?.muted ?? false }, set: { value in Task { await model.apply(["muted": value]) } }))
                 Toggle("本地声音互动", isOn: Binding(get: { model.status?.localSound ?? true }, set: { value in Task { await model.apply(["localSound": value]) } }))
-                HStack { Text("输入增益"); Slider(value: $model.gain, in: 0.1...4, step: 0.1); Text(String(format: "%.1f×", model.gain)); Button("保存") { Task { await model.apply(["gain": model.gain]) } } }
+                SettingsSliderRow(title: "输入增益", value: $model.gain, range: 0.1...4, step: 0.1,
+                                  valueLabel: String(format: "%.1f×", model.gain)) {
+                    Task { await model.apply(["gain": model.gain]) }
+                }
                 ProgressView(value: model.status?.level ?? 0).accessibilityLabel("麦克风音量")
                 HStack {
                     Button("开始持续语音") { Task { await model.command("start") } }.disabled(!model.audioPrepared || model.status?.allowed != true || model.status?.muted == true)
@@ -281,15 +287,11 @@ struct MainView: View {
             Section("Clawd 音效") {
                 if model.status?.soundVolume != nil {
                     Toggle("音效静音", isOn: Binding(get: { model.status?.soundMuted ?? false }, set: { value in Task { await model.apply(["soundMuted": value]) } }))
-                    HStack {
-                        Text("音效音量")
-                        Slider(value: $model.soundVolume, in: 0...100, step: 1)
-                            .accessibilityLabel("Clawd 音效音量")
-                            .onChange(of: model.soundVolume) { value in
-                                model.scheduleSoundVolume(Int(value))
-                            }
-                        Text("\(Int(model.soundVolume))%").monospacedDigit().frame(width: 40)
-                    }
+                    SettingsSliderRow(title: "音效音量", value: $model.soundVolume, range: 0...100, step: 1,
+                                      valueLabel: "\(Int(model.soundVolume))%")
+                        .onChange(of: model.soundVolume) { value in
+                            model.scheduleSoundVolume(Int(value))
+                        }
                     Button("试听音效") { Task { await model.command("sound_preview") } }
                         .disabled(model.status?.soundMuted == true || model.soundVolume == 0 || model.status?.streaming == true)
                     Text(model.status?.streaming == true ? "正在传音，音效暂停。" : "短电子音会配合唤醒、互动、扫描和发现。设置保存在设备上，断开 Mac 后仍生效。")

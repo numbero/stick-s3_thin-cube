@@ -96,7 +96,7 @@ import ThinCubeCore
     }
     func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         if expectedDisconnects.remove(peripheral.identifier) != nil { return }
-        guard peripheral == self.peripheral else { return }; fail(error ?? ClientError.message("BLE 已断开"), notify: true)
+        guard peripheral == self.peripheral else { return }; fail(error ?? ClientError.transient("蓝牙连接已中断，正在重新查找设备。"), notify: true)
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         guard peripheral == self.peripheral else { return }

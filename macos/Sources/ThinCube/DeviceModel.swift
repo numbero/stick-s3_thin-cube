@@ -184,7 +184,9 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         discovery.ble.onDisconnect = { [weak self] reason in
             guard let self, self.activeBLE else { return }; self.connectionFailed(reason)
         }
-        discoveryObserver = discovery.$devices.sink { [weak self] devices in self?.discovered(devices) }
+        discoveryObserver = discovery.$devices.sink { [weak self] devices in
+            Task { @MainActor in self?.discovered(devices) }
+        }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
                 guard let self else { return }
