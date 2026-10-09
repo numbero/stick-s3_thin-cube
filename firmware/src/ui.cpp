@@ -282,7 +282,7 @@ void uiBegin(){
 }
 bool uiHealthy(){return canvas.getBuffer()!=nullptr;}
 void uiSetOrientation(uint8_t requested,uint32_t ms){
-  const bool critical=provActive()||otaActive()||devicePairWindow()||blePairVisible()||transportBusy()||s_debug;
+  const bool critical=provActive()||otaActive()||devicePairWindow()||blePairVisible()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(critical)games.cancel();
   else if(games.active())return;
   if(critical)requested=requested==2?2:0;
@@ -469,7 +469,7 @@ void uiTick(uint32_t ms){
   s_chgShown = powerCharging();
   // Keep sensor acquisition and diagnostics alive while setup/OTA own the UI.
   const MotionEv ev = motionPoll(ms);
-  const bool special=provActive()||otaActive()||devicePairWindow()||blePairVisible()||transportBusy()||s_debug;
+  const bool special=provActive()||otaActive()||devicePairWindow()||blePairVisible()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(special)games.cancel();
 
   /* 配网 / OTA 期间接管屏幕与按键，暂停小爪的日常循环 */
@@ -496,7 +496,7 @@ void uiTick(uint32_t ms){
     if(error){snprintf(transportHint,sizeof(transportHint),"switch: %s",error);transportHintUntil=ms+3000;uiLog("%s",transportHint);}
     goWake("transport");
   }
-  if(devicePairWindow()||blePairVisible()||transportBusy())games.cancel();
+  if(devicePairWindow()||blePairVisible()||transportBusy()||gestures.switchReady||gestures.comboReady)games.cancel();
   if(deck&&!landscapeVisible)goWake("landscape");
   if(!deck)games.cancel();
   landscapeVisible=deck;

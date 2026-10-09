@@ -8,7 +8,10 @@ struct StarCatch {
   static constexpr unsigned Capacity=2;
   enum class Feedback { None, Caught, Missed };
   struct Events { unsigned caught=0,missed=0;bool finished=false; };
-  struct Star {float x=0,y=0;bool active=false;};
+  struct Star {
+    float x,y;bool active;
+    Star(float sx=0,float sy=0,bool enabled=false):x(sx),y(sy),active(enabled){}
+  };
   Star stars[Capacity];
   float baseline=0,offset=0,hitX=0;
   uint32_t started=0,lastTick=0,nextSpawn=0,feedbackAt=0;
