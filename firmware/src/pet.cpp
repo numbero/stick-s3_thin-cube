@@ -14,6 +14,30 @@ float window(float t,float a,float b,float c,float d){return rise(t,a,b)*(1-rise
 float bump(float t,float a,float b){return t<=a||t>=b?0:sinf((t-a)/(b-a)*M_PI);}
 struct Context{float x,y,s;LGFX_Sprite* g;};
 void rect(const Context& c,float x,float y,float w,float h,uint16_t color){c.g->fillRect(lroundf(c.x+x*c.s),lroundf(c.y+y*c.s),ceilf(w*c.s),ceilf(h*c.s),color);}
+uint16_t starInk(float alpha){
+  return rgb565(13+242*alpha,13+188*alpha,13+64*alpha);
+}
+void dizzyStars(const Context& c,float t){
+  const float fade=1-rise(t,1650,2000);
+  const float tail=std::min(1.1f,t/430);
+  constexpr int segments=14;
+  // Sample behind each star on the same ellipse; no frame history or allocation.
+  for(int i=0;i<2;i++){
+    const float angle=t/430+i*M_PI;
+    for(int j=segments;j>0;j--){
+      const float a=angle-tail*j/segments,b=angle-tail*(j-1)/segments;
+      const float alpha=fade*(.12f+.62f*(1-float(j)/segments));
+      c.g->drawLine(lroundf(c.x+(33+cosf(a)*19)*c.s),lroundf(c.y+(-8+sinf(a)*3)*c.s),
+                    lroundf(c.x+(33+cosf(b)*19)*c.s),lroundf(c.y+(-8+sinf(b)*3)*c.s),starInk(alpha));
+    }
+  }
+  // Draw both stars last so neither trail can paint over a star.
+  for(int i=0;i<2;i++){
+    const float angle=t/430+i*M_PI,x=33+cosf(angle)*19,y=-8+sinf(angle)*3;
+    rect(c,x-2.5f,y-.5f,5,1,starInk(fade));
+    rect(c,x-.5f,y-2.5f,1,5,starInk(fade));
+  }
+}
 }
 void petSetScale(float s){scale=s;}
 float petHeight(){return 52*scale;}
@@ -52,7 +76,7 @@ void petDraw(LGFX_Sprite* g,int y,uint32_t ms,int originX,float attention){
   rect(c,0,13-perkL/2,6,13+perkL,skin);rect(c,60,13-perkR/2,6,13+perkR,skin);rect(c,6,0,54,39,skin);
   rect(c,12+eyeX,19.5-leftEye,6,leftEye,C::eye);rect(c,48+eyeX,19.5-rightEye,6,rightEye,C::eye);
   if(brow>.1){rect(c,11,9,4,1.6,C::brow);rect(c,15,7,4,1.6,C::brow);}
-  if(state==PET_DIZZY&&t<2000){for(int i=0;i<2;i++){float a=t/430+i*M_PI;rect(c,31+cosf(a)*19,-10+sinf(a)*3,2,2,C::lite);}}
+  if(state==PET_DIZZY&&t<2000&&!live)dizzyStars(c,t);
   if(state==PET_EXCITED&&t>450&&t<1700){rect(c,-5,5,1.5,5,C::lite);rect(c,-6.5,6.5,4.5,1.5,C::lite);rect(c,71,22,1.5,5,C::lite);rect(c,69.5,23.5,4.5,1.5,C::lite);}
   if(visible>.05){
     float f=held?sinf(ms/280.f)*1.6f:0,rx=74-lift*2,ry=25-lift*22+(1-visible)*22+f;

@@ -114,8 +114,6 @@ uint32_t lastBlink = 0;
 bool s_chgShown = false;
 int s_lvlShown = -1;
 
-const uint16_t logInk[5] = { C::dim, C::ok, C::ink, C::warn, C::err };
-
 void setFontNow(){
   canvas.setFont(&fonts::FreeSans9pt7b);
   canvas.setTextSize(1);
@@ -184,7 +182,6 @@ void segBar(int x, int y, int segs, uint16_t on){
 }
 int  rowPitch(){ int p = s_glyphH + 2; if (p < 12) p = 12; if (p > 18) p = 18; return p; }
 void putCenter(const char* s, int y, uint16_t col){ put(s, (W - strW(s)) / 2, y, col); }
-void putRight(const char* s, int y, uint16_t col){ put(s, (W - PAD) - strW(s), y, col); }
 
 constexpr int BATTERY_W = 46;  // 34px 电池主体 + 电极 + 充电闪电
 constexpr int BATTERY_H = 14;
@@ -252,17 +249,6 @@ const char* connectionCaption(uint32_t ms){
   if(!state.audioReady)return "audio not ready";
   if(!state.captureReady)return "mic not ready";
   return !strcmp(deviceVoiceBlock(),"rearm")?"flip again to talk":"Mac online";
-}
-/* 日志尾部（无时间戳，最新一条高光）；主界面 / PROV / OTA 三页共用 */
-void drawLogTail(int y, int rows, int pitch){
-  rule(y);
-  y += PAD;
-  const int from = logCount > rows ? logCount - rows : 0;
-  for (int i = from; i < logCount; i++){
-    const LogLine& l = logs[i % 16];
-    putClip(l.m, PAD, y, (i == logCount - 1) ? C::glow : logInk[l.k]);
-    y += pitch;
-  }
 }
 }
 
@@ -605,20 +591,6 @@ void renderDebug(uint32_t ms){
   present(ms);
 }
 
-/* 小爪在中间那一带的通用摆位（PROV / OTA 两页共用），返回小爪顶部 y */
-static int petBand(int y, int pitch, uint32_t ms){
-  const int reserved = 5 * pitch + 2 * PAD;
-  int petSpace = H - y - reserved;
-  if (petSpace < 40) petSpace = 40;
-  float sc = petSpace / 52.0f;
-  if (sc > 1.55f) sc = 1.55f;
-  if (sc < 0.90f) sc = 0.90f;
-  petSetScale(sc);
-  const int top = y + (petSpace - (int)petHeight()) / 2;
-  petDraw(&canvas, top, ms);
-  return top;
-}
-
 /* Fixed 135x240 setup layout. Critical strings are complete, never ellipsized. */
 void renderProv(uint32_t ms){
   canvas.fillSprite(C::screen);
@@ -669,70 +641,63 @@ void renderProv(uint32_t ms){
   present(ms);
 }
 
-/* OTA 页：对应 demo/index.html 的 renderOta（confirm/receiving/verifying/done/failed） */
+/* OTA forces the portrait viewport. Fixed Font0 cells and an anchored footer
+   keep every stage inside 135x240, independent of the calibrated UI font. */
 void renderOta(uint32_t ms){
   canvas.fillSprite(C::screen);
-  const int pitch = rowPitch();
-  int y = 3;
-  put("FIRMWARE", PAD, y, C::ink); y += pitch + 2;
-  rule(y); y += 6;
-
-  const int colX = PAD + strW("target") + 8;
+  constexpr int margin=8;
+  auto line=[&](const char* text,int y,uint16_t color,int size=1){
+    const int maxChars=(W-2*margin)/(6*size);
+    char label[40];snprintf(label,sizeof(label),"%s",text);
+    int length=strlen(label);
+    if(length>maxChars){length=maxChars;label[length]=0;memcpy(label+length-3,"...",3);}
+    pixelText(label,(W-length*6*size)/2,y,color,size);
+  };
+  line("FIRMWARE",8,C::ink,2);
+  const char* version=otaTargetVer();
+  line(version[0]?version:"-",39,C::dim);
+  canvas.drawFastHLine(margin,55,W-2*margin,C::dim2);
   const OtaStage st = otaStage();
-
-  put("target", PAD, y, C::dim);
-  putClip(otaTargetVer()[0] ? otaTargetVer() : "-", colX, y, C::ink); y += pitch;
-
-  const char* sname = "confirm";
-  uint16_t scol = C::ink;
+  const int progress=std::max(0,std::min(100,otaPct()));
+  const char* name="CONFIRM",*hint="Confirm on device",*footer="A: YES   B: NO";
+  uint16_t color=C::glow;
   switch (st){
-    case OTA_READY:
-    case OTA_RECV:   sname = "receiving"; break;
-    case OTA_VERIFY: sname = "verifying"; break;
-    case OTA_DONE:   sname = "done";   scol = C::ok;  break;
-    case OTA_FAIL:   sname = "failed"; scol = C::err; break;
+    case OTA_READY: name="WAITING";hint="Waiting for Mac";footer="B: CANCEL";break;
+    case OTA_RECV: name="RECEIVING";hint="Keep power on";footer="B: CANCEL";break;
+    case OTA_VERIFY: name="VERIFYING";hint="Checking image";footer="PLEASE WAIT";break;
+    case OTA_DONE: name="COMPLETE";hint="Restarting...";footer="UPDATE COMPLETE";color=C::ok;break;
+    case OTA_FAIL: name="FAILED";hint="Try again on Mac";footer="B: BACK";color=C::err;break;
     default: break;
   }
-  put("state", PAD, y, C::dim);
-  putClip(sname, colX, y, scol); y += pitch;
-
-  if (st == OTA_READY || st == OTA_RECV || st == OTA_VERIFY || st == OTA_DONE){
-    char pb[8];
-    snprintf(pb, sizeof(pb), "%d%%", otaPct());
-    put("flash", PAD, y, C::dim);
-    putRight(pb, y, st == OTA_DONE ? C::ok : C::glow); y += pitch;
-    segBar(PAD, y, otaPct() / 10, st == OTA_DONE ? C::ok : C::ink);
-    y += 8;
+  line(name,73,color,2);
+  if(st==OTA_FAIL){
+    // Show the whole bounded error, including long underscored reasons.
+    char error[40];snprintf(error,sizeof(error),"%s",otaLastErr());
+    if(!error[0])snprintf(error,sizeof(error),"Upload failed");
+    for(char* p=error;*p;p++)if(*p=='_')*p=' ';
+    const int columns=(W-2*margin)/6;
+    const int length=strlen(error);
+    for(int offset=0,row=0;offset<length;offset+=columns,row++){
+      char part[40];const int count=std::min(columns,length-offset);
+      memcpy(part,error+offset,count);part[count]=0;line(part,108+row*14,C::err);
+    }
+  }else{
+    char value[8];
+    if(st==OTA_CONFIRM){
+      snprintf(value,sizeof(value),"%ds",std::max(0,std::min(30,otaConfirmLeftSec())));
+      line("Time remaining",154,C::dim);
+    }else{
+      snprintf(value,sizeof(value),"%d%%",progress);
+      canvas.drawRect(margin,153,W-2*margin,10,C::dim2);
+      const int fill=(W-2*margin-4)*progress/100;
+      if(fill)canvas.fillRect(margin+2,155,fill,6,color);
+    }
+    line(value,106,color,4);
   }
-
-  petBand(y, pitch, ms);
-  y += 5 * pitch + 2 * PAD;
-
-  char line[32];
-  switch (st){
-    case OTA_CONFIRM:
-      putCenter("A = yes    B = no", y, C::ink); y += pitch;
-      snprintf(line, sizeof(line), "timeout %ds", otaConfirmLeftSec());
-      putRight(line, y, C::dim); y += pitch;
-      break;
-    case OTA_DONE:
-      putCenter("ok    rebooting", y, C::ok); y += pitch;
-      break;
-    case OTA_FAIL:
-      snprintf(line, sizeof(line), "failed: %s", otaLastErr()[0] ? otaLastErr() : "error");
-      putCenter(line, y, C::err); y += pitch;
-      putCenter("B = back", y, C::dim); y += pitch;
-      break;
-    case OTA_VERIFY:
-      putCenter("verifying image", y, C::dim); y += pitch;
-      break;
-    default:
-      snprintf(line, sizeof(line), "receiving %d%%", otaPct());
-      putCenter(line, y, C::glow); y += pitch;
-      break;
-  }
-
-  drawLogTail(y, 3, pitch);
+  line(hint,183,C::dim);
+  canvas.drawFastHLine(margin,H-32,W-2*margin,C::dim2);
+  line(footer,H-18,st==OTA_DONE?C::ok:C::ink);
+  setFontNow();
   present(ms);
 }
 

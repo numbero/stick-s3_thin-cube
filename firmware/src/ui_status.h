@@ -19,12 +19,13 @@ enum class Icon { WiFi, Bluetooth, Mac, Wave, Muted, Warning };
 template<class Canvas> void drawIcon(Canvas& g, Icon icon, int x, int y, uint16_t color, bool disconnected=false) {
   switch(icon) {
     case Icon::WiFi:
-      g.drawLine(x+3,y+1,x+8,y+1,color);
-      g.drawLine(x,y+4,x+3,y+1,color);g.drawLine(x+8,y+1,x+11,y+4,color);
-      g.drawLine(x+4,y+4,x+7,y+4,color);
-      g.drawLine(x+2,y+6,x+4,y+4,color);g.drawLine(x+7,y+4,x+9,y+6,color);
-      g.drawLine(x+4,y+8,x+5,y+7,color);g.drawLine(x+6,y+7,x+7,y+8,color);
-      g.fillRect(x+5,y+10,2,2,color);break;
+      // Two shallow waves and a dot form a centered 12x8 silhouette.
+      // The third wave crowded this small slot into an almost square shape.
+      g.drawFastHLine(x+3,y+2,6,color);
+      g.drawLine(x,y+4,x+3,y+2,color);g.drawLine(x+8,y+2,x+11,y+4,color);
+      g.drawFastHLine(x+4,y+5,4,color);
+      g.drawLine(x+2,y+6,x+4,y+5,color);g.drawLine(x+7,y+5,x+9,y+6,color);
+      g.fillRect(x+5,y+8,2,2,color);break;
     case Icon::Bluetooth:
       g.drawLine(x+5,y,x+5,y+11,color);
       g.drawLine(x+5,y,x+9,y+3,color);g.drawLine(x+9,y+3,x+2,y+9,color);
@@ -47,6 +48,9 @@ template<class Canvas> void drawIcon(Canvas& g, Icon icon, int x, int y, uint16_
       g.drawTriangle(x+5,y,x,y+11,x+11,y+11,color);
       g.drawFastVLine(x+5,y+4,3,color);g.drawPixel(x+5,y+9,color);break;
   }
-  if(disconnected)g.drawLine(x,y,x+11,y+11,color);
+  if(disconnected) {
+    if(icon==Icon::WiFi)g.drawLine(x,y+2,x+11,y+9,color);
+    else g.drawLine(x,y,x+11,y+11,color);
+  }
 }
 }

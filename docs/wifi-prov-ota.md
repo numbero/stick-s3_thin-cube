@@ -144,13 +144,16 @@ app1,       app,  ota_1,   0x210000, 0x200000,
 
 ### 4.2 OTA 页
 
+v0.4.6 页面精简为固定 135×240 布局，使用 Font0 固定字格，不依赖主界面字体标定或日志行数。标题与版本在顶部，阶段与大号数值居中，底部操作固定在 y=222，文字下方保留 10 px；角色和屏幕日志从 OTA 页移除，串口日志继续保留。此布局在 v0.4.6 启动后的升级使用。
+
 | 阶段 | 屏幕内容 |
 |---|---|
-| `CONFIRM` | `update to v0.2` / `A = yes   B = no` / 30 秒倒计时 |
-| `RECV` | 分段进度条 + `receiving 42%` + 已收 KB（沿用体征区那套 10 段条） |
-| `VERIFY` | `verifying...` |
-| `DONE` | `ok  reboot`；clawd 兴奋 |
-| `FAIL` | `failed: <err>`；clawd 不高兴 |
+| `CONFIRM` | 目标版本 / `CONFIRM` / 大号 30 秒倒计时 / `A: YES   B: NO` |
+| `READY` | `WAITING` / 0% 与进度条 / `Waiting for Mac` / `B: CANCEL` |
+| `RECV` | `RECEIVING` / 大号百分比与连续进度条 / `Keep power on` / `B: CANCEL` |
+| `VERIFY` | `VERIFYING` / 100% / `Checking image` / `PLEASE WAIT` |
+| `DONE` | 绿色 `COMPLETE` / 100% / `Restarting...` / `UPDATE COMPLETE` |
+| `FAIL` | 红色 `FAILED` / 完整错误原因换行 / `Try again on Mac` / `B: BACK` |
 
 两页都保持琥珀终端 + terracotta clawd 的既有语汇，不引入新的界面元素。
 
