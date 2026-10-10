@@ -55,6 +55,10 @@ struct KeyTraceEntry: Identifiable {
             guard let self, self.monitoring,
                   event.window === self.window || NSApp.keyWindow === self.window else { return event }
             let code = event.keyCode
+            if event.type == .keyDown, code == 0x35 {
+                self.stop()
+                return nil
+            }
             let flags = event.cgEvent?.flags ?? CGEventFlags(rawValue: UInt64(event.modifierFlags.rawValue))
             let tagged = event.cgEvent?.getIntegerValueField(.eventSourceUserData) == KeyEventStep.sourceTag
             let type: String

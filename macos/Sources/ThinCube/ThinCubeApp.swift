@@ -18,10 +18,12 @@ import ThinCubeCore
         WindowGroup("ThinCube") { MainView(model: model, discovery: model.discovery).frame(minWidth: 780, minHeight: 500) }
         MenuBarExtra {
             Text(model.name)
-            Text(model.status?.streaming == true ? "LIVE · 正在传音" : "语音未传输")
-            Button(model.status?.muted == true ? "取消静音" : "停止麦克风并静音") { Task { await model.apply(["muted": model.status?.muted != true]) } }.disabled(!model.connected)
+            Text(!model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
+            Button(model.status?.muted == true ? "取消麦克风静音" : "麦克风静音") { Task { await model.apply(["muted": model.status?.muted != true]) } }.disabled(!model.connected)
             Button(model.status?.soundMuted == true ? "开启 Clawd 音效" : "静音 Clawd 音效") { Task { await model.apply(["soundMuted": model.status?.soundMuted != true]) } }.disabled(!model.connected || model.status?.soundVolume == nil)
-            Button("停止语音输入") { Task { await model.command("stop") } }.disabled(!model.connected)
+            if model.status?.streaming == true {
+                Button("停止语音输入") { Task { await model.command("stop") } }.disabled(!model.connected)
+            }
             Divider()
             Button("按键与快捷键…") { model.pane = .keys; NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
             Button("显示 ThinCube") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
@@ -60,7 +62,11 @@ struct MainView: View {
     @ObservedObject var discovery: Discovery
     @State private var hoveredPane: MainPane?
     @State private var accessibilityTrusted = false
+    @State private var postingAllowed = false
     @State private var manualAddress = false
+    @State private var changingNetwork = false
+    @State private var keyboardDiagnostics = false
+    @State private var audioDiagnostics = false
     private let amber = Color(red: 0.973, green: 0.690, blue: 0.000)
     private let amberHi = Color(red: 1.000, green: 0.788, blue: 0.302)
 
@@ -134,61 +140,75 @@ struct MainView: View {
     private var keys: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                paneHeader("按键", subtitle: "倒置语音模式中的正面 A 键会被注入为下面的快捷键。支持录制或直接选择，设置完成即生效。")
+                HStack {
+                    Text("按键").font(.system(size: 21, weight: .bold))
+                    Spacer()
+                    Button("测试与诊断…") { keyboardDiagnostics = true }
+                        .disabled(model.shortcutRecording || model.connecting || model.updating)
+                    HelpPopover(title: "快捷键帮助") {
+                        HelpParagraph("设备 A 键", "倒置语音模式中，正面 A 键会触发这里设置的快捷键。设置完成即生效，并为当前设备保存。")
+                        HelpParagraph("录制或选择", "点击录制后按下组合键，松开全部按键即保存，Esc 取消。也可直接选择按键；仅修饰键组合无需主键。")
+                        HelpParagraph("测试与诊断", "可在本窗口测试当前快捷键、查看设备事件与权限状态。测试只接收 ThinCube 窗口中的键盘操作。")
+                    }
+                }
                 ShortcutEditor(model: model).disabled(model.updating || model.connecting)
-                KeyTestPanel(model: model)
             }
             .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 30)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .sheet(isPresented: $keyboardDiagnostics) {
+            KeyboardDiagnosticsSheet(model: model)
+        }
     }
 
     private var settings: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                paneHeader("设置", subtitle: "权限状态。")
+        Form {
+            Section {
                 HStack(spacing: 12) {
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("辅助功能").font(.system(size: 13))
-                        Text("用于把设备按键注入到当前应用").font(.system(size: 11.5)).foregroundStyle(.secondary)
-                    }
+                    Text("键盘控制")
                     Spacer()
-                    Text(accessibilityTrusted ? "已授权" : "未授权").font(.system(size: 13))
-                        .foregroundStyle(accessibilityTrusted ? .green : .orange)
-                    if !accessibilityTrusted {
+                    Label(accessibilityTrusted && postingAllowed ? "已授权" : "未生效",
+                          systemImage: accessibilityTrusted && postingAllowed ? "checkmark.circle.fill" : "exclamationmark.circle")
+                        .foregroundStyle(accessibilityTrusted && postingAllowed ? .green : .orange)
+                    if !accessibilityTrusted || !postingAllowed {
                         Button("打开系统设置…") {
                             NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
                         }
                     }
                 }
-                .padding(14).background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+            } header: {
+                HelpSectionHeader("权限", helpTitle: "权限帮助") {
+                    HelpParagraph("键盘控制", "ThinCube 需要辅助功能权限，才能把设备 A 键发送到当前应用。语音连接不依赖此权限。")
+                    HelpParagraph("授权未生效", "在系统设置的辅助功能中开启 ThinCube。若开关已开启但仍未生效，请关闭再开启该项，并退出重启 ThinCube。")
+                }
             }
-            .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 30)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            Section {
+                LabeledContent("ThinCube", value: Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "")
+                if model.connected { LabeledContent("设备固件", value: model.version) }
+            } header: {
+                HelpSectionHeader("关于", helpTitle: "关于 ThinCube") {
+                    HelpParagraph("ThinCube", "连接 StickS3 设备，在 Mac 上使用语音输入和设备快捷键。Wi-Fi 与蓝牙共用一次应用配对。")
+                    HelpParagraph("Clawd", "设备上的电子伙伴，活泼、好奇、勇于探索，用念力控制对讲机。")
+                }
+            }
         }
-        .onAppear { accessibilityTrusted = model.keys.trusted }
+        .formStyle(.grouped)
+        .onAppear { refreshPermissions() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            accessibilityTrusted = model.keys.trusted
+            refreshPermissions()
         }
     }
-
-    private func paneHeader(_ title: String, subtitle: String) -> some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.system(size: 21, weight: .bold))
-            Text(subtitle).font(.system(size: 12.5)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
+    private func refreshPermissions() {
+        model.keyDiagnostics.refreshPermission()
+        accessibilityTrusted = model.keyDiagnostics.accessibilityAllowed
+        postingAllowed = model.keyDiagnostics.postingAllowed
     }
     private var device: some View {
         Form {
-            Section("设备连接") {
+            Section {
                 Picker("连接模式", selection: Binding(get: { model.connectionMode }, set: { mode in Task { await model.selectConnectionMode(mode) } })) {
                     ForEach(ConnectionMode.allCases, id: \.self) { Text($0.label).tag($0) }
                 }.pickerStyle(.menu).disabled(!model.canSelectConnectionMode)
-                Text(model.connectionMode == .automatic
-                     ? "跟随设备当前的连接方式；设备切换 Wi-Fi 或蓝牙后会自动重新连接。"
-                     : "已连接时选择其他模式，会同步切换设备的连接方式。")
-                    .font(.callout).foregroundStyle(.secondary)
                 if !model.discoveredDeviceIDs.isEmpty {
                     Picker("设备", selection: Binding(get: { model.selectedDeviceID }, set: { model.selectDevice($0) })) {
                         if model.selectedDeviceID.isEmpty { Text("请选择设备").tag("") }
@@ -209,6 +229,11 @@ struct MainView: View {
                         if model.connected || model.connecting || model.reconnecting { model.disconnect() }
                         else { Task { await model.connect() } }
                     }.disabled(model.updating)
+                    if model.connectionMode == .wifi && !model.connected {
+                        Spacer()
+                        Button("通过 IP 连接…") { manualAddress = true }
+                            .disabled(model.connecting || model.switching || model.updating)
+                    }
                 }
                 if model.pairingRequired {
                     VStack(alignment: .leading, spacing: 8) {
@@ -224,111 +249,232 @@ struct MainView: View {
                             .font(.callout).foregroundStyle(.secondary)
                     }.padding(.vertical, 4)
                 }
-                if model.connectionMode != .wifi || model.currentTransport == "ble" {
-                    Text("蓝牙直接建立连接，首次使用只需在 ThinCube 中输入一次设备配对码。")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                if model.connectionMode != .ble {
-                    DisclosureGroup("手动输入 Wi-Fi 地址", isExpanded: $manualAddress) {
-                        TextField("设备 IP / .local", text: $model.host)
-                            .disabled(model.connected || model.connecting || model.switching || model.updating)
+            } header: {
+                HStack {
+                    Text("设备连接")
+                    Spacer()
+                    HelpPopover(title: "连接帮助") {
+                        HelpParagraph("连接模式", "自动模式会跟随设备当前的 Wi-Fi 或蓝牙方式。已连接时选择 Wi-Fi 或蓝牙，会同步切换设备。")
+                        HelpParagraph("首次配对", "两种方式都只需在 ThinCube 输入一次屏幕上的 PAIR PIN。蓝牙无需系统配对码，后续连接共用已保存的授权。")
+                        HelpParagraph("Wi-Fi 配网", "首次使用时连接 ThinCube-Setup 热点，按设备屏幕上的密码登录，在 192.168.4.1 配置 Wi-Fi。Mac 与设备需在同一局域网。自动发现不到时，可在 Wi-Fi 模式下通过 IP 连接。")
+                        HelpParagraph("设备按键", "短按 B 静音；长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
                     }
                 }
-                DisclosureGroup("首次配网与设备按键") {
-                    Text("Wi-Fi 首次使用：连接 ThinCube-Setup 热点，按设备屏幕上的密码登录，在 192.168.4.1 配置 Wi-Fi。让 Mac 与设备加入同一局域网。")
-                    Text("短按 B 静音；长按 B 3 秒并松开切换 Wi-Fi / 蓝牙。所选模式会保存，未连接时持续等待；再次长按 B 可切换回来。自动模式会跟随设备。")
-                }.font(.callout).foregroundStyle(.secondary)
             }
-            Section("姿态校准 · 首次使用一次") {
+            Section {
+                Group {
+                    HStack {
+                        Button("竖向倒立，A 键在上 → 校准") { Task { await model.calibrate("calibrate_inverted") } }.disabled(model.calibrationBusy)
+                        Image(systemName: model.status?.calibrated == true ? "checkmark.circle.fill" : "circle")
+                    }
+                    HStack {
+                        Button("屏幕朝上平放 → 校准") { Task { await model.calibrate("calibrate_faceup") } }.disabled(model.calibrationBusy)
+                        Image(systemName: model.status?.faceCalibrated == true ? "checkmark.circle.fill" : "circle")
+                    }
+                    Text("当前姿态：" + (model.status?.poseDescription ?? "等待设备连接"))
+                }.disabled(!model.connected || model.updating || model.switching)
+            } header: {
                 HStack {
-                    Button("竖向倒立，A 键在上 → 校准") { Task { await model.calibrate("calibrate_inverted") } }.disabled(model.calibrationBusy)
-                    Image(systemName: model.status?.calibrated == true ? "checkmark.circle.fill" : "circle")
+                    Text("姿态校准")
+                    Spacer()
+                    HelpPopover(title: "校准帮助") {
+                        HelpParagraph("首次使用校准一次", "竖向倒立时让屏幕面向你、A 键在上、显示屏在下，USB 线从顶部引出；平放校准时屏幕朝上。")
+                        HelpParagraph("开始语音", "校准后先屏幕朝上平放，再倒立并稍作停稳即可进入语音。屏幕朝下平放会进入休息。")
+                    }
                 }
-                HStack {
-                    Button("屏幕朝上平放 → 校准") { Task { await model.calibrate("calibrate_faceup") } }.disabled(model.calibrationBusy)
-                    Image(systemName: model.status?.faceCalibrated == true ? "checkmark.circle.fill" : "circle")
-                }
-                Text("竖向校准时让屏幕面向你、A 键在上、显示屏在下，USB 线从顶部引出；平放校准时屏幕朝上。校准后先屏幕朝上平放，再倒立并稍作停稳即可进入语音。屏幕朝下平放会进入休息。")
-                    .font(.callout).foregroundStyle(.secondary)
-                Text("当前姿态：" + (model.status?.poseDescription ?? "等待设备连接"))
-            }.disabled(!model.connected || model.updating || model.switching)
+            }
             Section("设备设置") {
                 SettingsSliderRow(title: "亮度", value: $model.brightness, range: 8...255, step: 1,
                                   valueLabel: "\(Int(model.brightness))") {
                     Task { await model.apply(["brightness": Int(model.brightness)]) }
                 }
-                TextField("新的 Wi-Fi 名称", text: $model.wifiSSID)
-                SecureField("新的 Wi-Fi 密码（开放网络留空）", text: $model.wifiPassword)
-                Button("验证并切换 Wi-Fi") { Task { await model.changeWifi() } }.disabled(model.wifiSSID.isEmpty || model.currentTransport == "ble")
             }.disabled(!model.connected || model.updating || model.switching)
+            if model.connected && model.currentTransport == "wifi" {
+                Section {
+                    Button("更换 Wi-Fi…") { changingNetwork = true }
+                        .disabled(model.connecting || model.updating || model.switching)
+                } header: {
+                    HelpSectionHeader("Wi-Fi 网络", helpTitle: "网络帮助") {
+                        HelpParagraph("更换网络", "输入新的网络名称与密码，设备验证成功后才保存并重启。Mac 接入同一局域网后会自动恢复连接。")
+                        HelpParagraph("验证失败", "旧网络凭据会保留。更换网络前会停止语音输入。")
+                    }
+                }
+            }
         }.formStyle(.grouped)
+            .sheet(isPresented: $manualAddress) { ManualWiFiConnectionSheet(model: model) }
+            .sheet(isPresented: $changingNetwork) { ChangeWiFiSheet(model: model) }
+            .onChange(of: model.connectionMode) { _ in manualAddress = false }
+            .onChange(of: model.connected) { connected in
+                if connected { manualAddress = false } else { changingNetwork = false }
+            }
+            .onChange(of: model.switching) { if $0 { changingNetwork = false } }
+            .onChange(of: model.updating) { if $0 { changingNetwork = false } }
     }
     private var audio: some View {
         Form {
-            Section("声音与语音") {
-                Toggle("允许设备向 Mac 输入语音", isOn: Binding(get: { model.status?.allowed ?? false }, set: { value in Task { await model.apply(["allowed": value]) } }))
-                Toggle("静音 · 真正停止麦克风采集", isOn: Binding(get: { model.status?.muted ?? false }, set: { value in Task { await model.apply(["muted": value]) } }))
-                Toggle("本地声音互动", isOn: Binding(get: { model.status?.localSound ?? true }, set: { value in Task { await model.apply(["localSound": value]) } }))
-                SettingsSliderRow(title: "输入增益", value: $model.gain, range: 0.1...4, step: 0.1,
-                                  valueLabel: String(format: "%.1f×", model.gain)) {
-                    Task { await model.apply(["gain": model.gain]) }
-                }
-                ProgressView(value: model.status?.level ?? 0).accessibilityLabel("麦克风音量")
-                HStack {
-                    Button("开始持续语音") { Task { await model.command("start") } }.disabled(!model.audioPrepared || model.status?.allowed != true || model.status?.muted == true)
-                    Button("停止语音") { Task { await model.command("stop") } }
-                    Spacer(); Text(model.status?.streaming == true ? "LIVE" : "待命").foregroundStyle(model.status?.streaming == true ? .green : .secondary)
-                }
-                Text("当前姿态：" + (model.status?.poseDescription ?? "等待设备连接"))
-                Text(model.status?.voiceHint ?? "请先连接设备").font(.callout).foregroundStyle(.secondary)
-            }.disabled(!model.connected || model.updating || model.switching)
-            Section("Clawd 音效") {
-                if model.status?.soundVolume != nil {
-                    Toggle("音效静音", isOn: Binding(get: { model.status?.soundMuted ?? false }, set: { value in Task { await model.apply(["soundMuted": value]) } }))
-                    SettingsSliderRow(title: "音效音量", value: $model.soundVolume, range: 0...100, step: 1,
-                                      valueLabel: "\(Int(model.soundVolume))%")
-                        .onChange(of: model.soundVolume) { value in
-                            model.scheduleSoundVolume(Int(value))
+            Section {
+                Group {
+                    Toggle("允许语音输入", isOn: Binding(get: { model.status?.allowed ?? false }, set: { value in Task { await model.apply(["allowed": value]) } }))
+                    Toggle("麦克风静音", isOn: Binding(get: { model.status?.muted ?? false }, set: { value in Task { await model.apply(["muted": value]) } }))
+                    Toggle("声音互动", isOn: Binding(get: { model.status?.localSound ?? true }, set: { value in Task { await model.apply(["localSound": value]) } }))
+                    SettingsSliderRow(title: "输入增益", value: $model.gain, range: 0.1...4, step: 0.1,
+                                      valueLabel: String(format: "%.1f×", model.gain)) {
+                        Task { await model.apply(["gain": model.gain]) }
+                    }
+                    HStack {
+                        Text("输入电平")
+                        ProgressView(value: model.status?.level ?? 0).accessibilityLabel("麦克风音量")
+                    }
+                    HStack {
+                        if model.status?.streaming == true {
+                            Button("停止语音") { Task { await model.command("stop") } }
+                        } else {
+                            Button("开始持续语音") { Task { await model.command("start") } }
+                                .disabled(!model.audioPrepared || model.status?.allowed != true || model.status?.muted == true)
                         }
-                    Button("试听音效") { Task { await model.command("sound_preview") } }
-                        .disabled(model.status?.soundMuted == true || model.soundVolume == 0 || model.status?.streaming == true)
-                    Text(model.status?.streaming == true ? "正在传音，音效暂停。" : "短电子音会配合唤醒、互动、扫描和发现。设置保存在设备上，断开 Mac 后仍生效。")
+                        Spacer()
+                        Label(model.status?.streaming == true ? "正在传音" : "待命", systemImage: "mic")
+                            .foregroundStyle(model.status?.streaming == true ? .green : .secondary)
+                    }
+                    Text(model.connected ? (model.status?.voiceHint ?? "等待设备状态") : "请先连接设备")
                         .font(.callout).foregroundStyle(.secondary)
-                    Text("音效静音只控制喇叭；语音输入和本地声音互动分别由上方开关控制。音量 0% 也会停止音效。")
-                        .font(.callout).foregroundStyle(.secondary)
+                    if model.connected && !model.audioPrepared {
+                        Text("Mac 音频输入尚未就绪，请在下方准备音频。").font(.callout).foregroundStyle(.orange)
+                    }
+                }.disabled(!model.connected || model.updating || model.switching)
+            } header: {
+                HelpSectionHeader("语音输入", helpTitle: "语音帮助") {
+                    HelpParagraph("语音与静音", "允许语音输入后，设备可向 Mac 传音。麦克风静音会真正停止采集；开始持续语音会保持传音，直到点击停止。")
+                    HelpParagraph("姿态与按键", "完成校准后，屏幕朝上平放，再倒立并稍作停稳可开始传音。A 键只控制快捷键，松开 A 不会停止持续语音。")
+                    HelpParagraph("声音互动", "设备在空闲时可根据环境声音作出反应，此开关与向 Mac 传音、喇叭音效分别控制。")
+                    HelpParagraph("输入增益", "调整麦克风输入幅度后点击保存。")
+                }
+            }
+            Section {
+                if model.status?.soundVolume != nil {
+                    Group {
+                        Toggle("音效静音", isOn: Binding(get: { model.status?.soundMuted ?? false }, set: { value in Task { await model.apply(["soundMuted": value]) } }))
+                        SettingsSliderRow(title: "音效音量", value: $model.soundVolume, range: 0...100, step: 1,
+                                          valueLabel: "\(Int(model.soundVolume))%")
+                            .onChange(of: model.soundVolume) { value in model.scheduleSoundVolume(Int(value)) }
+                        Button("试听音效") { Task { await model.command("sound_preview") } }
+                            .disabled(model.status?.soundMuted == true || model.soundVolume == 0 || model.status?.streaming == true)
+                        if model.status?.streaming == true {
+                            Text("正在传音，音效暂停。").font(.callout).foregroundStyle(.secondary)
+                        }
+                    }.disabled(!model.connected || model.updating || model.switching)
                 } else {
-                    Text(model.connected ? "升级设备至 v0.3.9 后可控制音效。" : "连接设备后可调整音效音量与静音。")
+                    Text(model.connected ? "此设备固件尚不支持音效设置。" : "连接设备后可调整音效。")
                         .foregroundStyle(.secondary)
                 }
-            }.disabled(!model.connected || model.updating || model.switching)
-            Section("Mac 音频输入") {
-                Text(model.audioPrepared ? "BlackHole 2ch · 48 kHz · 已就绪" : "需要 BlackHole 2ch 虚拟音频驱动")
-                HStack {
-                    Link("安装说明", destination: URL(string: "https://github.com/ExistentialAudio/BlackHole")!)
-                    Button("准备音频") { model.prepareAudio() }.disabled(!model.connected)
-                    Button("设为系统输入") { model.selectSystemInput() }.disabled(!model.audioPrepared)
+            } header: {
+                HelpSectionHeader("Clawd 音效", helpTitle: "音效帮助") {
+                    HelpParagraph("设备喇叭", "短电子音配合唤醒、互动、扫描和发现。音效静音只控制喇叭；音量设为 0% 也会停止音效。")
+                    HelpParagraph("保存与传音", "音量自动保存到设备，断开 Mac 后仍生效。传音时暂停音效。")
                 }
-                Text("也可在语音、会议或录音软件中直接选择 BlackHole 2ch。A 键控制快捷键，持续音频不受 A 键松开影响。")
-                    .font(.callout).foregroundStyle(.secondary)
-                DisclosureGroup("音频调试") { Text(model.audioDiagnostics).font(.caption).textSelection(.enabled) }
+            }
+            Section {
+                Label(!model.connected ? "连接设备后准备音频输入" : (model.audioPrepared ? "BlackHole 2ch 已就绪" : "Mac 音频输入尚未就绪"),
+                      systemImage: model.audioPrepared ? "checkmark.circle.fill" : "exclamationmark.circle")
+                    .foregroundStyle(model.audioPrepared ? .green : .secondary)
+                HStack {
+                    if model.connected && !model.audioPrepared {
+                        Link("安装 BlackHole…", destination: URL(string: "https://github.com/ExistentialAudio/BlackHole")!)
+                        Button("准备音频") { model.prepareAudio() }
+                            .disabled(!model.connected || model.updating || model.switching)
+                    } else if model.connected && model.audioPrepared {
+                        Button("设为系统输入") { model.selectSystemInput() }
+                            .disabled(!model.connected || model.updating || model.switching)
+                    }
+                    Spacer()
+                    Button("音频诊断…") { audioDiagnostics = true }
+                }
+            } header: {
+                HelpSectionHeader("Mac 音频输入", helpTitle: "音频输入帮助") {
+                    HelpParagraph("BlackHole 2ch", "ThinCube 通过 BlackHole 2ch 虚拟音频驱动向其他 Mac 应用提供音频，采样率为 48 kHz。安装驱动后连接设备，点击准备音频。")
+                    HelpParagraph("选择输入", "可在语音、会议或录音软件中直接选择 BlackHole 2ch；设为系统输入会修改 Mac 的默认输入设备。")
+                    HelpParagraph("诊断", "音频诊断显示接收、缓冲与丢帧统计，不会开始录音。")
+                }
             }
         }.formStyle(.grouped)
+            .sheet(isPresented: $audioDiagnostics) { AudioDiagnosticsSheet(model: model) }
     }
     private var firmware: some View {
         Form {
-            Section("Wi-Fi OTA") {
-                if model.connected { Text(model.status?.bootVerified == true ? "当前固件：启动健康检查已通过" : "当前固件：启动健康检查中（至少 60 秒）") }
-                Text("选择 ThinCube 的应用固件 .bin。设备按 A 确认后，无需插线即可升级；电量须至少 50%。")
-                Button("选择固件并升级") { model.chooseFirmware() }.disabled(!model.connected || model.updating || model.switching || model.currentTransport == "ble")
-                if model.currentTransport == "ble" { Text("升级前请在设备连接页切换至 Wi-Fi。").font(.callout).foregroundStyle(.secondary) }
-                if model.updating { ProgressView(value: model.updateProgress); Text("请保持设备供电与网络连接。") }
-                Text("升级前会停止语音并释放快捷键。固件经过设备型号、尺寸、SHA-256 与 ESP 镜像校验后才切换 A/B 槽；新版本稳定运行 60 秒后通过健康确认。")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-            Section("Clawd") {
-                Text("活泼、好奇、勇于探索的极客。没有嘴巴和腮红，用念力控制对讲机。")
-                Text("待命红灯 · A 按住传话绿灯 · 松开恢复红灯")
+            Section {
+                if model.connected {
+                    LabeledContent("设备固件", value: model.version)
+                    if model.status?.bootVerified != true {
+                        ProgressView("正在检查设备启动状态…")
+                    }
+                }
+                if model.updating {
+                    ProgressView(value: model.updateProgress)
+                    Text("正在升级，请保持设备供电与网络连接。").font(.callout).foregroundStyle(.secondary)
+                } else if model.switching {
+                    ProgressView(model.transportPhase)
+                } else if model.connecting || model.reconnecting {
+                    ProgressView("等待设备连接…")
+                } else if !model.connected {
+                    Text("连接设备后可升级固件。").foregroundStyle(.secondary)
+                    Button("连接设备") { model.pane = .device }
+                } else if model.currentTransport == "ble" {
+                    Text("固件升级需要 Wi-Fi 连接。").foregroundStyle(.secondary)
+                    Button("切换至 Wi-Fi") { Task { await model.selectConnectionMode(.wifi) } }
+                        .disabled(!model.canSwitchTransport)
+                } else {
+                    Button("选择固件并升级…") { model.chooseFirmware() }
+                        .disabled(model.switching || model.connecting || model.status?.bootVerified != true)
+                }
+            } header: {
+                HelpSectionHeader("固件升级", helpTitle: "固件升级帮助") {
+                    HelpParagraph("升级条件", "通过 Wi-Fi 选择 ThinCube 应用固件 .bin，无需 USB。设备电量须至少 50%，且当前固件的启动健康检查已通过。")
+                    HelpParagraph("设备确认", "开始前会停止语音并释放快捷键。在设备上按 A 确认升级，按 B 取消；升级期间保持供电与网络连接。")
+                    HelpParagraph("校验与恢复", "升级会校验型号、尺寸及文件完整性，写入备用应用槽。新版本稳定运行 60 秒后确认健康；设备重启后自动恢复连接。")
+                }
             }
         }.formStyle(.grouped)
+    }
+
+}
+
+private struct ManualWiFiConnectionSheet: View {
+    @ObservedObject var model: DeviceModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var address: String
+    @State private var error: String?
+    @FocusState private var addressFocused: Bool
+    init(model: DeviceModel) {
+        self.model = model
+        _address = State(initialValue: model.host.hasPrefix("ble://") ? "" : model.host)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("通过 IP 连接").font(.title2.bold())
+            Text("自动发现不到设备时，输入设备的局域网 IP 或 .local 名称。Mac 与设备需在同一局域网。")
+                .foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text("设备地址").fontWeight(.medium)
+                TextField("例如 192.168.0.202 或 ThinCube-xxxxxx.local", text: $address)
+                    .textFieldStyle(.roundedBorder).focused($addressFocused)
+                    .onSubmit { connect() }
+                    .onChange(of: address) { _ in error = nil }
+                if let error { Text(error).font(.callout).foregroundStyle(.red) }
+            }
+            HStack {
+                Spacer()
+                Button("取消") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("连接") { connect() }.keyboardShortcut(.defaultAction)
+                    .disabled(address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || model.connectionMode != .wifi || model.connected || model.connecting || model.switching || model.updating)
+            }
+        }.padding(24).frame(width: 420).onAppear { addressFocused = true }
+    }
+    private func connect() {
+        guard model.connectionMode == .wifi, !model.connected, !model.connecting, !model.switching, !model.updating else { return }
+        let value = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !value.isEmpty else { return }
+        if let message = model.wifiAddressError(value) { error = message; return }
+        dismiss()
+        Task { await model.connectWiFi(at: value) }
     }
 }

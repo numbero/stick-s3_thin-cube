@@ -11,80 +11,63 @@ struct KeyTestPanel: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             HStack {
-                Text("按键测试").font(.system(size: 15, weight: .semibold))
+                Text("按键诊断").font(.system(size: 18, weight: .semibold))
                 Spacer()
-                Button("复制日志") { diagnostics.copy() }.disabled(diagnostics.entries.isEmpty)
-                Button("清空") { diagnostics.clear() }.disabled(diagnostics.entries.isEmpty)
+                HelpPopover(title: "按键诊断帮助") {
+                    HelpParagraph("测试方式", "设备事件会自动记录。测试当前快捷键会向 ThinCube 窗口发送一次按下与松开，无需连接设备。")
+                    HelpParagraph("本窗口测试", "开始后可按设备 A 或 Mac 键盘查看事件；此时键盘操作会被窗口接收，Esc 停止测试。关闭诊断或切换窗口也会停止。")
+                    HelpParagraph("日志", "保留最近 100 条事件，新事件在上方。已提交表示发往系统，系统回读表示本窗口实际收到。")
+                    HelpParagraph("权限", "若辅助功能开关已开启而键盘控制仍未生效，请关闭再开启 ThinCube 授权，并退出重启应用。")
+                }
             }
-
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: diagnostics.postingAllowed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+            HStack {
+                Label(diagnostics.postingAllowed ? "键盘控制权限已生效" : "键盘控制权限未生效",
+                      systemImage: diagnostics.postingAllowed ? "checkmark.circle.fill" : "exclamationmark.circle")
                     .foregroundStyle(diagnostics.postingAllowed ? .green : .orange)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(diagnostics.postingAllowed ? "系统键盘控制权限已生效" : "系统键盘控制权限未生效，快捷键会被拦截")
-                        .font(.system(size: 12, weight: .medium))
-                    Text("辅助功能检查：\(diagnostics.accessibilityAllowed ? "允许" : "拒绝") · 事件发送检查：\(diagnostics.postingAllowed ? "允许" : "拒绝")")
-                        .font(.system(size: 11)).foregroundStyle(.secondary)
-                    if !diagnostics.postingAllowed {
-                        Text("若系统开关已开启，请关闭再开启 ThinCube，并重启上位机；更新应用后旧授权可能未生效。")
-                            .font(.system(size: 11)).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+                if !diagnostics.postingAllowed {
+                    Button("打开系统设置…") {
+                        NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
                     }
                 }
-                Spacer(minLength: 0)
-                Button("打开辅助功能设置…") {
-                    NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
-                }
             }
-
-            Text(context)
-                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            Text("辅助功能：\(diagnostics.accessibilityAllowed ? "允许" : "拒绝") · 事件发送：\(diagnostics.postingAllowed ? "允许" : "拒绝")")
+                .font(.callout).foregroundStyle(.secondary)
+            Text(context).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-
             HStack(spacing: 10) {
                 Button(diagnostics.monitoring ? "停止本窗口测试" : "开始本窗口测试") {
                     if diagnostics.monitoring { model.stopKeyboardTest() }
                     else { diagnostics.start() }
-                }
+                }.disabled(model.shortcutRecording || model.updating || model.connecting)
                 Button("测试当前快捷键") { model.testCurrentShortcut() }
-                    .disabled(model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
-                if diagnostics.monitoring { Text("测试中").foregroundStyle(.orange) }
+                    .disabled(!diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
+                if diagnostics.monitoring { Text("测试中 · Esc 停止").foregroundStyle(.orange) }
             }
-            Text(diagnostics.monitoring
-                 ? "可按设备 A 或 Mac 键盘查看事件；本窗口测试会接收并拦住键盘操作，停止后恢复。"
-                 : "设备事件会自动记录。测试当前快捷键会在本窗口发送一次并自动松开，无需连接设备。")
-                .font(.system(size: 11)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
+            HStack {
+                Text("最近 \(diagnostics.entries.count) 条事件").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button("复制日志") { diagnostics.copy() }.disabled(diagnostics.entries.isEmpty)
+                Button("清空") { diagnostics.clear() }.disabled(diagnostics.entries.isEmpty)
+            }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
-                    if diagnostics.entries.isEmpty {
-                        Text("尚无按键事件。请在倒置传音时按下并松开设备 A，或开始本窗口测试。")
-                            .foregroundStyle(.secondary)
-                    }
+                    if diagnostics.entries.isEmpty { Text("暂无事件").foregroundStyle(.secondary) }
                     ForEach(diagnostics.entries) { entry in
                         Text(entry.line)
                             .foregroundStyle(entry.source == "系统回读" ? Color.green : Color.primary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
-                .font(.system(size: 10.5, design: .monospaced))
-                .textSelection(.enabled)
-                .padding(10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .font(.system(size: 10.5, design: .monospaced)).textSelection(.enabled)
+                .padding(10).frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(height: 180)
             .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
-            Text("最近 100 条，新事件在上方。“已提交”表示发往系统；“系统回读”表示本窗口实际收到。切换窗口会停止本窗口测试。")
-                .font(.system(size: 10.5)).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
         }
-        .buttonStyle(.bordered)
-        .controlSize(.small)
-        .padding(14)
-        .background(.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .buttonStyle(.bordered).controlSize(.small)
         .onAppear { diagnostics.refreshPermission() }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in diagnostics.refreshPermission() }
         .onDisappear { model.stopKeyboardTest() }

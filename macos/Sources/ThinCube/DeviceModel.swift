@@ -222,6 +222,20 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         return url
     }
+    func wifiAddressError(_ address: String) -> String? {
+        do { _ = try makeBase(address); return nil }
+        catch { return error.localizedDescription }
+    }
+    func connectWiFi(at address: String) async {
+        guard connectionMode == .wifi, !connected, !connecting, !switching, !updating else { return }
+        if let error = wifiAddressError(address) { note = error; return }
+        // An explicit address starts a new target. Editing or cancelling the
+        // sheet must not change the selected device or its recovery address.
+        disconnect(note: "正在连接…")
+        host = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        target = ConnectionTarget(host: host, deviceID: nil)
+        await connect()
+    }
     private func request(_ path: String, body: [String: Any]? = nil, authenticated: Bool = true) throws -> URLRequest {
         guard let base else { throw ClientError.message("请先选择设备") }
         var request = URLRequest(url: base.appendingPathComponent(path))
@@ -731,13 +745,15 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if let data, let value = try? JSONDecoder().decode(Shortcut.self, from: data) { shortcut = value }
         else { shortcut = Shortcut() }
     }
-    func changeWifi() async {
-        guard !wifiSSID.isEmpty, !activeBLE, !switching else { note = "请先切换至 Wi-Fi，再修改网络。"; return }
+    @discardableResult func changeWifi() async -> Bool {
+        defer { wifiPassword = "" }
+        guard connected, !updating, !wifiSSID.isEmpty, !activeBLE, !switching else { note = "请先连接 Wi-Fi，再修改网络。"; return false }
         await command("stop")
         do {
             _ = try await json("api/wifi", body: ["ssid": wifiSSID, "password": wifiPassword])
             wifiPassword = ""; connectionLost(note: "设备正在验证新的 Wi-Fi，成功后重启。Mac 接入同一网络后将自动恢复连接；失败可通过设备热点重试。")
-        } catch { note = error.localizedDescription }
+            return true
+        } catch { note = error.localizedDescription; return false }
     }
     func chooseFirmware() {
         guard !activeBLE, !switching else { note = "固件升级需要 Wi-Fi，请先切换连接模式。"; return }

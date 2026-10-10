@@ -76,24 +76,25 @@ struct ShortcutEditor: View {
     @ObservedObject var model: DeviceModel
     @StateObject private var recorder = ShortcutRecorder()
     @State private var choosing = false
-    @State private var hint = "可录制组合键，或点击「选择快捷键」直接设置。"
+    @State private var hint = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             buttonRow
                 .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
 
-            Text(hint)
-                .font(.system(size: 11.5))
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if !hint.isEmpty {
+                Text(hint).font(.system(size: 11.5)).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             HStack(alignment: .center, spacing: 12) {
-                VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
                     Text("区分左右修饰键").font(.system(size: 13))
-                    Text("统一用于录制和选择。开启后，可分别设置左、右 Command / Shift / Option / Control。")
-                        .font(.system(size: 11.5)).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HelpPopover(title: "左右修饰键帮助") {
+                        HelpParagraph("左右区分", "统一用于录制和选择。开启后可分别设置左、右 Command、Shift、Option 和 Control，也可同时选择两侧。")
+                        HelpParagraph("关闭区分", "左右键合并使用，原侧别设置会保留，重新开启时恢复。")
+                    }
                 }
                 Spacer(minLength: 12)
                 Toggle("区分左右修饰键", isOn: Binding(
@@ -131,16 +132,13 @@ struct ShortcutEditor: View {
         .onChange(of: model.connecting) { if $0 { recorder.stop(); choosing = false } }
         .onChange(of: model.name) { _ in
             recorder.stop(); choosing = false
-            hint = "可录制组合键，或点击「选择快捷键」直接设置。"
+            hint = ""
         }
     }
 
     private var buttonRow: some View {
         HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text("正面 A 键").font(.system(size: 13))
-                Text("A").font(.system(size: 10.5)).foregroundStyle(.secondary)
-            }
+            Text("正面 A 键").font(.system(size: 13))
             .frame(width: 72, alignment: .leading)
 
             if recorder.isRecording {
@@ -165,7 +163,7 @@ struct ShortcutEditor: View {
                 else {
                     hint = "请按下所需组合键，松开全部按键即保存；Esc 取消。"
                     model.setShortcutRecording(true)
-                    recorder.start(onStop: { model.setShortcutRecording(false) }) { applyRecorded($0) }
+                    recorder.start(onStop: { model.setShortcutRecording(false); hint = "" }) { applyRecorded($0) }
                     if !recorder.isRecording { model.setShortcutRecording(false) }
                 }
             }
@@ -198,11 +196,10 @@ private struct ShortcutChooser: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text("选择快捷键").font(.system(size: 20, weight: .semibold))
-                Text("直接选择，无需实际按键。只使用修饰键时，将主键设为「无」。")
-                    .font(.system(size: 12)).foregroundStyle(.secondary)
-            }
+            HelpSectionHeader("选择快捷键", helpTitle: "快捷键选择帮助") {
+                HelpParagraph("选择组合", "勾选修饰键，再选择一个主键。只使用修饰键时，将主键设为无。")
+                HelpParagraph("左右修饰键", "是否区分左右由按键页开关控制。启用时可同时选择两侧，关闭时合并使用。")
+            }.font(.system(size: 20, weight: .semibold))
 
             VStack(alignment: .leading, spacing: 12) {
                 Text("修饰键").font(.system(size: 13, weight: .medium))
@@ -223,7 +220,7 @@ private struct ShortcutChooser: View {
                         }
                     }
                 }
-                Text(draft.distinguishSides ? "已开启区分左右键，可同时选择左右两侧。" : "左右修饰键合并；可在按键页开启区分左右键。")
+                Text(draft.distinguishSides ? "区分左右修饰键：已开启" : "区分左右修饰键：已关闭")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
             .padding(14)
