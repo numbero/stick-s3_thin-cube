@@ -6,7 +6,6 @@
 #include <esp_gap_ble_api.h>
 #include <esp_gatts_api.h>
 #include <esp_gatt_common_api.h>
-#include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <atomic>
 #include <algorithm>
@@ -23,7 +22,7 @@ esp_gatts_attr_db_t db[Count];
 esp_gatt_if_t interface=ESP_GATT_IF_NONE;
 std::atomic<bool> linked{false},secured{false},congested{false},controlSubscribed{false},audioSubscribed{false},healthy{false};
 std::atomic<uint16_t> mtu{23},connection{0};
-std::atomic<uint32_t> generation{0},pinUntil{0};
+std::atomic<uint32_t> generation{0};
 std::atomic<uint32_t> notifyOK{0},notifyFailed{0},congestionCount{0};
 std::atomic<unsigned> notifyPending{0};
 uint8_t remote[6]={};
@@ -46,19 +45,13 @@ uint16_t nextMessage=0;uint32_t observedGeneration=0,lastPump=0;
 esp_ble_adv_params_t params={.adv_int_min=0x30,.adv_int_max=0x60,.adv_type=ADV_TYPE_IND,.own_addr_type=BLE_ADDR_TYPE_PUBLIC,
   .channel_map=ADV_CHNL_ALL,.adv_filter_policy=ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY};
 void advertise(){if(advReady&&scanReady&&!linked)esp_ble_gap_start_advertising(&params);}
-void clearBonds(){
-  int count=esp_ble_get_bond_device_num();if(count<=0)return;
-  auto* bonds=static_cast<esp_ble_bond_dev_t*>(calloc(count,sizeof(esp_ble_bond_dev_t)));
-  if(!bonds)return;
-  if(esp_ble_get_bond_device_list(&count,bonds)==ESP_OK)for(int i=0;i<count;i++)esp_ble_remove_bond_device(bonds[i].bd_addr);
-  free(bonds);
-}
 void gap(esp_gap_ble_cb_event_t event,esp_ble_gap_cb_param_t* p){
   switch(event){
     case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:advReady=p->adv_data_cmpl.status==ESP_BT_STATUS_SUCCESS;advertise();break;
     case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:scanReady=p->scan_rsp_data_cmpl.status==ESP_BT_STATUS_SUCCESS;advertise();break;
+    // Secure Connections with no input/output encrypts the link without a
+    // system passkey. ThinCube's PIN authenticates the application separately.
     case ESP_GAP_BLE_SEC_REQ_EVT:esp_ble_gap_security_rsp(p->ble_security.ble_req.bd_addr,true);break;
-    case ESP_GAP_BLE_PASSKEY_NOTIF_EVT:pinUntil=millis()+120000;break;
     case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
       Serial.printf("[ble] interval %u x1.25ms latency %u status %u\n",p->update_conn_params.conn_int,p->update_conn_params.latency,p->update_conn_params.status);break;
     case ESP_GAP_BLE_SET_PKT_LENGTH_COMPLETE_EVT:
@@ -67,10 +60,10 @@ void gap(esp_gap_ble_cb_event_t event,esp_ble_gap_cb_param_t* p){
       Serial.printf("[ble] PHY tx %u rx %u status %u\n",p->phy_update.tx_phy,p->phy_update.rx_phy,p->phy_update.status);break;
     case ESP_GAP_BLE_AUTH_CMPL_EVT:
       if(!memcmp(p->ble_security.auth_cmpl.bd_addr,remote,6)){
-        secured=p->ble_security.auth_cmpl.success&&(p->ble_security.auth_cmpl.auth_mode&ESP_LE_AUTH_REQ_MITM)&&(p->ble_security.auth_cmpl.auth_mode&ESP_LE_AUTH_REQ_SC_ONLY);
-        Serial.printf("[ble] security success %d accepted %d mode 0x%02x reason 0x%02x\n",p->ble_security.auth_cmpl.success,secured.load(),p->ble_security.auth_cmpl.auth_mode,p->ble_security.auth_cmpl.fail_reason);
+        secured=p->ble_security.auth_cmpl.success&&(p->ble_security.auth_cmpl.auth_mode&ESP_LE_AUTH_REQ_SC_ONLY);
+        Serial.printf("[ble] automatic encryption success %d accepted %d mode 0x%02x reason 0x%02x\n",p->ble_security.auth_cmpl.success,secured.load(),p->ble_security.auth_cmpl.auth_mode,p->ble_security.auth_cmpl.fail_reason);
         if(secured){
-          pinUntil=0;esp_ble_gap_set_pkt_data_len(remote,251);
+          esp_ble_gap_set_pkt_data_len(remote,251);
           const auto phyResult=esp_ble_gap_set_prefered_phy(remote,0,ESP_BLE_GAP_PHY_2M_PREF_MASK,ESP_BLE_GAP_PHY_2M_PREF_MASK,0);
           Serial.printf("[ble] preferred 2M request result %d\n",int(phyResult));
         }else esp_ble_gap_disconnect(remote);
@@ -93,7 +86,7 @@ void gatts(esp_gatts_cb_event_t event,esp_gatt_if_t iface,esp_ble_gatts_cb_param
       controlSubscribed=audioSubscribed=false;mtu=23;generation.fetch_add(1);
       notifyPending=0;
       esp_ble_conn_update_params_t cp{};memcpy(cp.bda,remote,6);cp.min_int=12;cp.max_int=18;cp.latency=0;cp.timeout=400;
-      esp_ble_gap_update_conn_params(&cp);esp_ble_set_encryption(remote,ESP_BLE_SEC_ENCRYPT_MITM);break;
+      esp_ble_gap_update_conn_params(&cp);esp_ble_set_encryption(remote,ESP_BLE_SEC_ENCRYPT);break;
     }
     case ESP_GATTS_DISCONNECT_EVT:
       Serial.printf("[ble] disconnect reason 0x%02x\n",p->disconnect.reason);
@@ -147,7 +140,7 @@ template<typename T> bool sendPart(T& message,uint16_t handle){
   message.offset+=count;if(message.offset==message.length)message.length=0;return true;
 }
 }
-bool bleBegin(const char* name,uint32_t passkey){
+bool bleBegin(const char* name){
   static StaticQueue_t queues[4];
   auto makeQueue=[&](unsigned index,unsigned count,unsigned size){
     auto* data=static_cast<uint8_t*>(heap_caps_malloc(count*size,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
@@ -162,18 +155,18 @@ bool bleBegin(const char* name,uint32_t passkey){
   esp_ble_gap_register_callback(gap);esp_ble_gatts_register_callback(gatts);esp_ble_gatt_set_local_mtu(517);
   const auto phyResult=esp_ble_gap_set_prefered_default_phy(ESP_BLE_GAP_PHY_2M_PREF_MASK,ESP_BLE_GAP_PHY_2M_PREF_MASK);
   Serial.printf("[ble] default 2M request result %d\n",int(phyResult));
-  uint8_t onlyAuth=1,auth=ESP_LE_AUTH_REQ_SC_MITM_BOND,io=ESP_IO_CAP_OUT,size=16,keys=ESP_BLE_ENC_KEY_MASK|ESP_BLE_ID_KEY_MASK;
+  // No system passkey or MITM input. Persist the automatically negotiated
+  // encryption key: macOS reuses it after reconnects and device reboots.
+  uint8_t onlyAuth=1,auth=ESP_LE_AUTH_REQ_SC_BOND,io=ESP_IO_CAP_NONE,size=16,keys=ESP_BLE_ENC_KEY_MASK|ESP_BLE_ID_KEY_MASK;
   esp_ble_gap_set_security_param(ESP_BLE_SM_ONLY_ACCEPT_SPECIFIED_SEC_AUTH,&onlyAuth,1);esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE,&auth,1);esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE,&io,1);
   esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE,&size,1);esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY,&keys,1);esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,&keys,1);
-  esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY,&passkey,sizeof(passkey));
-  Preferences prefs;if(prefs.begin("thincube",false)){if(prefs.getBool("forgetBLE",false)){clearBonds();prefs.remove("forgetBLE");}prefs.end();}
   attribute(Service,2,(uint8_t*)&primary,ESP_GATT_PERM_READ,16,16,serviceUUID);
   attribute(ControlDecl,2,(uint8_t*)&decl,ESP_GATT_PERM_READ,1,1,&ctrlProp);
-  attribute(ControlValue,16,controlUUID,ESP_GATT_PERM_WRITE_ENC_MITM,512,0,empty,false);
-  attribute(ControlCCC,2,(uint8_t*)&cccUUID,ESP_GATT_PERM_READ_ENC_MITM|ESP_GATT_PERM_WRITE_ENC_MITM,2,2,empty,false);
+  attribute(ControlValue,16,controlUUID,ESP_GATT_PERM_WRITE_ENCRYPTED,512,0,empty,false);
+  attribute(ControlCCC,2,(uint8_t*)&cccUUID,ESP_GATT_PERM_READ_ENCRYPTED|ESP_GATT_PERM_WRITE_ENCRYPTED,2,2,empty,false);
   attribute(AudioDecl,2,(uint8_t*)&decl,ESP_GATT_PERM_READ,1,1,&audioProp);
-  attribute(AudioValue,16,audioUUID,ESP_GATT_PERM_READ_ENC_MITM,1,0,empty);
-  attribute(AudioCCC,2,(uint8_t*)&cccUUID,ESP_GATT_PERM_READ_ENC_MITM|ESP_GATT_PERM_WRITE_ENC_MITM,2,2,empty,false);
+  attribute(AudioValue,16,audioUUID,ESP_GATT_PERM_READ_ENCRYPTED,1,0,empty);
+  attribute(AudioCCC,2,(uint8_t*)&cccUUID,ESP_GATT_PERM_READ_ENCRYPTED|ESP_GATT_PERM_WRITE_ENCRYPTED,2,2,empty,false);
   esp_ble_gatts_app_register(0x5443);esp_ble_gap_set_device_name(name);
   esp_ble_adv_data_t adv{};adv.flag=ESP_BLE_ADV_FLAG_GEN_DISC|ESP_BLE_ADV_FLAG_BREDR_NOT_SPT;adv.service_uuid_len=16;adv.p_service_uuid=serviceUUID;
   esp_ble_gap_config_adv_data(&adv);esp_ble_adv_data_t scan{};scan.set_scan_rsp=true;scan.include_name=true;esp_ble_gap_config_adv_data(&scan);
@@ -214,13 +207,8 @@ bool bleConnecting(){return linked&&!secured;}
 bool bleHealthy(){return healthy;}
 bool bleAudioReady(){return bleConnected()&&audioSubscribed&&mtu>=185;}
 uint32_t bleGeneration(){return generation;}
-bool blePairVisible(){const uint32_t until=pinUntil;return until&&int32_t(until-millis())>0;}
 void bleClearAudio(){if(audioOut)xQueueReset(audioOut);audioTx={};}
-void bleForgetBonds(uint32_t passkey){
-  if(esp_bluedroid_get_status()==ESP_BLUEDROID_STATUS_ENABLED){
-    if(linked)esp_ble_gap_disconnect(remote);clearBonds();esp_ble_gap_set_security_param(ESP_BLE_SM_SET_STATIC_PASSKEY,&passkey,sizeof(passkey));
-  }else{Preferences p;if(p.begin("thincube",false)){p.putBool("forgetBLE",true);p.end();}}
-}
+void bleDisconnect(){if(linked)esp_ble_gap_disconnect(remote);}
 
 void bleSendStatus(const char* text){
   if(!bleConnected()||!controlSubscribed||!statusPending)return;

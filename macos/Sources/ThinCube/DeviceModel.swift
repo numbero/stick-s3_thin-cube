@@ -83,7 +83,6 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if let id = target.deviceID { ids.insert(id) }
         return ids.sorted()
     }
-    var pairingOverBluetooth: Bool { activeBLE }
     var canSubmitPairingCode: Bool { pairingRequired && PairingCode.isValid(pin) }
     @Published var updating = false
     @Published var updateProgress = 0.0
@@ -318,7 +317,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         do {
             activeBLE = selected.host.hasPrefix("ble://")
-            if activeBLE { base = nil; note = "正在连接蓝牙；首次连接请在 macOS 配对弹窗中输入设备显示的 BLUETOOTH PIN 码。"; try await discovery.ble.open(selected.host) }
+            if activeBLE { base = nil; note = "正在连接蓝牙…"; try await discovery.ble.open(selected.host) }
             else { base = try makeBase(selected.host) }
             let info = try await json("api/info", authenticated: false)
             guard generation == attempt, !Task.isCancelled else { return }
@@ -407,12 +406,12 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         _ = try await json("api/status")
     }
     private func authorizeDevice(found: String, attempt: UUID) async throws -> String {
-        var hint = activeBLE ? "蓝牙已连接。请输入设备 PAIR PIN 页面上的六位授权码，完成 ThinCube 授权。" : "请输入设备 PAIR PIN 页面上的六位授权码，完成 ThinCube 授权。"
+        var hint = "请输入设备屏幕上的六位配对码；配对后 Wi-Fi 和蓝牙共用已保存的授权。"
         while generation == attempt, !Task.isCancelled {
             pin = ""; pairingRequired = true; note = hint
             let code = try await withCheckedThrowingContinuation { pairingContinuation = $0 }
             guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
-            note = "正在验证设备授权码…"
+            note = "正在验证配对码…"
             do {
                 let result = try await json("api/pair", body: ["pin": code], authenticated: false)
                 guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
@@ -421,7 +420,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
                 return pairedKey
             } catch ClientError.http(let status, let error) where (status == 400 || status == 403) && error == "invalid_pin_or_window" {
-                hint = "授权码有误或已过期。请核对 PAIR PIN；如已过期，空闲时同时按住 A+B 3 秒并松开，重新连接后授权。"
+                hint = "配对码有误或已过期。请核对 PAIR PIN；如已过期，同时按住 A+B 3 秒并松开，重新连接后输入新码。"
             }
         }
         throw CancellationError()
@@ -445,12 +444,38 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         note = audioPrepared ? "已连接，语音待命。" : "已连接；请安装 BlackHole 2ch 后准备音频。"
         if activeBLE && status?.transportAudioReady == false { note = "BLE 控制已连接，但当前链路 MTU 不足以传输语音。请尝试重新连接或切回 Wi-Fi。" }
         keyDiagnostics.record("连接", "\(automatic ? "自动恢复" : "连接")成功：\(found) · \(transportLabel)")
-        if let intent = transportIntent, Date().timeIntervalSince(intent.started) > 65,
-           status?.transportTransaction?.requestId != intent.id {
-            switching = false; transportIntent = nil; restoreConnectionMode()
-            transportPhase = "未收到切换确认，已恢复当前连接。"; note = transportPhase
+        // A physical B press can change the mode again while the host is
+        // offline. A fresh authenticated connection tells us the actual choice.
+        if switching, let intent = transportIntent, let transaction = status?.transportTransaction,
+           transaction.phase == "committed", transaction.requestId != intent.id {
+            switching = false; transportIntent = nil; modeBeforeSwitch = nil
+            if connectionMode != .automatic { setConnectionMode(currentTransport == "ble" ? .ble : .wifi) }
+            transportPhase = "已连接设备当前模式：" + transportLabel; note = transportPhase
         }
         if let status { handleTransport(status) }
+    }
+    // Opt-in hardware validation: open an encrypted BLE link without proving
+    // the saved application key. No credential is read or exposed by this test.
+    func checkUnauthenticatedBLEAccess() async throws {
+        guard connected, activeBLE, !switching, !updating, status?.streaming == false else {
+            throw ClientError.message("请在蓝牙已连接且未传音时验证授权拦截。")
+        }
+        let address = host, identity = name
+        recovery.disconnect(); teardown(note: "正在验证蓝牙授权拦截…")
+        defer { discovery.ble.close(); recovery.request(); scheduleRecovery(immediate: true) }
+        try await discovery.ble.open(address)
+        let info = try await discovery.ble.exchange(["op": "info"])
+        guard info["name"] as? String == identity else { throw ClientError.message("授权测试设备身份不匹配") }
+        for request: [String: Any] in [["op": "status"], ["op": "settings"], ["op": "start"],
+                                       ["op": "transport_switch"], ["op": "auth", "proof": String(repeating: "0", count: 64)],
+                                       ["op": "status"]] {
+            do {
+                _ = try await discovery.ble.exchange(request)
+                throw ClientError.message("未授权的蓝牙请求被错误接受")
+            } catch ClientError.http(let code, let error) where code == 401 && error == "pairing_required" {
+                // Expected: transport encryption alone never grants control.
+            }
+        }
     }
     private func sendControl(_ payload: [String: Any]) async throws {
         if activeBLE { try await discovery.ble.send(payload) }
@@ -785,10 +810,13 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     private func refreshRecoveryAddress() {
         let resolvingMode: ConnectionMode
-        if let intent = transportIntent, Date().timeIntervalSince(intent.started) > 65 {
-            preferredTransport = intent.previous; transportPhase = "等待设备恢复原连接模式…"
+        if let intent = transportIntent {
+            preferredTransport = intent.target
+            if Date().timeIntervalSince(intent.started) > 15 {
+                transportPhase = "已选择" + (intent.target == "ble" ? "蓝牙" : "Wi-Fi") + "，等待设备连接；可长按设备 B 键再次切换。"
+            }
         }
-        if transportIntent != nil { resolvingMode = ConnectionMode(rawValue: preferredTransport) ?? .automatic }
+        if transportIntent != nil && connectionMode != .automatic { resolvingMode = ConnectionMode(rawValue: preferredTransport) ?? .automatic }
         else { resolvingMode = connectionMode }
         guard let id = target.deviceID else { return }
         let endpoints = discovery.devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) }
@@ -812,7 +840,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         // The publisher delivers before Discovery.devices changes. Resolve with
         // the delivered snapshot so switching devices can wake recovery immediately.
         guard let id = target.deviceID else { return }
-        let mode = transportIntent == nil ? connectionMode : (ConnectionMode(rawValue: preferredTransport) ?? .automatic)
+        let mode = transportIntent == nil || connectionMode == .automatic ? connectionMode : (ConnectionMode(rawValue: preferredTransport) ?? .automatic)
         guard let match = mode.endpoint(for: id, in: devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) },
                                        preferredTransport: preferredTransport, wifiAvailable: pathSatisfied,
                                        bluetoothAvailable: discovery.ble.permissionHint == nil), target.host != match.host else { return }

@@ -2,7 +2,7 @@
 #include "transport_policy.h"
 #include <mutex>
 void transportBegin();
-void transportStarted(uint32_t now);
+void transportStarted();
 void transportTick(uint32_t now);
 TransportMode transportMode();
 const TransportRecord& transportRecord();

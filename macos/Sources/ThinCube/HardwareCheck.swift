@@ -14,8 +14,9 @@ import Foundation
         }
         let path = args[index + 1], seconds = number("--audio-seconds", maximum: 3600)
         let switches = number("--switch-count", maximum: 200)
+        let accessCheck = args.contains("--ble-access-check")
         Task {
-            await run(model: model, path: path, seconds: seconds, switches: switches)
+            await run(model: model, path: path, seconds: seconds, switches: switches, accessCheck: accessCheck, offlineSwitch: args.contains("--offline-switch"))
             // A new explicit request can start another check in this same
             // process, preserving its already approved Keychain access.
             let request = path + ".request"
@@ -27,11 +28,11 @@ import Foundation
                       let audio = job["audioSeconds"] as? Int, (0...3600).contains(audio),
                       let count = job["switchCount"] as? Int, (0...200).contains(count) else { continue }
                 try? FileManager.default.removeItem(atPath: request)
-                await run(model: model, path: log, seconds: audio, switches: count)
+                await run(model: model, path: log, seconds: audio, switches: count, accessCheck: job["bleAccessCheck"] as? Bool ?? false, offlineSwitch: job["offlineSwitch"] as? Bool ?? false)
             }
         }
     }
-    private static func run(model: DeviceModel, path: String, seconds: Int, switches: Int) async {
+    private static func run(model: DeviceModel, path: String, seconds: Int, switches: Int, accessCheck: Bool, offlineSwitch: Bool) async {
         guard FileManager.default.createFile(atPath: path, contents: nil),
               let output = FileHandle(forWritingAtPath: path) else { return }
         defer { try? output.close() }
@@ -51,7 +52,7 @@ import Foundation
             }
             return false
         }
-        record("begin", ["audioSeconds": seconds, "switchCount": switches])
+        record("begin", ["audioSeconds": seconds, "switchCount": switches, "bleAccessCheck": accessCheck])
         guard await wait({ model.connected && !model.connecting && !model.switching }, timeout: 70) else { record("failed", ["reason": "initial_connection"]); return }
         if seconds > 0 {
             await model.command("start")
@@ -76,6 +77,24 @@ import Foundation
             }
             record("switch_end", ["index": index, "target": desired, "seconds": Date().timeIntervalSince(start)])
             try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        if accessCheck {
+            record("ble_access_begin")
+            do { try await model.checkUnauthenticatedBLEAccess(); record("ble_access_denied") }
+            catch { record("failed", ["reason": "ble_access_check", "error": error.localizedDescription]); return }
+            guard await wait({ model.connected && !model.connecting }, timeout: 30) else { record("failed", ["reason": "ble_access_reconnect"]); return }
+        }
+        if offlineSwitch {
+            guard model.canSwitchTransport else { record("failed", ["reason": "offline_switch_unavailable"]); return }
+            let desired = model.currentTransport == "ble" ? "wifi" : "ble"
+            record("offline_switch_begin", ["target": desired])
+            await model.switchTransport()
+            // Let the device main loop accept the request, then deliberately
+            // leave before its 700 ms reboot. USB logs verify offline retention.
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            model.disconnect()
+            record("offline_switch_disconnected", ["target": desired])
+            return
         }
         record("complete")
     }

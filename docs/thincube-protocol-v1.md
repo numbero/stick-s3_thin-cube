@@ -81,3 +81,5 @@ v0.3.8 增加 `pose=landscape`，仍为可选字符串字段。横置稳定确�
 ## v0.4.0 兼容扩展
 
 v1 Wi-Fi API 和 TCM1 音频保持兼容。新增 BLE GATT、TCB3 IMA ADPCM 音频（上位机兼容早期 TCB2 / TCB1）、transport_switch / transport_commit 和状态字段，详见 [Wi-Fi / BLE 实现](wifi-ble-implementation.md)。运行时 B 3 秒松手改为切换模式；空闲时 A+B 同时按住 3 秒松开两键重新配对。
+
+设备 v0.4.4 / Mac v0.4.3 将两种传输统一为一次屏幕 PIN 应用配对，BLE 自动协商并保存链路加密密钥，无需系统验证码。目标模式启动即 `committed`，不再因宿主机未连接而回退；`transport_commit` 保留为幂等兼容接口。详细流程与验证见 [一次配对与持久模式](pairing-v0.4.4.md)。

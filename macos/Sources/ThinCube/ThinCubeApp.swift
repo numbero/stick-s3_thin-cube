@@ -212,22 +212,20 @@ struct MainView: View {
                 }
                 if model.pairingRequired {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("设备授权").fontWeight(.semibold)
-                        Text(model.pairingOverBluetooth
-                             ? "系统蓝牙配对已完成。现在请输入设备 PAIR PIN 页面上的授权码。"
-                             : "请输入设备 PAIR PIN 页面上的授权码；授权保存后，下次直接连接。")
+                        Text("设备配对").fontWeight(.semibold)
+                        Text("输入设备屏幕上的 PAIR PIN 六位配对码即可连接；授权保存后，Wi-Fi 和蓝牙都可直接重连。")
                             .font(.callout).foregroundStyle(.secondary)
                         HStack {
-                            SecureField("六位设备授权码", text: $model.pin).frame(width: 160)
+                            SecureField("六位配对码", text: $model.pin).frame(width: 160)
                                 .onSubmit { model.submitPairingCode() }
-                            Button("授权并连接") { model.submitPairingCode() }.disabled(!model.canSubmitPairingCode)
+                            Button("配对并连接") { model.submitPairingCode() }.disabled(!model.canSubmitPairingCode)
                         }
                         Text("未显示 PAIR PIN 时，请在设备空闲时同时按住 A+B 3 秒并松开，再重新连接。")
                             .font(.callout).foregroundStyle(.secondary)
                     }.padding(.vertical, 4)
                 }
                 if model.connectionMode != .wifi || model.currentTransport == "ble" {
-                    Text("蓝牙首次连接：在 macOS 系统弹窗中输入设备 BLUETOOTH PIN 页面上的六位码。已保存的 ThinCube 授权会自动复用。")
+                    Text("蓝牙直接建立连接，首次使用只需在 ThinCube 中输入一次设备配对码。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
                 if model.connectionMode != .ble {
@@ -238,7 +236,7 @@ struct MainView: View {
                 }
                 DisclosureGroup("首次配网与设备按键") {
                     Text("Wi-Fi 首次使用：连接 ThinCube-Setup 热点，按设备屏幕上的密码登录，在 192.168.4.1 配置 Wi-Fi。让 Mac 与设备加入同一局域网。")
-                    Text("短按 B 静音；单独长按 B 3 秒后松开切换 Wi-Fi / 蓝牙。自动模式会跟随设备；切换过程中请保持设备供电。")
+                    Text("短按 B 静音；长按 B 3 秒并松开切换 Wi-Fi / 蓝牙。所选模式会保存，未连接时持续等待；再次长按 B 可切换回来。自动模式会跟随设备。")
                 }.font(.callout).foregroundStyle(.secondary)
             }
             Section("姿态校准 · 首次使用一次") {

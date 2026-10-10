@@ -109,7 +109,7 @@ void setup(){
   static char ssid[33], pass[65];
   const bool haveCreds = provLoadCreds(ssid, sizeof(ssid), pass, sizeof(pass));
   if (transportMode()==TransportMode::BLE){
-    if(!bleBegin(deviceName(),strtoul(devicePairPin(),nullptr,10)))uiLog("BLE init failed");
+    if(!bleBegin(deviceName()))uiLog("BLE init failed");
   } else if (!haveCreds || bootProvisioning){
     provBegin();
   } else {
@@ -118,7 +118,7 @@ void setup(){
     Serial.printf("[wifi] joining %s\n", ssid);
     uiLog("wifi join");
   }
-  transportStarted(millis());
+  transportStarted();
 }
 
 void loop(){

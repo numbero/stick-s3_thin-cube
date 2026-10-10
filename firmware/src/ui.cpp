@@ -282,7 +282,7 @@ void uiBegin(){
 }
 bool uiHealthy(){return canvas.getBuffer()!=nullptr;}
 void uiSetOrientation(uint8_t requested,uint32_t ms){
-  const bool critical=provActive()||otaActive()||devicePairWindow()||blePairVisible()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
+  const bool critical=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(critical)games.cancel();
   else if(games.active())return;
   if(critical)requested=requested==2?2:0;
@@ -306,9 +306,9 @@ void uiUsbDebug(){
     if(c=='\r')continue;
     if(c!='\n'){if(length<sizeof(command)-1)command[length++]=c;continue;}
     command[length]=0;length=0;
-    if(!strcmp(command,"debug")){if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!blePairVisible()&&!deviceStreaming()&&!transportBusy())s_debug=!s_debug;continue;}
+    if(!strcmp(command,"debug")){if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy())s_debug=!s_debug;continue;}
     if(strcmp(command,"screen"))continue;
-    if(otaActive()||devicePairWindow()||blePairVisible()||transportBusy()||deviceStreaming()||rotation.active||!uiHealthy()){Serial.println("TCFB unavailable: idle stable screen only");continue;}
+    if(otaActive()||devicePairWindow()||transportBusy()||deviceStreaming()||rotation.active||!uiHealthy()){Serial.println("TCFB unavailable: idle stable screen only");continue;}
     // Serial frame export can take longer than the local capture queue. Do not
     // export in a live session; pause only local capture until the next tick.
     audioTick(false);
@@ -469,7 +469,7 @@ void uiTick(uint32_t ms){
   s_chgShown = powerCharging();
   // Keep sensor acquisition and diagnostics alive while setup/OTA own the UI.
   const MotionEv ev = motionPoll(ms);
-  const bool special=provActive()||otaActive()||devicePairWindow()||blePairVisible()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
+  const bool special=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(special)games.cancel();
 
   /* 配网 / OTA 期间接管屏幕与按键，暂停小爪的日常循环 */
@@ -480,10 +480,10 @@ void uiTick(uint32_t ms){
   // A alone in idle mode opens diagnostics; B/combo and live shortcuts retain priority.
   static bool debugHeld=false,debugBlocked=false;
   if(!M5.BtnA.isPressed()&&!M5.BtnA.wasClicked()){debugHeld=false;debugBlocked=false;}
-  const bool deck=(deviceDisplayRotation()&1)&&!devicePairWindow()&&!blePairVisible();
+  const bool deck=(deviceDisplayRotation()&1)&&!devicePairWindow();
   const auto gameAction=gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),games.active(),
-    deck&&!uiRotationActive()&&!special&&!debugHeld,gestures.suppressA||devicePairWindow()||blePairVisible()||transportBusy());
-  if(M5.BtnA.isPressed()&&(gestures.suppressA||deviceStreaming()||devicePairWindow()||blePairVisible()||transportBusy()))debugBlocked=true;
+    deck&&!uiRotationActive()&&!special&&!debugHeld,gestures.suppressA||devicePairWindow()||transportBusy());
+  if(M5.BtnA.isPressed()&&(gestures.suppressA||deviceStreaming()||devicePairWindow()||transportBusy()))debugBlocked=true;
   if(M5.BtnA.isPressed()&&M5.BtnA.pressedFor(1200)&&!debugHeld&&!debugBlocked&&!games.active()&&!gameButton.blocked){
     debugHeld=true;s_debug=!s_debug;goWake("diagnostics");lastInteraction=ms;
   }
@@ -496,7 +496,7 @@ void uiTick(uint32_t ms){
     if(error){snprintf(transportHint,sizeof(transportHint),"switch: %s",error);transportHintUntil=ms+3000;uiLog("%s",transportHint);}
     goWake("transport");
   }
-  if(devicePairWindow()||blePairVisible()||transportBusy()||gestures.switchReady||gestures.comboReady)games.cancel();
+  if(devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady)games.cancel();
   if(deck&&!landscapeVisible)goWake("landscape");
   if(!deck)games.cancel();
   landscapeVisible=deck;
@@ -860,11 +860,6 @@ void uiDraw(uint32_t ms){
   prepareCanvas(ms);
   if (provActive()){ renderProv(ms); return; }
   if (otaActive()){ renderOta(ms); return; }
-  if(blePairVisible()){
-    canvas.fillSprite(C::screen);const int pitch=rowPitch();
-    putCenter("BLUETOOTH PIN",35,C::ink);putCenter(devicePairPin(),65,C::glow);
-    putCenter("enter on Mac",110,C::ink);putCenter("system prompt",110+pitch,C::dim);present(ms);return;
-  }
   if(gestures.switchReady||gestures.comboReady||transportBusy()||(transportHintUntil&&int32_t(transportHintUntil-ms)>0)){
     canvas.fillSprite(C::screen);putCenter("ThinCube",12,C::ink);
     const bool switching=transportBusy();

@@ -6,12 +6,19 @@
 int main(){
   TransportRecord r;assert(r.valid());assert(r.begin(TransportMode::BLE,"one","mac"));
   assert(!r.begin(TransportMode::WiFi,"two","button"));assert(r.boot()==TransportMode::BLE);
-  assert(!r.commit("bad"));assert(!r.timedOut(60099,100));assert(r.timedOut(60100,100));
-  auto interrupted=r;assert(interrupted.boot()==TransportMode::WiFi);assert(interrupted.phase==SwitchPhase::RolledBack);
+  assert(r.phase==SwitchPhase::Committed);assert(!r.busy());assert(!r.commit("bad"));
+  // An absent host and repeated resets must never restore the previous mode.
+  auto interrupted=r;for(int i=0;i<10;i++)assert(interrupted.boot()==TransportMode::BLE);
+  assert(interrupted.phase==SwitchPhase::Committed);
   assert(r.commit("one"));assert(r.commit("one"));assert(r.boot()==TransportMode::BLE);
   assert(r.begin(TransportMode::WiFi,"two","button"));assert(r.boot()==TransportMode::WiFi);
-  r.rollback();assert(r.mode==TransportMode::BLE);assert(!r.commit("two"));
-  r.phase=SwitchPhase::Trial;assert(r.timedOut(60000-16,0xfffffff0));
+  assert(r.phase==SwitchPhase::Committed);assert(!r.busy());assert(r.commit("two"));
+  r.phase=SwitchPhase::Trial;assert(r.valid());assert(r.boot()==TransportMode::WiFi);
+  assert(r.phase==SwitchPhase::Committed);assert(!r.busy());
+  assert(r.begin(TransportMode::BLE,"three","button"));assert(!r.commit("three"));
+  assert(r.boot()==TransportMode::BLE);assert(r.commit("three"));
+  r.phase=SwitchPhase::RolledBack;r.mode=TransportMode::WiFi;
+  assert(r.boot()==TransportMode::WiFi);assert(!r.commit("three"));
   using A=ButtonGestures::Action;ButtonGestures g;
   assert(g.update(100,false,true,false,true,true)==A::None);
   assert(g.update(3100,false,true,false,true,true)==A::None);assert(g.switchReady);

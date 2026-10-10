@@ -21,6 +21,7 @@ import ThinCubeCore
     private var writes: [Write] = [], writing = false
     private var nextRequest = 0, nextMessage: UInt16 = 0
     private var controlFragments = BLEFragments(), audioFragments = BLEFragments(maximum: 348, timeout: 0.2)
+    private var subscriptionRetries: [CBUUID: Task<Void, Never>] = [:]
     private var snapshots = BLEStatusSnapshots()
     private func trace(_ text: String) {
         if ProcessInfo.processInfo.arguments.contains("--hardware-check") { print("[BLE] \(text)") }
@@ -86,8 +87,8 @@ import ThinCubeCore
         guard peripheral == self.peripheral else { return }
         openTimeout?.cancel()
         openTimeout = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: 120_000_000_000) } catch { return }
-            self?.fail(ClientError.message("蓝牙配对超时。请在 macOS 配对弹窗中输入 BLUETOOTH PIN 码，再点击连接重试。"), notify: false)
+            do { try await Task.sleep(nanoseconds: 12_000_000_000) } catch { return }
+            self?.fail(ClientError.transient("蓝牙服务暂未就绪，正在等待设备重连。"), notify: false)
         }
         peripheral.discoverServices([Self.service])
     }
@@ -113,7 +114,24 @@ import ThinCubeCore
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
         guard peripheral == self.peripheral else { return }
-        if let error { fail(error, notify: false); return }
+        if let error {
+            let value = error as NSError
+            if opening != nil, value.domain == CBATTErrorDomain,
+               [CBATTError.insufficientAuthentication.rawValue, CBATTError.insufficientEncryption.rawValue].contains(value.code) {
+                // macOS can return an ATT error before automatic encryption
+                // finishes. Retry within the existing bounded opening timeout.
+                subscriptionRetries[characteristic.uuid]?.cancel()
+                subscriptionRetries[characteristic.uuid] = Task { [weak self] in
+                    do { try await Task.sleep(nanoseconds: 500_000_000) } catch { return }
+                    guard let self, self.peripheral == peripheral, self.opening != nil else { return }
+                    self.subscriptionRetries.removeValue(forKey: characteristic.uuid)
+                    peripheral.setNotifyValue(true, for: characteristic)
+                }
+                return
+            }
+            fail(error, notify: false); return
+        }
+        subscriptionRetries.removeValue(forKey: characteristic.uuid)?.cancel()
         trace("subscribe \(characteristic.uuid == controlID ? "control" : "audio") enabled=\(characteristic.isNotifying)")
         if control?.isNotifying == true && audio?.isNotifying == true {
             openTimeout?.cancel(); openTimeout = nil; opening?.resume(); opening = nil
@@ -176,22 +194,22 @@ import ThinCubeCore
     private func fail(_ error: Error, notify: Bool) {
         trace("failed: \(error.localizedDescription)")
         let callback = notify ? onDisconnect : nil
-        let reported = pairingError(error)
+        let reported = connectionError(error)
         close(error: reported); callback?(reported)
     }
-    private func pairingError(_ error: Error) -> Error {
+    private func connectionError(_ error: Error) -> Error {
         let value = error as NSError
         if value.domain == CBErrorDomain {
             if value.code == CBError.peerRemovedPairingInformation.rawValue {
-                return ClientError.message("系统蓝牙绑定已失效。请在 Mac 蓝牙设置中忽略此设备，再连接并完成系统配对。")
+                return ClientError.message("Mac 保存的旧蓝牙绑定已失效。请在蓝牙设置中忽略此设备，再从 ThinCube 连接；新版固件无需系统配对码。")
             }
             if [CBError.encryptionTimedOut.rawValue, CBError.operationCancelled.rawValue].contains(value.code) {
-                return ClientError.message("系统蓝牙配对未完成。请重新连接，在 macOS 弹窗中输入设备 BLUETOOTH PIN 页面上的六位码。")
+                return ClientError.transient("蓝牙连接暂未完成，正在等待设备重连。")
             }
         }
         if value.domain == CBATTErrorDomain,
            [CBATTError.insufficientAuthentication.rawValue, CBATTError.insufficientEncryption.rawValue].contains(value.code) {
-            return ClientError.message("系统蓝牙配对未完成，请重新连接并完成 macOS 配对提示。")
+            return ClientError.transient("蓝牙链路加密尚未就绪，正在等待设备重连。")
         }
         return error
     }
@@ -201,6 +219,7 @@ import ThinCubeCore
             if peripheral.state != .disconnected { expectedDisconnects.insert(peripheral.identifier); manager.cancelPeripheralConnection(peripheral) }
         }
         control = nil; audio = nil; writing = false; controlFragments.reset(); audioFragments.reset(); snapshots.reset()
+        for retry in subscriptionRetries.values { retry.cancel() }; subscriptionRetries.removeAll()
         openTimeout?.cancel(); openTimeout = nil; opening?.resume(throwing: error); opening = nil
         let pending = requests; requests.removeAll(); for value in pending.values { value.resume(throwing: error) }
         for timer in requestTimers.values { timer.cancel() }; requestTimers.removeAll()

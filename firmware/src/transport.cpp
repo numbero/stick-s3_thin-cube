@@ -10,7 +10,7 @@
 #include <atomic>
 namespace {
 TransportRecord record;
-uint32_t started=0,rebootAt=0;
+uint32_t rebootAt=0;
 bool storageOK=true;
 std::mutex admission;
 std::atomic<bool> busyPublished{false};
@@ -25,11 +25,9 @@ void transportBegin(){
   }
   if(!record.valid())record=TransportRecord{};
   const auto before=record.phase;record.boot();
-  if(record.phase!=before&&!save(record)){
-    record.rollback();storageOK=save(record);
-  }
+  if(record.phase!=before)storageOK=save(record);
 }
-void transportStarted(uint32_t now){started=now;busyPublished=record.busy();}
+void transportStarted(){busyPublished=record.busy();}
 std::mutex& transportAdmission(){return admission;}
 TransportMode transportMode(){return record.phase==SwitchPhase::Pending?record.previous:record.mode;}
 const TransportRecord& transportRecord(){return record;}
@@ -44,9 +42,7 @@ const char* requestTransportSwitch(TransportMode target,const char* source,const
   if(provActive()||otaActive()||transportBusy())return "busy";
   if(!transportBootVerified())return "boot_unverified";
   if(target==transportMode())return "already_active";
-  char ssid[33],pass[65];
-  if(target==TransportMode::WiFi&&!provLoadCreds(ssid,sizeof(ssid),pass,sizeof(pass)))return "wifi_unconfigured";
-  memset(pass,0,sizeof(pass));
+  // Wi-Fi without saved credentials starts provisioning after reboot.
   auto next=record;if(!next.begin(target,id,source))return "invalid_request";
   if(!save(next))return "storage_failed";
   record=next;busyPublished=true;deviceStop();soundCancel();audioTick(false);
@@ -58,11 +54,6 @@ bool transportCommit(const char* id){
   if(!save(next))return false;record=next;busyPublished=false;return true;
 }
 void transportTick(uint32_t now){
-  if(record.timedOut(now,started)){
-    auto next=record;next.rollback();
-    // A retained trial will also roll back at the next boot if the write fails.
-    save(next);record=next;busyPublished=true;deviceStop();audioTick(false);rebootAt=now+300;
-  }
   if(rebootAt&&int32_t(now-rebootAt)>=0){Serial.printf("[transport] reboot %s %s\n",transportName(record.mode),switchName(record.phase));ESP.restart();}
 }
 

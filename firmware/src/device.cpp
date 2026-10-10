@@ -298,7 +298,7 @@ void bleRequest(const char* text){
     if(!valid)error="invalid_command";else if(!enqueue(c))error="busy";else cJSON_AddBoolToObject(result,"accepted",true);
   }
   if(error)cJSON_AddStringToObject(result,"error",error);
-  // Fire-and-forget heartbeats already have the encrypted ATT write response.
+  // Fire-and-forget heartbeats already have the ATT write response.
   // Only correlated exchanges need an additional application acknowledgement.
   if(!strcmp(operation,"heartbeat")&&!cJSON_GetObjectItemCaseSensitive(j,"rid")&&!error)cJSON_Delete(result);
   else bleResponse(j,result);
@@ -348,7 +348,7 @@ void deviceOpenPairing() {
   key[0]=0;snprintf(pin,sizeof(pin),"%06u",unsigned(esp_random()%1000000));pairTries=0;pairingUntil=millis()+120000;
   Preferences p;if(p.begin("thincube",false)){p.remove("key");p.end();}
   xSemaphoreGive(publication);
-  bleAuthenticated=false;bleForgetBonds(strtoul(pin,nullptr,10));
+  bleAuthenticated=false;bleDisconnect();
 }
 bool devicePairWindow(){const uint32_t until=pairingUntil.load();return until && int32_t(until-millis())>0;}
 const char* devicePairPin(){return pin;}
