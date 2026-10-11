@@ -4,7 +4,7 @@ import UniformTypeIdentifiers
 import ThinCubeCore
 
 @main struct ThinCubeApp: App {
-    @StateObject private var model = DeviceModel()
+    @NSApplicationDelegateAdaptor(ThinCubeAppDelegate.self) private var delegate
     private static let menuBarIcon: NSImage = {
         let image = Bundle.main.url(forResource: "MenuBarIconTemplate", withExtension: "pdf")
             .flatMap { NSImage(contentsOf: $0) }
@@ -15,25 +15,35 @@ import ThinCubeCore
         return image
     }()
     var body: some Scene {
-        WindowGroup("ThinCube") { MainView(model: model, discovery: model.discovery).frame(minWidth: 780, minHeight: 500) }
         MenuBarExtra {
-            Text(model.name)
-            Text(model.pairingRequired ? "等待设备配对" : !model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
-            if model.pairingRequired {
-                Button("完成配对…") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
-            }
-            Button(model.status?.muted == true ? "取消麦克风静音" : "麦克风静音") { Task { await model.apply(["muted": model.status?.muted != true]) } }.disabled(!model.connected)
-            Button(model.status?.soundMuted == true ? "开启 Clawd 音效" : "静音 Clawd 音效") { Task { await model.apply(["soundMuted": model.status?.soundMuted != true]) } }.disabled(!model.connected || model.status?.soundVolume == nil)
-            if model.status?.streaming == true {
-                Button("停止语音输入") { Task { await model.command("stop") } }.disabled(!model.connected)
-            }
-            Divider()
-            Button("按键与快捷键…") { model.pane = .keys; NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
-            Button("显示 ThinCube") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
-            Button("退出") { model.shutdown(); NSApp.terminate(nil) }
+            ThinCubeMenu(model: delegate.model, presentation: delegate.presentation)
         } label: {
             Image(nsImage: Self.menuBarIcon).accessibilityLabel("ThinCube")
         }
+    }
+}
+
+private struct ThinCubeMenu: View {
+    @ObservedObject var model: DeviceModel
+    @ObservedObject var presentation: AppPresentation
+    var body: some View {
+        Text(model.name)
+        Text(model.pairingRequired ? "等待设备配对" : !model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
+        if model.pairingRequired {
+            Button("完成配对…") { presentation.showMainWindow(pane: .device) }
+        }
+        Button(model.status?.muted == true ? "取消麦克风静音" : "麦克风静音") { Task { await model.apply(["muted": model.status?.muted != true]) } }.disabled(!model.connected)
+        Button(model.status?.soundMuted == true ? "开启 Clawd 音效" : "静音 Clawd 音效") { Task { await model.apply(["soundMuted": model.status?.soundMuted != true]) } }.disabled(!model.connected || model.status?.soundVolume == nil)
+        if model.status?.streaming == true {
+            Button("停止语音输入") { Task { await model.command("stop") } }.disabled(!model.connected)
+        }
+        Divider()
+        Button("按键与快捷键…") { presentation.showMainWindow(pane: .keys) }
+        Button("设置…") { presentation.showMainWindow(pane: .settings) }
+        Button("显示 ThinCube") { presentation.showMainWindow() }
+        Toggle("仅在菜单栏显示", isOn: Binding(get: { presentation.menuBarOnly }, set: { presentation.setMenuBarOnly($0) }))
+        Divider()
+        Button("退出") { model.shutdown(); NSApp.terminate(nil) }
     }
 }
 
@@ -76,6 +86,7 @@ private enum MainSheet: Equatable, Identifiable {
 struct MainView: View {
     @ObservedObject var model: DeviceModel
     @ObservedObject var discovery: Discovery
+    @ObservedObject var presentation: AppPresentation
     @State private var hoveredPane: MainPane?
     @State private var accessibilityTrusted = false
     @State private var postingAllowed = false
@@ -138,6 +149,8 @@ struct MainView: View {
         .onAppear { presentPairingIfNeeded() }
         .onChange(of: model.pairingSession?.id) { _ in presentPairingIfNeeded() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in presentPairingIfNeeded() }
+        .onReceive(NotificationCenter.default.publisher(for: AppPresentation.windowShown)) { _ in presentPairingIfNeeded() }
+        .onReceive(NotificationCenter.default.publisher(for: NSWindow.didBecomeKeyNotification)) { _ in presentPairingIfNeeded() }
     }
 
     private func presentPairingIfNeeded() {
@@ -145,7 +158,7 @@ struct MainView: View {
             if case .pairing = activeSheet { activeSheet = nil }
             return
         }
-        guard NSApp.isActive else { return }
+        guard NSApp.isActive, presentation.mainWindowVisible else { return }
         let desired = MainSheet.pairing(session.id)
         if activeSheet == desired { return }
         // Complete dismissal of an existing sheet before presenting the next.
@@ -206,6 +219,11 @@ struct MainView: View {
 
     private var settings: some View {
         Form {
+            Section {
+                Toggle("仅在菜单栏显示", isOn: Binding(get: { presentation.menuBarOnly }, set: { presentation.setMenuBarOnly($0) }))
+                Text("隐藏 Dock 图标并收起主窗口，连接与语音继续运行。可从菜单栏打开窗口或恢复 Dock 显示；重启后保留此选择。")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            } header: { Text("应用显示") }
             Section {
                 HStack(spacing: 12) {
                     Text("键盘控制")
