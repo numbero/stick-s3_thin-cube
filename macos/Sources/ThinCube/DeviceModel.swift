@@ -59,10 +59,16 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
 }
 @MainActor final class DeviceModel: ObservableObject {
+    struct PairingSession: Identifiable {
+        let id: UUID, deviceName: String, transport: String
+    }
     @Published var pane: MainPane = .device
     @Published var host = UserDefaults.standard.string(forKey: "lastHost") ?? ""
     @Published var pin = ""
-    @Published private(set) var pairingRequired = false
+    @Published private(set) var connectionProgress = ConnectionProgress()
+    @Published private(set) var pairingSession: PairingSession?
+    @Published private(set) var pairingError = ""
+    var pairingRequired: Bool { pairingSession != nil }
     @Published private(set) var connectionMode = ConnectionMode(rawValue: UserDefaults.standard.string(forKey: "connectionMode") ?? "") ?? .automatic
     @Published var name = "ThinCube"
     @Published var version = ""
@@ -78,12 +84,12 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     var canSwitchTransport: Bool { connected && !connecting && !updating && !switching && status?.transportSwitch == true && status?.bootVerified == true }
     var canSelectConnectionMode: Bool { !updating && !connecting && !switching }
     var selectedDeviceID: String { target.deviceID ?? "" }
-    var discoveredDeviceIDs: [String] {
-        var ids = Set(discovery.devices.map(\.id))
-        if let id = target.deviceID { ids.insert(id) }
-        return ids.sorted()
+    var deviceOptions: [ConnectionDeviceOption] {
+        ConnectionDeviceOption.make(endpoints: discovery.devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) },
+                                    selectedID: target.deviceID, connectedID: connected ? target.deviceID : nil,
+                                    connectedTransport: currentTransport)
     }
-    var canSubmitPairingCode: Bool { pairingRequired && PairingCode.isValid(pin) }
+    var canSubmitPairingCode: Bool { pairingRequired && connectionProgress.stage == .pairing && PairingCode.isValid(pin) }
     @Published var updating = false
     @Published var updateProgress = 0.0
     @Published var calibrationBusy = false
@@ -183,6 +189,9 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         discovery.ble.onDisconnect = { [weak self] reason in
             guard let self, self.activeBLE else { return }; self.connectionFailed(reason)
         }
+        discovery.ble.onOpeningProgress = { [weak self] hint in
+            guard let self, self.activeBLE, self.connecting else { return }; self.note = hint
+        }
         discoveryObserver = discovery.$devices.sink { [weak self] devices in
             Task { @MainActor in self?.discovered(devices) }
         }
@@ -202,6 +211,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     func hardwareSnapshot() -> [String: Any] {
         let stats = buffer.statistics()
         return ["connected": connected, "connecting": connecting, "switching": switching,
+                "connectionStage": connectionProgress.stage.rawValue, "pairingRequired": pairingRequired,
                 "transport": currentTransport, "phase": status?.transportTransaction?.phase ?? "",
                 "requestId": status?.transportTransaction?.requestId ?? "", "audioPrepared": audioPrepared,
                 "streaming": status?.streaming ?? false, "muted": status?.muted ?? false,
@@ -315,6 +325,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         teardown(note: automatic ? "正在自动恢复连接…" : "正在连接…")
         host = target.host; connecting = true; stopLocally = true
         let attempt = generation, selected = target
+        connectionProgress.begin(attempt)
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
             await self.performConnection(automatic: automatic, target: selected, attempt: attempt)
@@ -326,7 +337,6 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         defer {
             if generation == attempt {
                 connectionTask = nil
-                if !connected { connecting = false }
             }
         }
         do {
@@ -339,6 +349,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             guard selected.accepts(found) else { throw ClientError.message("此地址上的设备与所选设备不同，请重新选择设备并点击连接。") }
             name = found; version = info["version"] as? String ?? ""
             target.deviceID = found
+            connectionProgress.advance(.authorization, attempt: attempt)
             loadShortcut()
             var secret: String
             do {
@@ -361,6 +372,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             }
             guard generation == attempt, !Task.isCancelled else { return }
             cachedCredential = (found, secret)
+            connectionProgress.advance(.session, attempt: attempt)
             do { try prepareAudioNow() } catch { note = error.localizedDescription }
             if activeBLE {
                 stopLocally = true; epoch = 0; ack = 0; keyStream = DeviceKeyStream(); lastStatus = Date(); lastHeartbeat = .distantPast
@@ -422,7 +434,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private func authorizeDevice(found: String, attempt: UUID) async throws -> String {
         var hint = "请输入设备屏幕上的六位配对码；配对后 Wi-Fi 和蓝牙共用已保存的授权。"
         while generation == attempt, !Task.isCancelled {
-            pin = ""; pairingRequired = true; note = hint
+            pin = ""; connectionProgress.advance(.pairing, attempt: attempt); note = hint
+            if pairingSession == nil { pairingSession = PairingSession(id: attempt, deviceName: found, transport: transportLabel) }
             let code = try await withCheckedThrowingContinuation { pairingContinuation = $0 }
             guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
             note = "正在验证配对码…"
@@ -435,13 +448,15 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 return pairedKey
             } catch ClientError.http(let status, let error) where (status == 400 || status == 403) && error == "invalid_pin_or_window" {
                 hint = "配对码有误或已过期。请核对 PAIR PIN；如已过期，同时按住 A+B 3 秒并松开，重新连接后输入新码。"
+                pairingError = hint
             }
         }
         throw CancellationError()
     }
     func submitPairingCode() {
         guard canSubmitPairingCode, let continuation = pairingContinuation else { return }
-        pairingContinuation = nil; pairingRequired = false
+        pairingContinuation = nil; pairingError = ""
+        connectionProgress.advance(.verifying, attempt: generation)
         let code = pin; pin = ""; continuation.resume(returning: code)
     }
     private func startTimer() {
@@ -449,6 +464,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         RunLoop.main.add(timer!, forMode: .common)
     }
     private func didConnect(found: String, address: String, automatic: Bool) {
+        guard connectionProgress.advance(.connected, attempt: generation) else { return }
+        pairingSession = nil; pairingError = ""; pin = ""
         connected = true; connecting = false; recovery.didConnect()
         target = ConnectionTarget(host: address, deviceID: found); host = address
         preferredTransport = activeBLE ? "ble" : "wifi"
@@ -883,7 +900,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
     }
     private func teardown(note message: String) {
-        pairingRequired = false; pin = ""
+        pairingSession = nil; pairingError = ""; pin = ""; connectionProgress.reset()
         let authorization = pairingContinuation; pairingContinuation = nil
         authorization?.resume(throwing: CancellationError())
         stopKeyboardTest()

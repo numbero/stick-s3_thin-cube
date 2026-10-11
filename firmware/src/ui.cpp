@@ -13,6 +13,7 @@
 #include "power_status.h"
 #include "button_gestures.h"
 #include "transport.h"
+#include "connection_hint.h"
 #include "ble_link.h"
 #include "ui_status.h"
 #include <WiFi.h>
@@ -474,7 +475,7 @@ void uiTick(uint32_t ms){
     debugHeld=true;s_debug=!s_debug;goWake("diagnostics");lastInteraction=ms;
   }
   if(gesture==ButtonGestures::Action::Mute){deviceToggleMute();uiLog(deviceMuted()?"mic muted":"mic unmuted");}
-  if(gesture==ButtonGestures::Action::Pair){deviceOpenPairing();goWake("pairing");}
+  if(gesture==ButtonGestures::Action::Pair){deviceOpenPairing();goWake("pairing");uiLog("pair via %s",transportName(transportMode()));}
   if(gesture==ButtonGestures::Action::Switch){
     char id[37];snprintf(id,sizeof(id),"button-%08x-%08x",unsigned(esp_random()),unsigned(ms));
     const auto target=transportMode()==TransportMode::BLE?TransportMode::WiFi:TransportMode::BLE;
@@ -826,19 +827,25 @@ void uiDraw(uint32_t ms){
   if (provActive()){ renderProv(ms); return; }
   if (otaActive()){ renderOta(ms); return; }
   if(gestures.switchReady||gestures.comboReady||transportBusy()||(transportHintUntil&&int32_t(transportHintUntil-ms)>0)){
-    canvas.fillSprite(C::screen);putCenter("ThinCube",12,C::ink);
+    canvas.fillSprite(C::screen);const bool shortLayout=H==135;putCenter("ThinCube",shortLayout?6:12,C::ink);
     const bool switching=transportBusy();
-    putCenter(switching?"SWITCHING":gestures.comboReady?"RE-PAIR":"CONNECTION",55,C::glow);
-    putCenter(gestures.comboReady?"release A + B":gestures.switchReady?"release B":transportHint[0]?transportHint:"reconnecting...",95,C::ink);
-    const auto target=transportMode()==TransportMode::BLE?TransportMode::WiFi:TransportMode::BLE;
-    putCenter(switching?transportName(transportRecord().mode):transportName(target),130,C::ok);present(ms);return;
+    putCenter(switching?"SWITCHING":gestures.comboReady?"RE-PAIR":"CONNECTION",shortLayout?35:55,C::glow);
+    putCenter(gestures.comboReady?"release A + B":gestures.switchReady?"release B":transportHint[0]?transportHint:"reconnecting...",shortLayout?68:95,C::ink);
+    const auto shown=connectionHintMode(transportMode(),gestures.switchReady&&!gestures.comboReady,switching,transportRecord().mode);
+    putCenter(connectionHintLabel(shown),shortLayout?100:130,C::ok);present(ms);return;
   }
   if(devicePairWindow()){
-    canvas.fillSprite(C::screen);const int pitch=rowPitch();
-    putCenter("ThinCube",8,C::ink);rule(8+pitch+4);
-    putCenter("PAIR PIN",45,C::dim);putCenter(devicePairPin(),45+pitch+8,C::glow);
-    putCenter("open ThinCube",100,C::ink);putCenter("on your Mac",100+pitch,C::ink);
-    putCenter("A+B hold: pair",H-2*pitch,C::dim);present(ms);return;
+    canvas.fillSprite(C::screen);const int pitch=rowPitch();const bool shortLayout=H==135;
+    putCenter("ThinCube",shortLayout?4:8,C::ink);rule((shortLayout?4:8)+pitch+4);
+    putCenter("PAIR PIN",shortLayout?31:45,C::dim);putCenter(devicePairPin(),shortLayout?54:45+pitch+8,C::glow);
+    if(shortLayout){
+      putCenter(connectionHintLabel(transportMode()),80,C::ok);putCenter("open ThinCube on Mac",106,C::ink);
+    }else{
+      putCenter("open ThinCube",100,C::ink);putCenter("on your Mac",100+pitch,C::ink);
+      putCenter(connectionHintLabel(transportMode()),100+2*pitch+4,C::ok);
+      putCenter("A+B hold: pair",H-2*pitch,C::dim);
+    }
+    present(ms);return;
   }
   if (s_debug){ renderDebug(ms); return; }
   if(W==240){

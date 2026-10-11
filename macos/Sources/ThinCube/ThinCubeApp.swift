@@ -18,7 +18,10 @@ import ThinCubeCore
         WindowGroup("ThinCube") { MainView(model: model, discovery: model.discovery).frame(minWidth: 780, minHeight: 500) }
         MenuBarExtra {
             Text(model.name)
-            Text(!model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
+            Text(model.pairingRequired ? "等待设备配对" : !model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
+            if model.pairingRequired {
+                Button("完成配对…") { NSApp.activate(ignoringOtherApps: true); NSApp.windows.first?.makeKeyAndOrderFront(nil) }
+            }
             Button(model.status?.muted == true ? "取消麦克风静音" : "麦克风静音") { Task { await model.apply(["muted": model.status?.muted != true]) } }.disabled(!model.connected)
             Button(model.status?.soundMuted == true ? "开启 Clawd 音效" : "静音 Clawd 音效") { Task { await model.apply(["soundMuted": model.status?.soundMuted != true]) } }.disabled(!model.connected || model.status?.soundVolume == nil)
             if model.status?.streaming == true {
@@ -57,16 +60,27 @@ enum MainPane: String, CaseIterable, Identifiable {
     }
 }
 
+private enum MainSheet: Equatable, Identifiable {
+    case pairing(UUID), manualAddress, changingNetwork, keyboardDiagnostics, audioDiagnostics
+    var id: String {
+        switch self {
+        case .pairing(let id): return "pairing-" + id.uuidString
+        case .manualAddress: return "address"
+        case .changingNetwork: return "network"
+        case .keyboardDiagnostics: return "keyboard"
+        case .audioDiagnostics: return "audio"
+        }
+    }
+}
+
 struct MainView: View {
     @ObservedObject var model: DeviceModel
     @ObservedObject var discovery: Discovery
     @State private var hoveredPane: MainPane?
     @State private var accessibilityTrusted = false
     @State private var postingAllowed = false
-    @State private var manualAddress = false
-    @State private var changingNetwork = false
-    @State private var keyboardDiagnostics = false
-    @State private var audioDiagnostics = false
+    @State private var activeSheet: MainSheet?
+    @State private var presentedPairing: UUID?
     private let amber = Color(red: 0.973, green: 0.690, blue: 0.000)
     private let amberHi = Color(red: 1.000, green: 0.788, blue: 0.302)
 
@@ -105,13 +119,45 @@ struct MainView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .status) {
-                    Label(model.connected ? "在线 · " + model.name : (model.connecting ? "连接中" : (model.reconnecting ? "等待自动重连" : "未连接")),
+                    Label(model.pairingRequired ? "等待配对" : model.connected ? "在线 · " + model.name : (model.connecting ? "连接中" : (model.reconnecting ? "等待自动重连" : "未连接")),
                           systemImage: model.connected ? (model.currentTransport == "ble" ? "antenna.radiowaves.left.and.right" : "wifi") : "wifi.slash")
                         .font(.system(size: 11.5)).foregroundStyle(model.connected ? .green : .secondary)
                 }
             }
         }
         .tint(amber)
+        .sheet(item: $activeSheet, onDismiss: sheetDismissed) { sheet in
+            switch sheet {
+            case .pairing(let id): PairingSheet(model: model).onAppear { presentedPairing = id }
+            case .manualAddress: ManualWiFiConnectionSheet(model: model)
+            case .changingNetwork: ChangeWiFiSheet(model: model)
+            case .keyboardDiagnostics: KeyboardDiagnosticsSheet(model: model)
+            case .audioDiagnostics: AudioDiagnosticsSheet(model: model)
+            }
+        }
+        .onAppear { presentPairingIfNeeded() }
+        .onChange(of: model.pairingSession?.id) { _ in presentPairingIfNeeded() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in presentPairingIfNeeded() }
+    }
+
+    private func presentPairingIfNeeded() {
+        guard let session = model.pairingSession else {
+            if case .pairing = activeSheet { activeSheet = nil }
+            return
+        }
+        guard NSApp.isActive else { return }
+        let desired = MainSheet.pairing(session.id)
+        if activeSheet == desired { return }
+        // Complete dismissal of an existing sheet before presenting the next.
+        if activeSheet != nil { activeSheet = nil }
+        else { activeSheet = desired }
+    }
+    private func sheetDismissed() {
+        if let id = presentedPairing, model.pairingSession?.id == id {
+            model.disconnect(note: "配对已取消。点击“连接”可重新开始。")
+        }
+        presentedPairing = nil
+        presentPairingIfNeeded()
     }
 
     private func sidebarRow(_ pane: MainPane) -> some View {
@@ -143,7 +189,7 @@ struct MainView: View {
                 HStack {
                     Text("按键").font(.system(size: 21, weight: .bold))
                     Spacer()
-                    Button("测试与诊断…") { keyboardDiagnostics = true }
+                    Button("测试与诊断…") { activeSheet = .keyboardDiagnostics }
                         .disabled(model.shortcutRecording || model.connecting || model.updating)
                     HelpPopover(title: "快捷键帮助") {
                         HelpParagraph("设备 A 键", "倒置语音模式中，正面 A 键会触发这里设置的快捷键。设置完成即生效，并为当前设备保存。")
@@ -155,9 +201,6 @@ struct MainView: View {
             }
             .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 30)
             .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .sheet(isPresented: $keyboardDiagnostics) {
-            KeyboardDiagnosticsSheet(model: model)
         }
     }
 
@@ -209,10 +252,10 @@ struct MainView: View {
                 Picker("连接模式", selection: Binding(get: { model.connectionMode }, set: { mode in Task { await model.selectConnectionMode(mode) } })) {
                     ForEach(ConnectionMode.allCases, id: \.self) { Text($0.label).tag($0) }
                 }.pickerStyle(.menu).disabled(!model.canSelectConnectionMode)
-                if !model.discoveredDeviceIDs.isEmpty {
+                if !model.deviceOptions.isEmpty {
                     Picker("设备", selection: Binding(get: { model.selectedDeviceID }, set: { model.selectDevice($0) })) {
                         if model.selectedDeviceID.isEmpty { Text("请选择设备").tag("") }
-                        ForEach(model.discoveredDeviceIDs, id: \.self) { Text($0).tag($0) }
+                        ForEach(model.deviceOptions) { Text($0.label).tag($0.id) }
                     }.pickerStyle(.menu).disabled(model.connected || model.connecting || model.switching || model.updating)
                 } else {
                     Text("正在查找 ThinCube…").foregroundStyle(.secondary)
@@ -222,8 +265,11 @@ struct MainView: View {
                 }
                 if model.switching { ProgressView(model.transportPhase) }
                 else if !model.transportPhase.isEmpty { Text(model.transportPhase).font(.callout).foregroundStyle(.secondary) }
-                else if model.connecting { ProgressView(model.pairingRequired ? "等待设备授权" : "正在连接…") }
+                else if model.connecting { ProgressView(model.connectionProgress.stage.label) }
                 else if model.reconnecting { ProgressView("正在等待设备重新连接…") }
+                if model.connecting || model.connected {
+                    ConnectionSteps(stage: model.connectionProgress.stage, transport: model.transportLabel)
+                }
                 HStack {
                     Button(model.connected || model.connecting || model.reconnecting ? "断开" : "连接") {
                         if model.connected || model.connecting || model.reconnecting { model.disconnect() }
@@ -231,23 +277,13 @@ struct MainView: View {
                     }.disabled(model.updating)
                     if model.connectionMode == .wifi && !model.connected {
                         Spacer()
-                        Button("通过 IP 连接…") { manualAddress = true }
+                        Button("通过 IP 连接…") { activeSheet = .manualAddress }
                             .disabled(model.connecting || model.switching || model.updating)
                     }
                 }
                 if model.pairingRequired {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("设备配对").fontWeight(.semibold)
-                        Text("输入设备屏幕上的 PAIR PIN 六位配对码即可连接；授权保存后，Wi-Fi 和蓝牙都可直接重连。")
-                            .font(.callout).foregroundStyle(.secondary)
-                        HStack {
-                            SecureField("六位配对码", text: $model.pin).frame(width: 160)
-                                .onSubmit { model.submitPairingCode() }
-                            Button("配对并连接") { model.submitPairingCode() }.disabled(!model.canSubmitPairingCode)
-                        }
-                        Text("未显示 PAIR PIN 时，请在设备空闲时同时按住 A+B 3 秒并松开，再重新连接。")
-                            .font(.callout).foregroundStyle(.secondary)
-                    }.padding(.vertical, 4)
+                    Label("信道已连接，等待设备配对", systemImage: "exclamationmark.circle.fill").foregroundStyle(.orange)
+                    Button("完成配对…") { presentPairingIfNeeded() }
                 }
             } header: {
                 HStack {
@@ -255,7 +291,8 @@ struct MainView: View {
                     Spacer()
                     HelpPopover(title: "连接帮助") {
                         HelpParagraph("连接模式", "自动模式会跟随设备当前的 Wi-Fi 或蓝牙方式。已连接时选择 Wi-Fi 或蓝牙，会同步切换设备。")
-                        HelpParagraph("首次配对", "两种方式都只需在 ThinCube 输入一次屏幕上的 PAIR PIN。蓝牙无需系统配对码，后续连接共用已保存的授权。")
+                        HelpParagraph("首次配对", "先连接信道，再由弹窗引导输入设备 PAIR PIN。蓝牙无需系统验证码；若 macOS 显示配对确认，请点击配对。有效配对会自动复用。")
+                        HelpParagraph("设备列表", "已发现表示当前扫描或局域网发现的设备；上次选择但暂未发现属于历史记录。系统忽略蓝牙设备后，仍在广播的设备仍可被发现，ThinCube 的应用授权也会保留。")
                         HelpParagraph("Wi-Fi 配网", "首次使用时连接 ThinCube-Setup 热点，按设备屏幕上的密码登录，在 192.168.4.1 配置 Wi-Fi。Mac 与设备需在同一局域网。自动发现不到时，可在 Wi-Fi 模式下通过 IP 连接。")
                         HelpParagraph("设备按键", "短按 B 静音；长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
                     }
@@ -291,7 +328,7 @@ struct MainView: View {
             }.disabled(!model.connected || model.updating || model.switching)
             if model.connected && model.currentTransport == "wifi" {
                 Section {
-                    Button("更换 Wi-Fi…") { changingNetwork = true }
+                    Button("更换 Wi-Fi…") { activeSheet = .changingNetwork }
                         .disabled(model.connecting || model.updating || model.switching)
                 } header: {
                     HelpSectionHeader("Wi-Fi 网络", helpTitle: "网络帮助") {
@@ -301,14 +338,13 @@ struct MainView: View {
                 }
             }
         }.formStyle(.grouped)
-            .sheet(isPresented: $manualAddress) { ManualWiFiConnectionSheet(model: model) }
-            .sheet(isPresented: $changingNetwork) { ChangeWiFiSheet(model: model) }
-            .onChange(of: model.connectionMode) { _ in manualAddress = false }
+            .onChange(of: model.connectionMode) { _ in if activeSheet == .manualAddress { activeSheet = nil } }
             .onChange(of: model.connected) { connected in
-                if connected { manualAddress = false } else { changingNetwork = false }
+                if connected && activeSheet == .manualAddress { activeSheet = nil }
+                if !connected && activeSheet == .changingNetwork { activeSheet = nil }
             }
-            .onChange(of: model.switching) { if $0 { changingNetwork = false } }
-            .onChange(of: model.updating) { if $0 { changingNetwork = false } }
+            .onChange(of: model.switching) { if $0 && activeSheet == .changingNetwork { activeSheet = nil } }
+            .onChange(of: model.updating) { if $0 && activeSheet == .changingNetwork { activeSheet = nil } }
     }
     private var audio: some View {
         Form {
@@ -387,7 +423,7 @@ struct MainView: View {
                             .disabled(!model.connected || model.updating || model.switching)
                     }
                     Spacer()
-                    Button("音频诊断…") { audioDiagnostics = true }
+                    Button("音频诊断…") { activeSheet = .audioDiagnostics }
                 }
             } header: {
                 HelpSectionHeader("Mac 音频输入", helpTitle: "音频输入帮助") {
@@ -397,7 +433,6 @@ struct MainView: View {
                 }
             }
         }.formStyle(.grouped)
-            .sheet(isPresented: $audioDiagnostics) { AudioDiagnosticsSheet(model: model) }
     }
     private var firmware: some View {
         Form {

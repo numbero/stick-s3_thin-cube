@@ -8,6 +8,7 @@ import ThinCubeCore
     private let audioID = CBUUID(string: "8D7A1002-6D43-4F3B-9AC8-4C7E62A8B101")
     @Published private(set) var devices: [FoundDevice] = []
     var onStatus: ((Data) -> Void)?, onAudio: ((Data) -> Void)?, onDisconnect: ((Error) -> Void)?
+    var onOpeningProgress: ((String) -> Void)?
     private var manager: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var lastSeen: [String: Date] = [:]
@@ -35,7 +36,10 @@ import ThinCubeCore
     private func expireDiscovery() {
         let expired = devices.filter { Date().timeIntervalSince(lastSeen[$0.host] ?? .distantPast) > 8 }
         guard !expired.isEmpty else { return }
-        for device in expired { lastSeen.removeValue(forKey: device.host) }
+        for device in expired {
+            lastSeen.removeValue(forKey: device.host)
+            if let uuid = UUID(uuidString: String(device.host.dropFirst(6))), uuid != peripheral?.identifier { peripherals.removeValue(forKey: uuid) }
+        }
         devices.removeAll { expired.contains($0) }
     }
     var audioCapable: Bool { peripheral.map { $0.maximumWriteValueLength(for: .withResponse) >= 182 } ?? false }
@@ -50,7 +54,7 @@ import ThinCubeCore
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
         if central.state == .poweredOn { central.scanForPeripherals(withServices: [Self.service], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]) }
-        else { fail(ClientError.message(permissionHint ?? "蓝牙连接不可用"), notify: peripheral != nil); devices = [] }
+        else { fail(ClientError.message(permissionHint ?? "蓝牙连接不可用"), notify: peripheral != nil); devices = []; lastSeen.removeAll(); peripherals.removeAll() }
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         guard let name = advertisementData[CBAdvertisementDataLocalNameKey] as? String ?? peripheral.name, name.hasPrefix("ThinCube-") else { return }
@@ -58,7 +62,12 @@ import ThinCubeCore
         let found = FoundDevice(id: name, host: "ble://" + peripheral.identifier.uuidString)
         lastSeen[found.host] = Date()
         if let index = devices.firstIndex(where: { $0.id == name }) {
-            if devices[index] != found { devices[index] = found }
+            if devices[index] != found {
+                let previous = devices[index].host
+                lastSeen.removeValue(forKey: previous)
+                if let uuid = UUID(uuidString: String(previous.dropFirst(6))), uuid != self.peripheral?.identifier { peripherals.removeValue(forKey: uuid) }
+                devices[index] = found
+            }
         } else { devices.append(found) }
     }
     func open(_ address: String) async throws {
@@ -86,9 +95,10 @@ import ThinCubeCore
         trace("connected")
         guard peripheral == self.peripheral else { return }
         openTimeout?.cancel()
+        onOpeningProgress?("正在建立加密蓝牙信道；若 macOS 弹出配对请求，请点击“配对”。已有配对通常自动完成。")
         openTimeout = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: 12_000_000_000) } catch { return }
-            self?.fail(ClientError.transient("蓝牙服务暂未就绪，正在等待设备重连。"), notify: false)
+            do { try await Task.sleep(nanoseconds: 90_000_000_000) } catch { return }
+            self?.fail(ClientError.message("蓝牙信道未就绪。请完成 macOS 配对确认后点击“连接”重试。"), notify: false)
         }
         peripheral.discoverServices([Self.service])
     }
@@ -203,7 +213,10 @@ import ThinCubeCore
             if value.code == CBError.peerRemovedPairingInformation.rawValue {
                 return ClientError.message("Mac 保存的旧蓝牙绑定已失效。请在蓝牙设置中忽略此设备，再从 ThinCube 连接；新版固件无需系统配对码。")
             }
-            if [CBError.encryptionTimedOut.rawValue, CBError.operationCancelled.rawValue].contains(value.code) {
+            if value.code == CBError.operationCancelled.rawValue {
+                return ClientError.message("蓝牙连接已取消；需要连接时请再次点击“连接”。")
+            }
+            if value.code == CBError.encryptionTimedOut.rawValue {
                 return ClientError.transient("蓝牙连接暂未完成，正在等待设备重连。")
             }
         }
