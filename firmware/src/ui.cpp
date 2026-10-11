@@ -244,12 +244,13 @@ void drawStatusIcons(int x,int y,uint32_t ms){
   const bool bluetooth=transportMode()==TransportMode::BLE;
   const bool linked=bluetooth?bleConnected():otaConnected();
   const bool joining=bluetooth?bleConnecting():WiFi.status()==WL_IDLE_STATUS;
-  UIStatus::drawIcon(canvas,bluetooth?UIStatus::Icon::Bluetooth:UIStatus::Icon::WiFi,x,y,
+  // Keep the persistent indicators at the right edge: voice, Mac, transport.
+  UIStatus::drawIcon(canvas,bluetooth?UIStatus::Icon::Bluetooth:UIStatus::Icon::WiFi,x+2*UIStatus::SlotPitch,y,
                     linked?C::ok:joining?C::ink:C::offline,!linked&&!joining);
   const bool mac=deviceControlConnected(ms);
   UIStatus::drawIcon(canvas,UIStatus::Icon::Mac,x+UIStatus::SlotPitch,y,mac?C::ok:C::offline,!mac);
   const auto voice=UIStatus::voiceIcon(deviceVoiceStatus(ms));
-  const int vx=x+2*UIStatus::SlotPitch;
+  const int vx=x;
   if(voice==UIStatus::VoiceIcon::Wave)UIStatus::drawIcon(canvas,UIStatus::Icon::Wave,vx,y,C::ok);
   else if(voice==UIStatus::VoiceIcon::Muted)UIStatus::drawIcon(canvas,UIStatus::Icon::Muted,vx,y,C::err);
   else if(voice==UIStatus::VoiceIcon::Warning)UIStatus::drawIcon(canvas,UIStatus::Icon::Warning,vx,y,C::warn);
