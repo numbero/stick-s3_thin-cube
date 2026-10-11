@@ -9,6 +9,8 @@ enum MotionEv { MEV_NONE = 0, MEV_PICKUP, MEV_SHAKE, MEV_FACE_DOWN };
 void     motionBegin();
 MotionEv motionPoll(uint32_t ms);   /* 主循环里每帧调 */
 float    motionStillSec(uint32_t ms);  /* 已持续静止多少秒 */
+bool     motionActivityDetected();    /* 当前 poll 的真实运动，包含缓慢转向 */
+bool     motionActivityHealthy(uint32_t ms);
 bool     motionHomeKnown();
 void     motionPrintHome();         /* 串口打一次 home 向量与最近一次原始三轴 */
 

@@ -4,6 +4,9 @@
 void uiBegin();
 void uiCalibrate();                /* 扫像素标定真实字宽/字高（uiBegin 内已调用） */
 void uiTick(uint32_t ms);          /* 按键 / 电池 / 状态推进 */
+void uiPowerTick(uint32_t ms,bool bootVerified); // after device commands: idle deadlines / display / power-off
+bool uiScreenOff();
+void uiStoriesTick(uint32_t ms); // final admission after device/input/power updates
 void uiDraw(uint32_t ms);          /* 整屏重绘（内部用 sprite，不闪） */
 void uiSetOrientation(uint8_t rotation,uint32_t ms);
 bool uiRotationActive();

@@ -73,12 +73,15 @@ bool recoverPeripheralBus(){
 void setup(){
   const bool busRecovered=recoverPeripheralBus();
   auto cfg = M5.config();
+  // No Grove/IR/EXT_5V load: the pinned M5Unified defaults this boost on.
+  cfg.output_power=false;
   cfg.fallback_board=m5::board_t::board_M5StickS3;
   M5.begin(cfg);
   if(!M5.Display.width()){delay(100);M5.Display.init();}
   Serial.begin(115200);
   delay(200);
   Serial.printf("[boot] peripheral bus recovered %d board %u LCD %dx%d\n",busRecovered,unsigned(M5.getBoard()),M5.Display.width(),M5.Display.height());
+  Serial.printf("[power] ext5v_out %d\n",M5.Power.getExtOutput());
 
   M5.Display.setRotation(0);       // 竖屏 135×240
   M5.Display.setBrightness(128);   // 屏幕常亮太费电，先给 50%
@@ -137,10 +140,10 @@ void loop(){
   if (!validMarked) otaRollbackUnhealthy();
   deviceTick(ms,petState()==PET_SLEEP,provActive()||otaActive());
   uiSetOrientation(deviceDisplayRotation(),ms);
-  static uint8_t appliedBrightness=0;
-  if(petState()!=PET_SLEEP&&appliedBrightness!=deviceBrightness()){appliedBrightness=deviceBrightness();M5.Display.setBrightness(appliedBrightness);}
   char nextSSID[33],nextPass[65];
   if(!otaActive()&&deviceTakeNetwork(nextSSID,nextPass)){deviceStop();audioTick(false);otaStopServer();provBeginWithCredentials(nextSSID,nextPass);memset(nextPass,0,sizeof(nextPass));}
+  uiPowerTick(millis(),validMarked);
+  uiStoriesTick(millis());
 
   /* 心跳：每 5 秒一行，不用接屏幕也能判断固件是否活着、跑在哪个槽 */
   static uint32_t lastBeat = 0;
@@ -169,6 +172,9 @@ void loop(){
                   (unsigned)g.pickups, (unsigned)g.shakes, (unsigned)g.downs);
   }
 
+  // Online standby keeps input/control service responsive, but avoids waking
+  // every millisecond and rendering a screen whose backlight is turned off.
+  if(uiScreenOff()){uiUsbDebug();delay(5);return;}
   static uint32_t last = 0;
   const uint32_t drawMs=millis();
   if (drawMs - last < (uiRotationActive()?20u:33u)) { delay(1); return; }

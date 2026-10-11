@@ -2,6 +2,7 @@
 #include <stdint.h>
 void audioBegin(bool ble=false);
 void audioTick(bool capture);
+bool audioPowerDown(); // main loop only, after capture and sound playback stop
 bool audioReady();
 bool audioDelivered();
 uint32_t audioFrameCount(); // completed 10 ms frames, main-loop diagnostic

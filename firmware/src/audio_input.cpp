@@ -50,6 +50,16 @@ void audioTick(bool capture) {
   }
 }
 bool audioReady() { return running.load()&&!refillFailed.load(); }
+bool audioPowerDown() {
+  if(running.load()||M5.Speaker.isPlaying())return false;
+  // Speaker.end disables the amplifier but leaves the shared ES8311 powered
+  // after the sleep cue. Repeat the pinned Mic driver's shutdown sequence;
+  // Mic/Speaker.begin reinitializes the codec on the next wake/playback.
+  const bool analog=M5.In_I2C.writeRegister8(0x18,0x0D,0xFC,100000);
+  const bool adc=M5.In_I2C.writeRegister8(0x18,0x0E,0x6A,100000);
+  const bool clock=M5.In_I2C.writeRegister8(0x18,0x00,0x00,100000);
+  return analog&&adc&&clock;
+}
 bool audioDelivered() { return delivered; }
 uint32_t audioFrameCount() { return frames; }
 uint32_t audioDropCount() { return dropped.load(); }

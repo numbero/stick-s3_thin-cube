@@ -2,6 +2,7 @@
 #include <M5Unified.h>
 #include <math.h>
 #include "device.h"
+#include "motion_activity.h"
 
 namespace {
 /* 阈值（待真机标定，先给保守值） */
@@ -29,6 +30,8 @@ float    s_dev  = 0;
 bool     s_still = false;
 uint32_t s_reads = 0, s_updates = 0;
 uint32_t s_pickups = 0, s_shakes = 0, s_downs = 0;
+MotionActivity s_activity;
+bool s_activityDetected=false;
 }  // namespace
 
 void motionBegin(){
@@ -46,12 +49,14 @@ void motionPrintHome(){
 }
 
 MotionEv motionPoll(uint32_t ms){
+  s_activityDetected=false;
   s_reads++;
   if (!M5.Imu.update()) return MEV_NONE;
   s_updates++;
   const auto d = M5.Imu.getImuData();
   const float x = d.accel.x, y = d.accel.y, z = d.accel.z;
   const float gyro = sqrtf(d.gyro.x*d.gyro.x+d.gyro.y*d.gyro.y+d.gyro.z*d.gyro.z);
+  s_activityDetected=s_activity.update(x,y,z,gyro,ms);
   deviceMotion(x,y,z,gyro,ms);
   s_lastAcc[0] = x; s_lastAcc[1] = y; s_lastAcc[2] = z;
 
@@ -120,6 +125,8 @@ MotionEv motionPoll(uint32_t ms){
 float motionStillSec(uint32_t ms){
   return (ms - s_moveSeenAt) / 1000.0f;
 }
+bool motionActivityDetected(){return s_activityDetected;}
+bool motionActivityHealthy(uint32_t ms){return s_activity.healthy(ms);}
 MotionDiag motionDiag(){
   MotionDiag g;
   g.imuEnabled = M5.Imu.isEnabled();

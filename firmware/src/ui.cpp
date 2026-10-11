@@ -10,12 +10,14 @@
 #include "audio_input.h"
 #include "sound_effects.h"
 #include "ui_timing.h"
+#include "idle_power.h"
 #include "power_status.h"
 #include "button_gestures.h"
 #include "transport.h"
 #include "connection_hint.h"
 #include "ble_link.h"
 #include "ui_status.h"
+#include "clawd_stories.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <stdarg.h>
@@ -23,6 +25,7 @@
 #include <algorithm>
 
 namespace {
+void goWake(const char* why);
 LGFX_Sprite canvas(&M5.Display);
 LGFX_Sprite rotatedCanvas(&M5.Display);
 RotationTransition rotation;
@@ -34,7 +37,15 @@ Exploration& exploration=games.exploration;
 StarCatch& catchStars=games.catchStars;
 LandscapeButton gameButton;
 bool landscapeVisible=false;
-uint32_t lastInteraction=0;
+IdlePowerPolicy idlePower;
+bool standby=false,screenOff=false,codecOff=false;
+bool wakeAConsumed=false;
+ClawdStory::Policy stories;
+ClawdStory::Id storyDemoRequest=ClawdStory::Id::None;
+uint8_t storyDemoNext=0;
+uint32_t storyDemoRequestedAt=0,storyQuietAt=0,storyPokeAt=0,storyPortraitAt=0;
+bool storyButton=false,storyMotion=false,storyStrongMotion=false,storyPoked=false,storyPortrait=false;
+uint32_t codecAttemptAt=0;
 ButtonGestures gestures;
 char transportHint[48]={};
 uint32_t transportHintUntil=0;
@@ -76,6 +87,7 @@ void prepareCanvas(uint32_t ms){
 
 void present(uint32_t ms){
   const bool wasActive=rotation.active;
+  const uint8_t previousRotation=displayRotation;
   const float angle=rotation.step(ms);
   if(rotation.active && rotatedCanvas.getBuffer()){
     rotatedCanvas.fillSprite(C::screen);
@@ -93,7 +105,10 @@ void present(uint32_t ms){
     }
     canvas.pushSprite(0,0);
   }
-  if(wasActive && !rotation.active)Serial.printf("[rotation] done target %d elapsed %ums frames %u\n",rotation.target,unsigned(millis()-rotation.started),unsigned(rotationFrames));
+  if(wasActive && !rotation.active){
+    if((previousRotation&1)&&rotation.target==0&&!s_debug){storyPortrait=true;storyPortraitAt=ms;}
+    Serial.printf("[rotation] done target %d elapsed %ums frames %u\n",rotation.target,unsigned(millis()-rotation.started),unsigned(rotationFrames));
+  }
 }
 
 /* 逐字符字宽表：设备上 textWidth() 不可信，开机把 95 个可打印字符各画一次、
@@ -254,6 +269,9 @@ const char* connectionCaption(uint32_t ms){
 }
 
 void uiBegin(){
+  idlePower.activity(millis());
+  stories.begin(millis(),esp_random());storyQuietAt=millis();
+  Serial.printf("[idle] sleep %us off %us battery-only\n",unsigned(IdlePowerPolicy::SleepMs/1000),unsigned(IdlePowerPolicy::OffMs/1000));
   canvas.setPsram(false);        /* 内部 RAM：PSRAM 上整屏 DMA 推屏会有缓存一致性抖动 */
   canvas.setColorDepth(16);
   canvasMemory=heap_caps_malloc(FrameBytes,MALLOC_CAP_INTERNAL|MALLOC_CAP_DMA);
@@ -274,7 +292,7 @@ void uiSetOrientation(uint8_t requested,uint32_t ms){
   else if(games.active())return;
   if(critical)requested=requested==2?2:0;
   if(!rotation.request(requested,ms))return;
-  lastInteraction=ms;
+  idlePower.activity(ms);
   rotationFrames=0;
   Serial.printf("[rotation] begin target %u duration %ums\n",requested,unsigned(rotation.duration));
   if(!rotatedCanvas.getBuffer()||critical)rotation.active=false;
@@ -283,6 +301,8 @@ bool uiRotationActive(){return rotation.active;}
 void uiReportTiming(){
   Serial.printf("[render] frames %u mean %uus max %uus rotation_frames %u rotation_max %uus\n",unsigned(frameTiming.count),unsigned(frameTiming.count?frameTiming.totalUs/frameTiming.count:0),unsigned(frameTiming.maxUs),unsigned(frameTiming.rotatingCount),unsigned(frameTiming.rotatingMaxUs));
   frameTiming=FrameTiming{};
+  Serial.printf("[idle] age %us standby %d screen_off %d bright %u codec_off %d\n",unsigned(idlePower.elapsed(millis())/1000),standby,screenOff,unsigned(M5.Display.getBrightness()),codecOff);
+  Serial.printf("[story] active %s demo %d awake %us next %us budget %u\n",ClawdStory::name(stories.current()),stories.isDemo(),unsigned(stories.awakeMs()/1000),unsigned(stories.opportunityAt()/1000),stories.usedBudget());
 }
 
 // Local USB-only idle screenshot, for checking the exact pixels sent to the LCD.
@@ -294,6 +314,15 @@ void uiUsbDebug(){
     if(c!='\n'){if(length<sizeof(command)-1)command[length++]=c;continue;}
     command[length]=0;length=0;
     if(!strcmp(command,"debug")){if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy())s_debug=!s_debug;continue;}
+    const auto requested=!strncmp(command,"story ",6)?ClawdStory::demoCommand(command+6):ClawdStory::Id::None;
+    if(ClawdStory::valid(requested)){
+      if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy()){
+        s_debug=true;idlePower.activity(millis());goWake("story demo");storyDemoRequest=requested;storyDemoRequestedAt=millis();
+        Serial.printf("[story] preview requested %s\n",ClawdStory::name(storyDemoRequest));
+      }else Serial.println("[story] preview unavailable: device busy");
+      continue;
+    }
+    if(!strcmp(command,"story stop")){storyDemoRequest=ClawdStory::Id::None;stories.cancel(esp_random());s_debug=false;continue;}
     if(strcmp(command,"screen"))continue;
     if(otaActive()||devicePairWindow()||transportBusy()||deviceStreaming()||rotation.active||!uiHealthy()){Serial.println("TCFB unavailable: idle stable screen only");continue;}
     // Serial frame export can take longer than the local capture queue. Do not
@@ -393,7 +422,6 @@ void uiPoke(){ petPoke();soundRequest(SoundCue::Poke); }
 
 namespace {
 uint32_t s_stateAt = 0;          /* 当前状态进入时刻，用于状态自然回落 */
-constexpr uint8_t BRIGHT_AWAKE = 128;
 constexpr uint8_t BRIGHT_ASLEEP = 12;
 
 /* 统一的换状态入口：记录时刻 + 串口留痕（调试用） */
@@ -415,8 +443,9 @@ void goSleep(const char* why){
   uiLog("sleep: %s", why);
 }
 void goWake(const char* why){
+  standby=false;
   if (petState() != PET_SLEEP) return;
-  lastInteraction=millis();
+  idlePower.activity(millis());
   M5.Display.setBrightness(deviceBrightness());
   setPet(PET_WAKE, why);
   snprintf(echo, sizeof(echo), "wake");
@@ -445,10 +474,10 @@ void tickOta(){
 }
 }
 
-bool uiButtonAForVoice(){return M5.BtnA.isPressed()&&!gestures.suppressA&&!games.active()&&!gameButton.blocked;}
+bool uiButtonAForVoice(){return M5.BtnA.isPressed()&&!wakeAConsumed&&!gestures.suppressA&&!games.active()&&!gameButton.blocked;}
 bool uiLandscapeActive(){return games.active();}
 
-void uiWakeForVoice(){ goWake("Mac voice start"); }
+void uiWakeForVoice(){ idlePower.activity(millis());goWake("Mac voice start"); }
 
 void uiTick(uint32_t ms){
   if(deviceStreaming())s_debug=false;
@@ -456,6 +485,16 @@ void uiTick(uint32_t ms){
   s_chgShown = powerCharging();
   // Keep sensor acquisition and diagnostics alive while setup/OTA own the UI.
   const MotionEv ev = motionPoll(ms);
+  if(!M5.BtnA.isPressed()&&!M5.BtnA.wasClicked())wakeAConsumed=false;
+  if(petState()==PET_SLEEP&&M5.BtnA.isPressed())wakeAConsumed=true;
+  const bool button=M5.BtnA.isPressed()||M5.BtnB.isPressed()||M5.BtnA.wasClicked()||M5.BtnB.wasClicked()||M5.BtnPWR.wasClicked()||M5.BtnPWR.wasHold();
+  storyButton=button;storyMotion=motionActivityDetected()||ev!=MEV_NONE;
+  storyStrongMotion=ev==MEV_SHAKE||ev==MEV_FACE_DOWN;
+  if(button||motionActivityDetected()){
+    idlePower.activity(ms);
+    standby=false;
+    if(petState()==PET_SLEEP&&(button||devicePose()!=DevicePose::FaceDown))goWake(button?"button":"motion");
+  }
   const bool special=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(special)games.cancel();
 
@@ -472,7 +511,7 @@ void uiTick(uint32_t ms){
     deck&&!uiRotationActive()&&!special&&!debugHeld,gestures.suppressA||devicePairWindow()||transportBusy());
   if(M5.BtnA.isPressed()&&(gestures.suppressA||deviceStreaming()||devicePairWindow()||transportBusy()))debugBlocked=true;
   if(M5.BtnA.isPressed()&&M5.BtnA.pressedFor(1200)&&!debugHeld&&!debugBlocked&&!games.active()&&!gameButton.blocked){
-    debugHeld=true;s_debug=!s_debug;goWake("diagnostics");lastInteraction=ms;
+    debugHeld=true;s_debug=!s_debug;goWake("diagnostics");idlePower.activity(ms);
   }
   if(gesture==ButtonGestures::Action::Mute){deviceToggleMute();uiLog(deviceMuted()?"mic muted":"mic unmuted");}
   if(gesture==ButtonGestures::Action::Pair){deviceOpenPairing();goWake("pairing");uiLog("pair via %s",transportName(transportMode()));}
@@ -492,29 +531,29 @@ void uiTick(uint32_t ms){
     const float tilt=LandscapeTilt::tiltDegrees(input.ax,input.ay,deviceDisplayRotation());
     const bool catching=LandscapeGames::scene(deviceDisplayRotation())==LandscapeGames::Scene::Catch;
     if(gameAction==LandscapeButton::Action::Exit){
-      games.cancel();lastInteraction=ms;uiLog(catching?"catch cancelled":"explore cancelled");
+      games.cancel();idlePower.activity(ms);uiLog(catching?"catch cancelled":"explore cancelled");
     }
-    if(gameAction==LandscapeButton::Action::Enter&&!debugHeld&&!s_debug){
+    if(gameAction==LandscapeButton::Action::Enter&&!wakeAConsumed&&!debugHeld&&!s_debug){
       if(petState()==PET_SLEEP)goWake("game A");
       else if(games.begin(deviceDisplayRotation(),tilt,ms)){
-        lastInteraction=ms;uiLog(catching?"catch start":"explore start");
+        idlePower.activity(ms);uiLog(catching?"catch start":"explore start");
         if(catching)Serial.printf("[catch] begin rot %u base %.1f round %u duration %ums\n",deviceDisplayRotation(),tilt,catchStars.rounds,unsigned(StarCatch::RoundMs));
         else Serial.printf("[explore] begin rot %u base %.1f target %.1f\n",deviceDisplayRotation(),tilt,exploration.targetX());
       }
     }
     const auto event=games.update(deviceDisplayRotation(),tilt,petState()!=PET_SLEEP,ms);
     if(event.explore==Exploration::Event::Locked){
-      lastInteraction=ms;petPoke();soundRequest(SoundCue::Scan);s_stateAt=ms;uiLog("target locked");
+      idlePower.activity(ms);petPoke();soundRequest(SoundCue::Scan);s_stateAt=ms;uiLog("target locked");
     }else if(event.explore==Exploration::Event::Found){
-      lastInteraction=ms;petBlinkNow();soundRequest(SoundCue::Discovery);uiLog("discovery %u",exploration.discoveries);
+      idlePower.activity(ms);petBlinkNow();soundRequest(SoundCue::Discovery);uiLog("discovery %u",exploration.discoveries);
     }
     if(event.catchStars.caught){
-      lastInteraction=ms;petPoke();s_stateAt=ms;soundRequest(SoundCue::Poke);
+      idlePower.activity(ms);petPoke();s_stateAt=ms;soundRequest(SoundCue::Poke);
       Serial.printf("[catch] caught %u combo %u x %.1f\n",catchStars.score,catchStars.combo,catchStars.hitX);
     }
     if(event.catchStars.missed){petBlinkNow();Serial.printf("[catch] missed score %u combo %u\n",catchStars.score,catchStars.combo);}
     if(event.catchStars.finished){
-      lastInteraction=ms;petBlinkNow();soundRequest(SoundCue::Discovery);
+      idlePower.activity(ms);petBlinkNow();soundRequest(SoundCue::Discovery);
       uiLog("catch done %u",catchStars.score);Serial.printf("[catch] finished score %u best %u elapsed %ums\n",catchStars.score,catchStars.bestCombo,unsigned(ms-catchStars.started));
     }
   }
@@ -529,16 +568,21 @@ void uiTick(uint32_t ms){
   } else if (ev == MEV_PICKUP){
     if (petState() == PET_SLEEP) goWake("picked up");
     else if (petState() == PET_IDLE) setPet(PET_CURIOUS, "moved");
-  } else if (ev == MEV_FACE_DOWN && !games.active()){
+  } else if (ev == MEV_FACE_DOWN && !games.active() && !button){
     goSleep("face down");
   }
 
   /* ---- 按键 ---- */
-  if (devicePose()==DevicePose::Inverted && petState()==PET_SLEEP) goWake("inverted");
-  if (M5.BtnA.wasClicked() && !gestures.suppressA && !gameButton.blocked && !debugHeld && !s_debug && !deviceStreaming() && !deck){
-    lastInteraction=ms;
+  // Motion wakes a new inversion above; a stationary inverted device must not
+  // undo automatic standby on every tick when voice input is disabled.
+  if (M5.BtnA.wasClicked() && !wakeAConsumed && !gestures.suppressA && !gameButton.blocked && !debugHeld && !s_debug && !deviceStreaming() && !deck){
+    idlePower.activity(ms);
     if (petState() == PET_SLEEP) goWake("btn.A");
-    else { petPoke();soundRequest(SoundCue::Poke); s_stateAt = ms; snprintf(echo, sizeof(echo), "poke"); uiLog("poke"); }
+    else { petPoke();soundRequest(SoundCue::Poke); s_stateAt = ms; storyPoked=true;storyPokeAt=ms;snprintf(echo, sizeof(echo), "poke"); uiLog("poke"); }
+  }
+  if(s_debug&&M5.BtnA.wasClicked()&&!debugHeld&&!gestures.suppressA&&!deviceStreaming()&&!transportBusy()){
+    storyDemoRequest=ClawdStory::Id(storyDemoNext);storyDemoRequestedAt=ms;
+    storyDemoNext=uint8_t(ClawdStory::demoNext(storyDemoRequest));
   }
 
   /* ---- 状态自然回落 ---- */
@@ -553,8 +597,8 @@ void uiTick(uint32_t ms){
   }
   if (petState() == PET_EXCITED && inState > 2600) setPet(PET_IDLE, "timeout");
 
-  /* ---- 静置自动入睡 ---- */
-  if (!games.active() && petState() != PET_SLEEP && petIdleSleepDue(ms,lastInteraction,motionStillSec(ms),deviceStreaming(),deviceInverted(),devicePairWindow())) goSleep("still 30s");
+  /* ---- Clawd 的视觉睡眠先出现；息屏待机由独立的 5 分钟期限控制 ---- */
+  if (!games.active() && petState() != PET_SLEEP && petIdleSleepDue(ms,idlePower.lastActivity,motionStillSec(ms),deviceStreaming(),deviceInverted(),devicePairWindow())) goSleep("still 30s");
 
   /* BtnA 长按：切到诊断页（IMU 数据与事件计数），再长按回主界面 */
   if (petState()==PET_IDLE && s_chgShown && !deviceStreaming())setPet(PET_CHARGING,"charging");
@@ -563,6 +607,92 @@ void uiTick(uint32_t ms){
   if (deviceLocalSound() && deviceLevel()>.55f && ms-lastSound>3000 && petState()==PET_IDLE){lastSound=ms;setPet(PET_CURIOUS,"sound");}
 
   if (petState() == PET_IDLE && ms - lastBlink > 3200){ petBlinkNow(); lastBlink = ms; }
+}
+
+bool uiScreenOff(){return screenOff;}
+void uiStoriesTick(uint32_t ms){
+  static bool known=false,lastCharging=false,lastConnected=false,lastTakeover=false;
+  static int lastPowerSource=-1;
+  static PetState lastState=PET_IDLE;
+  const bool connected=deviceControlConnected(ms);
+  const int powerSource=powerInputSource(ms);
+  const bool changing=known&&(lastCharging!=s_chgShown||lastState!=petState());
+  const bool connectionChanged=known&&lastConnected!=connected;
+  const bool disconnected=known&&lastConnected&&!connected;
+  const bool busy=provActive()||otaActive()||transportBusy()||devicePairWindow()||games.active()||
+    deviceStreaming()||deviceHeld()||uiRotationActive()||gestures.switchReady||gestures.comboReady||
+    (transportHintUntil&&int32_t(transportHintUntil-ms)>0);
+  const bool takeover=busy||s_debug;
+  if(!known||changing||connectionChanged||storyButton||storyMotion||takeover||lastTakeover!=takeover)storyQuietAt=ms;
+  ClawdStory::Inputs in;
+  const bool portrait=W==135&&displayRotation==0&&rotation.target==0&&!rotation.active;
+  in.awake=petState()!=PET_SLEEP&&!screenOff;
+  in.home=portrait&&!s_debug&&(petState()==PET_IDLE||petState()==PET_CHARGING);
+  in.takeover=takeover;
+  in.motionHealthy=motionActivityHealthy(ms);
+  in.interrupt=storyButton||storyMotion||changing||disconnected;
+  // A diagnostic clip survives charger termination pulses at full battery;
+  // unplugging/changing input or losing trustworthy power data still cancels.
+  in.manualInterrupt=storyButton||storyStrongMotion||disconnected||(known&&lastPowerSource!=powerSource);
+  in.manualSafe=s_debug&&portrait&&in.awake&&uiHealthy()&&!busy&&!deviceInverted()&&in.motionHealthy&&powerSource>=0;
+  in.battery=powerBatteryLevel(ms);in.charging=s_chgShown;
+  in.quietMs=petStateElapsed(ms,storyQuietAt);
+  in.stableMs=uint32_t(std::max(0.f,motionStillSec(ms))*1000);
+  in.sleepRemainingMs=30000-std::min(30000u,idlePower.elapsed(ms));
+  in.preferRepair=storyPoked&&petStateElapsed(ms,storyPokeAt)<90000;
+  in.preferGravity=storyPortrait&&petStateElapsed(ms,storyPortraitAt)<90000;
+  if(!in.awake||takeover){storyPoked=false;storyPortrait=false;}
+  const auto previous=stories.current();const bool wasDemo=stories.isDemo();
+  const auto event=stories.update(ms,in,esp_random());
+  if(event==ClawdStory::Event::Started)Serial.printf("[story] start %s auto\n",ClawdStory::name(stories.current()));
+  else if(event!=ClawdStory::Event::None)Serial.printf("[story] %s %s %s\n",event==ClawdStory::Event::Finished?"finish":"cancel",ClawdStory::name(previous),wasDemo?"demo":"auto");
+  if(ClawdStory::valid(storyDemoRequest)){
+    if(petStateElapsed(ms,storyDemoRequestedAt)>2000||busy||!s_debug){Serial.println("[story] preview rejected");storyDemoRequest=ClawdStory::Id::None;}
+    else if(in.manualSafe&&stories.startDemo(storyDemoRequest,ms,in,esp_random())){
+      Serial.printf("[story] start %s demo\n",ClawdStory::name(storyDemoRequest));storyDemoRequest=ClawdStory::Id::None;
+    }
+  }
+  known=true;lastCharging=s_chgShown;lastConnected=connected;lastState=petState();lastTakeover=takeover;lastPowerSource=powerSource;
+}
+void uiPowerTick(uint32_t ms,bool bootVerified){
+  const bool busy=provActive()||otaActive()||transportBusy()||devicePairWindow()||
+    games.active()||deviceStreaming()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
+  // Broken/stale IMU input cannot be interpreted as prolonged inactivity.
+  const bool blocked=busy||!motionActivityHealthy(ms);
+  const auto action=idlePower.update(ms,blocked,standby,powerAutoOffAllowed(ms));
+  if(blocked)standby=false;
+  if(bootVerified&&!soundPlaying()&&action==IdlePowerPolicy::Action::Sleep){
+    goSleep("idle standby 5m");standby=true;
+    Serial.printf("[idle] standby after %us inactive\n",unsigned(idlePower.elapsed(ms)/1000));
+  }
+  if(bootVerified&&!soundPlaying()&&action==IdlePowerPolicy::Action::PowerOff){
+    // OTA begin shares this admission lock. Recheck after acquiring it so an
+    // upload arriving at the deadline cannot race a physical power cut.
+    std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
+    if(admission.owns_lock()&&!otaActive()&&!provActive()&&!transportBusy()&&powerConfirmAutoOff()){
+      Serial.printf("[idle] power-off after %us inactive\n",unsigned(idlePower.elapsed(ms)/1000));
+      deviceStop();soundCancel();audioTick(false);M5.Speaker.end();
+      M5.Display.setBrightness(0);
+      for(unsigned attempt=0;attempt<3;attempt++){
+        if(M5.Power.M5pm1.powerOff())break;
+        delay(10);
+      }
+      // If I2C/power-off fails or power remains on, stay responsive and grant
+      // a fresh timeout rather than entering deep sleep with no wake source.
+      idlePower.activity(millis());
+      Serial.println("[idle] power-off returned; remaining in standby");
+    }
+  }
+  const bool settled=petState()==PET_SLEEP&&!busy&&petStateElapsed(ms,s_stateAt)>=1200;
+  const bool blank=standby&&settled;
+  const uint8_t brightness=blank?0:petState()==PET_SLEEP&&!busy?BRIGHT_ASLEEP:deviceBrightness();
+  if(M5.Display.getBrightness()!=brightness)M5.Display.setBrightness(brightness);
+  if(blank!=screenOff){screenOff=blank;Serial.printf("[idle] screen %s inactive %us\n",screenOff?"off":"on",unsigned(idlePower.elapsed(ms)/1000));}
+  if(!settled||soundPlaying())codecOff=false;
+  else if(!codecOff&&uint32_t(ms-codecAttemptAt)>=1000){
+    codecAttemptAt=ms;codecOff=audioPowerDown();
+    Serial.printf("[idle] codec power-down %s\n",codecOff?"ok":"retry");
+  }
 }
 
 /* 诊断页：IMU 链路是否通、原始三轴、静止判定、事件计数 */
@@ -588,6 +718,7 @@ void renderDebug(uint32_t ms){
     const int oldest=(logHead-logCount+16)%16;
     snprintf(buf,sizeof(buf),"%.21s",logs[(oldest+i)%16].m);line(buf,i==logCount-1?C::glow:C::dim);
   }
+  snprintf(buf,sizeof(buf),"A:story %u/%u",unsigned(storyDemoNext+1),ClawdStory::Count);pixelText(buf,PAD,H-24,C::ink);
   pixelText("hold A: back",PAD,H-12,C::dim);
   present(ms);
 }
@@ -847,7 +978,7 @@ void uiDraw(uint32_t ms){
     }
     present(ms);return;
   }
-  if (s_debug){ renderDebug(ms); return; }
+  if (s_debug&&!stories.isDemo()){ renderDebug(ms); return; }
   if(W==240){
     if(LandscapeGames::scene(canvasRotation(ms))==LandscapeGames::Scene::Catch)renderStarCatch(ms);
     else renderExploration(ms);
@@ -862,7 +993,10 @@ void uiDraw(uint32_t ms){
   const bool asleep = (petState() == PET_SLEEP);
   pixelText(live?"VOICE":"CLAWD",PAD,27,C::ink,2);
   pixelText(stateName(petState()),PAD,48,asleep?C::dim:petState()==PET_UPSET?C::err:C::dim);
-  petSetScale(1.55f);petDraw(&canvas,77,ms);
+  if(stories.playing()){
+    clawdStoryDraw(canvas,stories.current(),stories.elapsed(ms));
+    if(stories.isDemo()){char label[16];snprintf(label,sizeof(label),"DEMO %u/%u",unsigned(stories.current())+1,ClawdStory::Count);pixelText(label,W-PAD-int(strlen(label))*6,48,C::dim);}
+  }else{petSetScale(1.55f);petDraw(&canvas,77,ms);}
   if(live){
     // The large meter shows microphone level; the small status wave is static.
     const float level=std::max(0.f,std::min(1.f,deviceLevel()));
