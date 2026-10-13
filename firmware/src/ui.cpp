@@ -206,13 +206,16 @@ void drawBattery(int x, int y){
   const bool known = s_lvlShown >= 0;
   const int level = std::max(0, std::min(100, s_lvlShown));
   const int fillW = known ? (innerW * level + 99) / 100 : 0;
-  canvas.drawRoundRect(x, y, bodyW, BATTERY_H, 2, C::ink);
+  const bool low=powerBatteryLow(millis());
+  const uint16_t color=low?C::err:C::ok;
+  canvas.drawRoundRect(x, y, bodyW, BATTERY_H, 2, low?C::err:C::ink);
   canvas.fillRect(x + bodyW + 1, y + 4, 2, 6, C::ink);
-  if(fillW)canvas.fillRect(x + inset, y + inset, fillW, BATTERY_H - inset * 2, C::ok);
+  if(fillW)canvas.fillRect(x + inset, y + inset, fillW, BATTERY_H - inset * 2, color);
 
   // Font0 的 6×8 固定字格可容纳 100%，不依赖主字体的字宽标定。
-  char label[5];
-  if(known)snprintf(label, sizeof(label), "%d%%", level);
+  char label[6];
+  if(low)snprintf(label,sizeof(label),"LOW");
+  else if(known)snprintf(label, sizeof(label), "%d%%", level);
   else snprintf(label, sizeof(label), "--%%");
   const int tx = x + (bodyW - int(strlen(label)) * 6) / 2;
   const int ty = y + (BATTERY_H - 8) / 2;
@@ -287,7 +290,10 @@ void uiBegin(){
   uiCalibrate();
 }
 bool uiHealthy(){return canvas.getBuffer()!=nullptr;}
+uint8_t uiActualBrightness(){return M5.Display.getBrightness();}
+uint32_t uiIdleAgeMs(uint32_t ms){return idlePower.elapsed(ms);}
 void uiSetOrientation(uint8_t requested,uint32_t ms){
+  if(powerCalibrationOwnsUI())requested=0;
   const bool critical=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(critical)games.cancel();
   else if(games.active())return;
@@ -314,6 +320,7 @@ void uiUsbDebug(){
     if(c=='\r')continue;
     if(c!='\n'){if(length<sizeof(command)-1)command[length++]=c;continue;}
     command[length]=0;length=0;
+    if(!strcmp(command,"power")){powerReportConfig();powerReport(millis());continue;}
     if(!strcmp(command,"debug")){if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy())s_debug=!s_debug;continue;}
     const auto requested=!strncmp(command,"story ",6)?ClawdStory::demoCommand(command+6):ClawdStory::Id::None;
     if(ClawdStory::valid(requested)){
@@ -486,6 +493,12 @@ void uiTick(uint32_t ms){
   s_chgShown = powerCharging();
   // Keep sensor acquisition and diagnostics alive while setup/OTA own the UI.
   const MotionEv ev = motionPoll(ms);
+  if(powerCalibrationOwnsUI()){
+    games.cancel();s_debug=false;standby=false;
+    if(powerCalibrationRunning()&&(motionActivityDetected()||M5.BtnA.isPressed()||M5.BtnB.isPressed()))powerCalibrationCancel(7);
+    if(petState()!=PET_IDLE)setPet(PET_IDLE,"battery calibration");
+    return;
+  }
   if(!M5.BtnA.isPressed()&&!M5.BtnA.wasClicked())wakeAConsumed=false;
   if(petState()==PET_SLEEP&&M5.BtnA.isPressed())wakeAConsumed=true;
   const bool button=M5.BtnA.isPressed()||M5.BtnB.isPressed()||M5.BtnA.wasClicked()||M5.BtnB.wasClicked()||M5.BtnPWR.wasClicked()||M5.BtnPWR.wasHold();
@@ -612,6 +625,7 @@ void uiTick(uint32_t ms){
 
 bool uiScreenOff(){return screenOff;}
 void uiStoriesTick(uint32_t ms){
+  if(powerCalibrationOwnsUI())return;
   static bool known=false,lastCharging=false,lastConnected=false,lastTakeover=false;
   static int lastPowerSource=-1;
   static PetState lastState=PET_IDLE;
@@ -656,6 +670,20 @@ void uiStoriesTick(uint32_t ms){
   known=true;lastCharging=s_chgShown;lastConnected=connected;lastState=petState();lastTakeover=takeover;lastPowerSource=powerSource;
 }
 void uiPowerTick(uint32_t ms,bool bootVerified){
+  if(powerCalibrationOwnsUI()){
+    idlePower.activity(ms);standby=false;screenOff=false;
+    M5.Display.setBrightness(powerCalibrationBrightness(ms));
+    if(!codecOff){soundCancel();audioTick(false);codecOff=audioPowerDown();}
+    if(bootVerified&&powerCalibrationShutdownDue(ms)){
+      std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
+      if(admission.owns_lock()&&!otaActive()&&!transportBusy()&&powerConfirmAutoOff()){
+        powerCalibrationShutdownAttempted();deviceStop();soundCancel();M5.Speaker.end();M5.Display.setBrightness(0);
+        Serial.println("[battery-cal] endpoint complete; power-off");
+        for(unsigned attempt=0;attempt<3;++attempt){if(M5.Power.M5pm1.powerOff())break;delay(10);}
+      }
+    }
+    return;
+  }
   const bool busy=provActive()||otaActive()||transportBusy()||devicePairWindow()||
     games.active()||deviceStreaming()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
   // Broken/stale IMU input cannot be interpreted as prolonged inactivity.
@@ -993,7 +1021,7 @@ void uiDraw(uint32_t ms){
   const bool live=deviceStreaming();
   const bool asleep = (petState() == PET_SLEEP);
   pixelText(live?"VOICE":"CLAWD",PAD,27,C::ink,2);
-  pixelText(stateName(petState()),PAD,48,asleep?C::dim:petState()==PET_UPSET?C::err:C::dim);
+  pixelText(powerCalibrationOwnsUI()?powerCalibrationLabel():stateName(petState()),PAD,48,asleep?C::dim:petState()==PET_UPSET?C::err:C::dim);
   if(stories.playing()){
     clawdStoryDraw(canvas,stories.current(),stories.elapsed(ms));
     if(stories.isDemo()){char label[16];snprintf(label,sizeof(label),"DEMO %u/%u",unsigned(stories.current())+1,ClawdStory::Count);pixelText(label,W-PAD-int(strlen(label))*6,48,C::dim);}

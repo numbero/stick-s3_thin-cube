@@ -9,6 +9,7 @@
 #include "ui.h"
 #include "transport.h"
 #include "ble_link.h"
+#include "power_status.h"
 #include "ima_adpcm.h"
 #include <M5Unified.h>
 #include <WiFi.h>
@@ -41,7 +42,7 @@ ControlLease controlLease;
 PoseDetector pose;
 DisplayOrientation displayOrientation;
 WiFiUDP udp;
-char name[24], pin[7], key[33] = {}, published[1600] = "{}";
+char name[24], pin[7], key[33] = {}, published[2048] = "{}";
 bool bleSnapshotDirty=true;
 std::atomic<uint32_t> pairingUntil{0};
 uint32_t lastPairTry = 0, epoch = 0, edgeSeq = 0, seq = 0, clockSample = 0;
@@ -196,6 +197,13 @@ const char* voiceBlock() {
 }
 void publish() {
   cJSON* j=cJSON_CreateObject();
+  // One cached, optional power sample per second. Older clients ignore it.
+  static char powerJSON[640]={};static uint32_t powerAt=0;
+  if(!powerJSON[0]||powerAt!=powerSampleAt()){
+    if(powerFormatJSON(powerJSON,sizeof(powerJSON),millis()))powerAt=powerSampleAt();
+    else powerJSON[0]=0;
+  }
+  if(powerJSON[0])cJSON_AddRawToObject(j,"power",powerJSON);
   cJSON_AddNumberToObject(j,"epoch",epoch);
   cJSON_AddStringToObject(j,"deviceId",name);
   cJSON_AddStringToObject(j,"transport",transportName(transportMode()));
@@ -294,7 +302,7 @@ void bleRequest(const char* text){
       auto id=cJSON_GetObjectItemCaseSensitive(j,"requestId"),t=cJSON_GetObjectItemCaseSensitive(j,"target");
       if(!cJSON_IsString(id)||!id->valuestring[0]||strlen(id->valuestring)>36)valid=false;else strcpy(c.requestId,id->valuestring);
       if(cJSON_IsString(t)&&strlen(t->valuestring)<sizeof(c.target))strcpy(c.target,t->valuestring);
-    }else if(strcmp(operation,"heartbeat")&&strcmp(operation,"start")&&strcmp(operation,"stop")&&strcmp(operation,"sound_preview")&&strcmp(operation,"calibrate_inverted")&&strcmp(operation,"calibrate_upright")&&strcmp(operation,"calibrate_faceup"))valid=false;
+    }else if(strcmp(operation,"heartbeat")&&strcmp(operation,"start")&&strcmp(operation,"stop")&&strcmp(operation,"sound_preview")&&strcmp(operation,"calibrate_inverted")&&strcmp(operation,"calibrate_upright")&&strcmp(operation,"calibrate_faceup")&&strcmp(operation,"battery_cal_arm")&&strcmp(operation,"battery_cal_cancel"))valid=false;
     if(!valid)error="invalid_command";else if(!enqueue(c))error="busy";else cJSON_AddBoolToObject(result,"accepted",true);
   }
   if(error)cJSON_AddStringToObject(result,"error",error);
@@ -385,7 +393,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     if(bleSeenGeneration!=bleGeneration()){bleSeenGeneration=bleGeneration();bleAuthenticated=false;challenge[0]=0;voice.setPeer(false,ms);controlLease.reset();owner=-1;}
     static char message[769];for(int i=0;i<4&&bleTake(message,sizeof(message));i++)bleRequest(message);
   }
-  voice.sleeping=sleeping;voice.busy=busy||networkPending||transportBusy();
+  voice.sleeping=sleeping;voice.busy=busy||networkPending||transportBusy()||powerCalibrationOwnsUI();
   Command c;
   while(xQueueReceive(commands,&c,0)==pdTRUE) {
     if(!strcmp(c.op,"connect")){
@@ -398,17 +406,21 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       if(c.flags&(32|64))soundConfigure(c.flags&64?c.soundVolume:soundVolume(),c.flags&32?c.soundMuted:soundMuted());
       if(!voice.allowed||voice.muted)voice.stop();persist();
     } else if(!strcmp(c.op,"wifi")) {
-      if(busy||transportBusy())continue;voice.stop();strcpy(nextSSID,c.ssid);strcpy(nextPass,c.pass);networkPending=true;
+      if(busy||transportBusy()||powerCalibrationOwnsUI())continue;voice.stop();strcpy(nextSSID,c.ssid);strcpy(nextPass,c.pass);networkPending=true;
     } else if(c.fd==owner&&c.epoch==epoch) {
       if(!strcmp(c.op,"heartbeat")){
         controlLease.heartbeat(ms);
         if(transportMode()==TransportMode::BLE){voice.setPeer(c.ready&&bleAuthenticated&&bleAudioReady(),ms);}
         else if(c.port>=1024&&c.port<=65535){outputPort=c.port;voice.setPeer(c.ready,ms);}
         if(edgeCount&&c.ack==edges[edgeRead].seq){edgeRead=(edgeRead+1)%32;edgeCount--;}
+      } else if(!strcmp(c.op,"battery_cal_arm")){
+        powerCalibrationArm();bleSnapshotDirty=true;
+      } else if(!strcmp(c.op,"battery_cal_cancel")){
+        powerCalibrationCancel();bleSnapshotDirty=true;
       } else if(!strcmp(c.op,"transport_switch")){
         bleSnapshotDirty=true;
         const char* error;
-        if(networkPending)error="busy";
+        if(networkPending||powerCalibrationOwnsUI())error="busy";
         else if(strcmp(c.target,"wifi")&&strcmp(c.target,"ble"))error="invalid_target";
         else error=requestTransportSwitch(!strcmp(c.target,"ble")?TransportMode::BLE:TransportMode::WiFi,"mac",c.requestId);
         snprintf(switchError,sizeof(switchError),"%s",error?error:"");snprintf(rejectedRequest,sizeof(rejectedRequest),"%s",error?c.requestId:"");
@@ -447,6 +459,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   voice.tick(ms);
   // Prepare capture after waking, before consuming the inverted gesture. If
   // Mic startup needs a retry, VoiceState retains only this fresh gesture.
+  if(powerCalibrationOwnsUI()){voice.busy=true;voice.stop();}
   // Reserve audio as soon as an inverted gesture is forming, before pose
   // confirmation. A manual start cancels effects above before starting capture.
   const bool voiceReserved=voice.streaming||voice.pendingGesture||
@@ -496,10 +509,18 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     static unsigned lastFlags=~0u;static uint32_t lastEdge=~0u;
     if(ms-lastBleStatus>=200||flags!=lastFlags||currentEdge!=lastEdge){
     char cookie[33];for(int i=0;i<16;i++)snprintf(cookie+i*2,3,"%02x",nonce[i]);
-    static char live[384];char edgeJSON[64];
+    static char live[1024];char edgeJSON[64],powerField[656]={};
+    static uint32_t lastPowerSent=0,lastPowerEpoch=0;
+    if(lastPowerSent!=powerSampleAt()||lastPowerEpoch!=epoch){
+      char powerJSON[640];
+      if(powerFormatJSON(powerJSON,sizeof(powerJSON),ms)){
+        snprintf(powerField,sizeof(powerField),",\"power\":%s",powerJSON);
+        lastPowerSent=powerSampleAt();lastPowerEpoch=epoch;
+      }
+    }
     if(edgeCount)snprintf(edgeJSON,sizeof(edgeJSON),"{\"seq\":%u,\"down\":%s}",unsigned(edges[edgeRead].seq),edges[edgeRead].down?"true":"false");
     else strcpy(edgeJSON,"null");
-    snprintf(live,sizeof(live),"{\"s\":[%u,%u,\"%s\",%.4f,\"%s\",\"%s\",%u],\"edge\":%s}",unsigned(epoch),flags,cookie,audioLevel(),poseName(pose.stable),voiceBlock(),unsigned(bleAudioDropped()),edgeJSON);
+    snprintf(live,sizeof(live),"{\"s\":[%u,%u,\"%s\",%.4f,\"%s\",\"%s\",%u],\"edge\":%s%s}",unsigned(epoch),flags,cookie,audioLevel(),poseName(pose.stable),voiceBlock(),unsigned(bleAudioDropped()),edgeJSON,powerField);
     bleSendStatus(live);lastBleStatus=ms;lastFlags=flags;lastEdge=currentEdge;
     }
   }

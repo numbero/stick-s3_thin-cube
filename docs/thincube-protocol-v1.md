@@ -83,3 +83,13 @@ v0.3.8 增加 `pose=landscape`，仍为可选字符串字段。横置稳定确�
 v1 Wi-Fi API 和 TCM1 音频保持兼容。新增 BLE GATT、TCB3 IMA ADPCM 音频（上位机兼容早期 TCB2 / TCB1）、transport_switch / transport_commit 和状态字段，详见 [Wi-Fi / BLE 实现](wifi-ble-implementation.md)。运行时 B 3 秒松手改为切换模式；空闲时 A+B 同时按住 3 秒松开两键重新配对。
 
 设备 v0.4.4 / Mac v0.4.3 将两种传输统一为一次屏幕 PIN 应用配对，BLE 自动协商并保存链路加密密钥，无需系统验证码。目标模式启动即 `committed`，不再因宿主机未连接而回退；`transport_commit` 保留为幂等兼容接口。详细流程与验证见 [一次配对与持久模式](pairing-v0.4.4.md)。
+
+## v0.4.15 电源诊断扩展
+
+完整状态新增可选 `power` 对象；BLE 快速状态每次有新电源样本时附带该对象（约 1 秒一次，传音时也发送），其余快速状态沿用同一连接 epoch 的缓存。旧客户端忽略该字段，新客户端仍支持不提供电源信息的旧固件。`level` 始终为麦克风电平，不复用为电量。
+
+`power` 字段：`boot` 为本次启动随机标识；`ms` 为本次采样的 MCU 毫秒数（UInt32，可回绕）；`rawMv/medianMv/filteredMv` 为电池电压；`percent/otaPercent` 为显示/保守 OTA 估计；`source` 为 0 电池、1 外部、-1 未知；`vinMv` 为外部输入电压；`charging/chargeKnown/low` 为布尔值；`cutoffMv` 为启动读取的 PM1 低压保护配置；`failures` 为本次启动电池 I2C 读取失败累计数。无效电压和未知百分比使用 -1；中值、滤波值可以保留此前样本，是否可用于显示由 `percent` 的新鲜度结果决定。低压保护配置仅供诊断，固件不修改它。
+
+Mac 0.4.8 在 `~/Library/Application Support/ThinCube/power.jsonl` 记录新样本和断连事件，按设备/boot/ms 去重并拒绝同一启动内倒序的旧样本。每份最多 2 MiB，保留当前和 `power.previous.jsonl` 两份。日志包含电源值、亮度、无线方式、传音/音效状态；不记录 PCM、密钥、PIN 或会话 cookie。断连不能单独证明低电关机，必须结合断连前的数据分析。USB `power` 命令可读回 PM1 配置并输出当前电源状态，不修改配置或刷新活动计时。
+
+v0.4.16 起另有可选 `chip/model/actualBrightness/idleMs/cal` 字段；`chip` 为12位十六进制设备标识，`model` 为显示换算表标识，亮度字段记录实际背光，`cal` 为标定状态诊断。v0.4.17 正常使用 `model=lipo-ref-an4189` 的通用 LiPo 分段参考表，屏幕直接显示百分比；该版本禁用标定启动入口，正常 `cal.state=0`。这些新增字段不改变 `percent=-1` 表示未知的语义。

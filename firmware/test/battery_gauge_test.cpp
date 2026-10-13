@@ -38,18 +38,18 @@ int main(){
   }
   {
     // Sustained changes must converge, not be permanently rejected as noise.
-    BatteryGauge g;seed(g, 3940);int prev = 80;uint32_t changedAt = 4000;
+    BatteryGauge g;seed(g, 3940);int prev = 80;
     for(unsigned sec = 7; sec < 160; ++sec){
       const uint32_t now = sec * 1000;g.sample(now, 4020);
       const int shown = g.level(now);
-      if(shown != prev){assert(shown == prev + 1 && now - changedAt >= 5000);changedAt = now;}
+      assert(shown >= prev && shown <= 90);
       prev = shown;
     }
     assert(prev >= 89 && prev <= 90);
     for(unsigned sec = 160; sec < 320; ++sec){
       const uint32_t now = sec * 1000;g.sample(now, 3940);
       const int shown = g.level(now);
-      if(shown != prev){assert(shown == prev - 1 && now - changedAt >= 5000);changedAt = now;}
+      assert(shown <= prev && shown >= 80);
       prev = shown;
     }
     assert(prev >= 80 && prev <= 81);
@@ -91,5 +91,69 @@ int main(){
     for(unsigned sec = 7; sec < 70; ++sec)empty.sample(sec * 1000, 3250);
     assert(empty.level(69000) == 0);
   }
-  puts("9 battery noise, outlier, trend, freshness, OTA, low-charge and wrap scenarios passed");
+  {
+    // Regression: the old UI still said 70% 148 seconds after a 37% input.
+    // Test tracking, not SOC accuracy: this voltage curve is not calibrated.
+    for(int targetMv : {3200, 3500, 3600, 3860, 4100}){
+      BatteryGauge g;seed(g, targetMv < 3860 ? 4100 : 3300);
+      for(unsigned sec=7;sec<=37;++sec)g.sample(sec*1000,targetMv);
+      const int error=g.level(37000)-BatteryGauge::voltageLevel(targetMv);
+      assert(error >= -5 && error <= 5);
+    }
+  }
+  {
+    // A confirmed low voltage warns before the display has finished tracking.
+    BatteryGauge g;
+    for(unsigned sec=0;sec<7;++sec)g.sample(sec*1000,3860,0);
+    int previous=70;
+    for(unsigned sec=7;sec<70;++sec){
+      g.sample(sec*1000,3200,0);
+      assert(g.level(sec*1000)<=previous);
+      assert(previous-g.level(sec*1000)<=11); // No 68 -> 9 shortcut.
+      if(sec>=12)assert(g.low(sec*1000));
+      previous=g.level(sec*1000);
+    }
+    assert(g.level(69000)==0);
+    // A rebound spike cannot cancel a confirmed warning.
+    g.sample(70000,4000,0);assert(g.low(70000));
+    for(unsigned sec=71;sec<82;++sec)g.sample(sec*1000,3600,0);
+    assert(!g.low(81000));
+  }
+  {
+    BatteryGauge g;
+    for(unsigned sec=0;sec<7;++sec)g.sample(sec*1000,3860,0);
+    for(unsigned sec=7;sec<10;++sec){g.sample(sec*1000,2500,0);assert(!g.low(sec*1000));}
+    g.sample(10000,3860,0);assert(!g.low(10000));
+    assert(g.level(10000)==70); // Three low outliers are still a minority.
+  }
+  {
+    // New supply needs five new samples; the charging estimate cannot leak.
+    BatteryGauge g;
+    for(unsigned sec=0;sec<7;++sec)g.sample(sec*1000,4100,1);
+    g.sample(7000,3600,-1);assert(g.level(7000)==100); // Unknown isn't unplug.
+    for(unsigned sec=8;sec<12;++sec){
+      g.sample(sec*1000,3600,0);
+      assert(g.level(sec*1000)==-1 && g.otaLevel(sec*1000)==-1);
+    }
+    g.sample(12000,3600,0);assert(g.level(12000)==37);
+    for(unsigned sec=13;sec<18;++sec)g.sample(sec*1000,4000,1);
+    assert(g.level(17000)==87 && !g.low(17000));
+  }
+  {
+    BatteryGauge g;
+    for(unsigned sec=0;sec<9;++sec)g.sample(sec*1000,3300,0);
+    assert(g.low(8000));assert(!g.low(13000));
+    g.sample(14000,3300,0);assert(g.level(14000)==-1 && !g.low(14000));
+    for(unsigned sec=15;sec<21;++sec)g.sample(sec*1000,3300,0);
+    assert(g.low(20000));
+    g.sample(21000,3300,-1);assert(!g.low(21000)); // Unknown supply isn't proven battery power.
+    g.sample(22000,3300,1);assert(g.level(22000)==-1 && !g.low(22000));
+  }
+  {
+    const uint32_t start=0xfffff000u;BatteryGauge g;
+    for(unsigned sec=0;sec<7;++sec)g.sample(start+sec*1000,4100,1);
+    for(unsigned sec=7;sec<14;++sec)g.sample(start+sec*1000,3300,0);
+    assert(g.level(start+13000)==0 && g.low(start+13000));
+  }
+  puts("15 battery filtering, bounded tracking, low warning, supply transition, freshness and OTA scenarios passed");
 }

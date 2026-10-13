@@ -20,3 +20,5 @@ void uiUsbDebug();                 /* USB screenshot: stable idle UI, excludes p
 
 bool uiButtonAForVoice(); // physical combo gestures consume A before voice injection
 bool uiLandscapeActive(); // Either A-started game owns orientation and gestures.
+uint8_t uiActualBrightness();
+uint32_t uiIdleAgeMs(uint32_t ms);

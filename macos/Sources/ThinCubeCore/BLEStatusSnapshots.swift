@@ -35,6 +35,7 @@ public struct BLEStatusSnapshots {
         snapshot["session"] = session; snapshot["level"] = level
         snapshot["pose"] = pose; snapshot["voiceBlock"] = block
         snapshot["bleAudioDropped"] = dropped; snapshot["edge"] = value["edge"]
+        if let power = value["power"] { snapshot["power"] = power }
         baseline = snapshot
         return try? JSONSerialization.data(withJSONObject: snapshot)
     }

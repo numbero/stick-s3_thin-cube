@@ -18,6 +18,7 @@ struct DeviceStatus: Decodable {
     let deviceId: String?, transport: String?, transportSwitch: Bool?, audioRate: Int?, transportAudioReady: Bool?
     let transportTransaction: TransportTransaction?, transportError: String?, rejectedRequest: String?
     let bleMtu: Int?, bleAudioDropped: UInt32?
+    let power: PowerTelemetry?
     struct Calibration: Decodable { let seq: UInt32; let op: String; let ok: Bool }
     let epoch: UInt32, allowed: Bool, muted: Bool, localSound: Bool, streaming: Bool, manual: Bool, held: Bool
     let micReady: Bool, inverted: Bool, calibrated: Bool, faceCalibrated: Bool, bootVerified: Bool
@@ -105,6 +106,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published var audioDiagnostics = "尚未接收音频"
     let keys = KeyInjector()
     let keyDiagnostics = KeyDiagnostics()
+    private let powerDiagnostics = PowerDiagnostics()
     let discovery = Discovery()
     @Published private(set) var shortcutTestRunning = false
     private let testKeys = KeyInjector(targetPID: ProcessInfo.processInfo.processIdentifier)
@@ -221,7 +223,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 "bleMtu": status?.bleMtu ?? 0, "bleAudioDropped": status?.bleAudioDropped ?? 0,
                 "brightness": status?.brightness ?? 0, "calibrated": status?.calibrated ?? false,
                 "faceCalibrated": status?.faceCalibrated ?? false, "keysActive": keys.isActive,
-                "note": note]
+                "power": status?.power?.dictionary ?? [:], "note": note]
     }
     private func makeBase(_ selectedHost: String) throws -> URL {
         let value = selectedHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -595,6 +597,11 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if status == nil || brightness == Double(status!.brightness) { brightness = Double(next.brightness) }
         if status == nil || soundVolume == Double(status?.soundVolume ?? 35) { soundVolume = Double(next.soundVolume ?? 35) }
         status = next
+        if let power = next.power {
+            powerDiagnostics.sample(power, device: name, transport: currentTransport,
+                                    brightness: next.brightness, streaming: next.streaming,
+                                    soundPlaying: next.soundPlaying ?? false)
+        }
         handleTransport(next)
         if let pending = pendingCalibration, let report = next.calibration,
            report.op == pending.op, report.seq != pending.seq {
@@ -904,7 +911,10 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         let authorization = pairingContinuation; pairingContinuation = nil
         authorization?.resume(throwing: CancellationError())
         stopKeyboardTest()
-        if connected { keyDiagnostics.record("连接", "断开：" + message + "；已释放快捷键。") }
+        if connected {
+            keyDiagnostics.record("连接", "断开：" + message + "；已释放快捷键。")
+            powerDiagnostics.disconnected(device: name)
+        }
         soundUpdateTask?.cancel(); soundUpdateTask = nil
         pendingCalibration = nil; calibrationBusy = false
         generation = UUID(); reconnectTask?.cancel(); reconnectTask = nil; reconnecting = false

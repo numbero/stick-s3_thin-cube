@@ -28,11 +28,11 @@ import Foundation
                       let audio = job["audioSeconds"] as? Int, (0...3600).contains(audio),
                       let count = job["switchCount"] as? Int, (0...200).contains(count) else { continue }
                 try? FileManager.default.removeItem(atPath: request)
-                await run(model: model, path: log, seconds: audio, switches: count, accessCheck: job["bleAccessCheck"] as? Bool ?? false, offlineSwitch: job["offlineSwitch"] as? Bool ?? false)
+                await run(model: model, path: log, seconds: audio, switches: count, accessCheck: job["bleAccessCheck"] as? Bool ?? false, offlineSwitch: job["offlineSwitch"] as? Bool ?? false, batteryCalibration: job["batteryCalibration"] as? String ?? "")
             }
         }
     }
-    private static func run(model: DeviceModel, path: String, seconds: Int, switches: Int, accessCheck: Bool, offlineSwitch: Bool) async {
+    private static func run(model: DeviceModel, path: String, seconds: Int, switches: Int, accessCheck: Bool, offlineSwitch: Bool, batteryCalibration: String = "") async {
         guard FileManager.default.createFile(atPath: path, contents: nil),
               let output = FileHandle(forWritingAtPath: path) else { return }
         defer { try? output.close() }
@@ -54,6 +54,18 @@ import Foundation
         }
         record("begin", ["audioSeconds": seconds, "switchCount": switches, "bleAccessCheck": accessCheck])
         guard await wait({ model.connected && !model.connecting && !model.switching }, timeout: 70) else { record("failed", ["reason": "initial_connection"]); return }
+        if !batteryCalibration.isEmpty {
+            guard batteryCalibration == "arm" || batteryCalibration == "cancel", seconds == 0, switches == 0 else {
+                record("failed", ["reason": "invalid_calibration_job"]); return
+            }
+            await model.command(batteryCalibration == "arm" ? "battery_cal_arm" : "battery_cal_cancel")
+            guard await wait({
+                guard let state = model.status?.power?.cal?.state else { return false }
+                return batteryCalibration == "arm" ? (1...2).contains(state) : state == 6
+            }, timeout: 10) else { record("failed", ["reason": "calibration_not_accepted"]); return }
+            record("calibration_\(batteryCalibration)")
+            record("complete"); return
+        }
         if seconds > 0 {
             await model.command("start")
             guard await wait({ model.status?.streaming == true }, timeout: 5) else { record("failed", ["reason": "audio_start"]); return }
