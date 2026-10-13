@@ -17,3 +17,6 @@ bool bleAudioReady();
 uint32_t bleGeneration();
 void bleDisconnect();
 void bleClearAudio();
+void bleSetIdle(bool idle);
+bool blePerformanceReady();
+uint16_t bleConnectionInterval(); // negotiated units of 1.25 ms; 0 unknown

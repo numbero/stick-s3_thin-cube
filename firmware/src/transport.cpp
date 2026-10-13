@@ -4,6 +4,7 @@
 #include "device.h"
 #include "audio_input.h"
 #include "sound_effects.h"
+#include "deep_sleep.h"
 #include <Preferences.h>
 #include <esp_ota_ops.h>
 #include <Arduino.h>
@@ -39,7 +40,7 @@ const char* requestTransportSwitch(TransportMode target,const char* source,const
   if(!id||!id[0]||strlen(id)>36)return "invalid_request";
   if(!strcmp(record.request,id))return record.mode==target&&record.phase!=SwitchPhase::RolledBack?nullptr:"request_conflict";
   if(!storageOK)return "storage_failed";
-  if(provActive()||otaActive()||transportBusy())return "busy";
+  if(provActive()||otaActive()||transportBusy()||deepSleepPending())return "busy";
   if(!transportBootVerified())return "boot_unverified";
   if(target==transportMode())return "already_active";
   // Wi-Fi without saved credentials starts provisioning after reboot.

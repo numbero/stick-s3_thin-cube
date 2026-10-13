@@ -22,3 +22,4 @@ bool uiButtonAForVoice(); // physical combo gestures consume A before voice inje
 bool uiLandscapeActive(); // Either A-started game owns orientation and gestures.
 uint8_t uiActualBrightness();
 uint32_t uiIdleAgeMs(uint32_t ms);
+void uiPowerActivity();

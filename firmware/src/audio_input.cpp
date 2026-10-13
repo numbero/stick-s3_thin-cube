@@ -1,4 +1,5 @@
 #include "audio_input.h"
+#include "power_save.h"
 #include <M5Unified.h>
 #include <math.h>
 #include <string.h>
@@ -34,6 +35,7 @@ void audioBegin(bool ble) {
   M5.Mic.setBufferReleaseCallback(nullptr,captured);
 }
 void audioTick(bool capture) {
+  if(capture)powerSavePerformance();
   if (!capture||refillFailed.load()) {
     const bool wasRunning=running.exchange(false);
     if(wasRunning){M5.Mic.end();if(!capture)retryAt=millis()-1000;} // intentional handoff can restart immediately

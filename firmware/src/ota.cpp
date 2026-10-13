@@ -3,6 +3,7 @@
 #include "transport.h"
 #include "ui.h"
 #include "power_status.h"
+#include "deep_sleep.h"
 #include "wifi_prov.h"
 #include <WiFi.h>
 #include <ESPmDNS.h>
@@ -51,6 +52,7 @@ esp_err_t begin(httpd_req_t* r) {
   std::lock_guard<std::mutex> admission(transportAdmission());
   std::lock_guard<std::mutex> lock(guard);
   if(powerCalibrationOwnsUI()){cJSON_Delete(j);return reply(r,"{\"error\":\"battery_calibration_active\"}","409 Conflict");}
+  if(deepSleepPending()){cJSON_Delete(j);return reply(r,"{\"error\":\"sleep_pending\"}","409 Conflict");}
   if(transportBusy()){cJSON_Delete(j);return reply(r,"{\"error\":\"transport_switch_pending\"}","409 Conflict");}
   if(stage!=OTA_IDLE&&stage!=OTA_FAIL){cJSON_Delete(j);return reply(r,"{\"error\":\"busy\"}","409 Conflict");}
   if(battery<50||millis()-batteryAt>15000){cJSON_Delete(j);return reply(r,"{\"error\":\"battery_must_be_known_and_at_least_50\"}","409 Conflict");}

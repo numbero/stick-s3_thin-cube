@@ -313,7 +313,7 @@ struct MainView: View {
                         HelpParagraph("设备列表", "已发现表示当前扫描或局域网发现的设备；上次选择但暂未发现属于历史记录。系统忽略蓝牙设备后，仍在广播的设备仍可被发现，ThinCube 的应用授权也会保留。")
                         HelpParagraph("Wi-Fi 配网", "首次使用时连接 ThinCube-Setup 热点，按设备屏幕上的密码登录，在 192.168.4.1 配置 Wi-Fi。Mac 与设备需在同一局域网。自动发现不到时，可在 Wi-Fi 模式下通过 IP 连接。")
                         HelpParagraph("设备按键", "短按 B 静音；长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
-                        HelpParagraph("电量与休眠", "红色 LOW 表示电压持续偏低，请及时充电。插拔电源后短暂显示 --% 是重新采样。电池供电下静置十分钟会自动关机，可单击电源键开机。")
+                        HelpParagraph("电量与休眠", "红色 LOW 表示电压持续偏低，请及时充电。插拔电源后短暂显示 --% 是重新采样。默认静置五分钟息屏，电池供电下十分钟关机。开启深睡后，电池供电下五分钟进入深睡，拿起或按机身电源键唤醒后自动重连。")
                     }
                 }
             }
@@ -343,6 +343,13 @@ struct MainView: View {
                 SettingsSliderRow(title: "亮度", value: $model.brightness, range: 8...255, step: 1,
                                   valueLabel: "\(Int(model.brightness))") {
                     Task { await model.apply(["brightness": Int(model.brightness)]) }
+                }
+                Toggle("深睡待机", isOn: Binding(get: { model.deepSleepEnabled }, set: { model.setDeepSleep($0) }))
+                    .disabled(model.deepSleepSettingBusy || model.status?.deepSleepAvailable != true)
+                Text("开启后，使用电池静置五分钟会断开连接并进入深睡；拿起或按机身电源键唤醒后自动重连。USB供电时保持在线。深睡期间A/B键和Mac指令不能唤醒。需要完全关机时，先唤醒并关闭此开关。")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                if model.deviceSleeping {
+                    Label("设备正在深睡，等待拿起或电源键唤醒", systemImage: "moon.zzz.fill")
                 }
             }.disabled(!model.connected || model.updating || model.switching)
             if model.connected && model.currentTransport == "wifi" {

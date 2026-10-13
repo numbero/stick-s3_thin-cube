@@ -19,6 +19,8 @@ public struct PowerTelemetry: Codable, Equatable {
     public let chip, model: String?
     public let actualBrightness: Int?
     public let idleMs: UInt32?
+    public let cpuMHz, bleInterval: Int?
+    public let onlineSaving: Bool?
     public let cal: BatteryCalibrationTelemetry?
 
     public var dictionary: [String: Any] {
@@ -30,6 +32,9 @@ public struct PowerTelemetry: Codable, Equatable {
         if let model { value["model"] = model }
         if let actualBrightness { value["actualBrightness"] = actualBrightness }
         if let idleMs { value["idleMs"] = idleMs }
+        if let cpuMHz { value["cpuMHz"] = cpuMHz }
+        if let bleInterval { value["bleInterval"] = bleInterval }
+        if let onlineSaving { value["onlineSaving"] = onlineSaving }
         if let cal { value["cal"] = cal.dictionary }
         return value
     }

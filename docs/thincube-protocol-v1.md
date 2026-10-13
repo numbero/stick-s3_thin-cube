@@ -1,6 +1,6 @@
 # ThinCube 局域网协议 v1
 
-实现版本：设备 v0.3.10，工作区兼容 Mac v0.3.11。设备 HTTP 端口 80，Bonjour `_thincube._tcp`，名称 `ThinCube-xxxxxx`。除 info 与 PIN 配对外，运行时请求均需 `X-ThinCube-Key`，32 位十六进制随机密钥。单个 Mac 控制连接拥有设备；新的鉴权连接接管并停止旧会话。旧 Mac v0.3.0 存在发送二进制控制帧的缺陷，应使用当前版本。
+实现版本：设备 v0.4.18，工作区兼容 Mac v0.4.11；后续版本的兼容扩展见文末。设备 HTTP 端口 80，Bonjour `_thincube._tcp`，名称 `ThinCube-xxxxxx`。除 info 与 PIN 配对外，运行时请求均需 `X-ThinCube-Key`，32 位十六进制随机密钥。单个 Mac 控制连接拥有设备；新的鉴权连接接管并停止旧会话。旧 Mac v0.3.0 存在发送二进制控制帧的缺陷，应使用当前版本。
 
 ## HTTP
 
@@ -9,7 +9,7 @@
 | GET `/api/info` | name、version、protocol=1、paired |
 | POST `/api/pair` | `{pin:"六位数字"}`；两分钟物理开启窗口、每秒限速、最多十次；成功返回 key/name |
 | GET `/api/status` | 当前发布的状态快照 |
-| POST `/api/settings` | 可选 allowed/muted/localSound 布尔值，brightness 8…255 整数，gain 0.1…4，soundVolume 0…100 整数、soundMuted 布尔值 |
+| POST `/api/settings` | 可选 allowed/muted/localSound/deepSleep 布尔值，brightness 8…255 整数，gain 0.1…4，soundVolume 0…100 整数、soundMuted 布尔值 |
 | POST `/api/wifi` | `{ssid,password}`；SSID 1…32 字节，密码为空或 8…63 字节，进入热点验证新网络 |
 | GET→WebSocket `/control` | 鉴权握手；控制与状态快照 |
 | POST `/ota/begin` | `{ver,size,sha256}`；返回单次 token，设备等待 A 确认 |
@@ -93,3 +93,13 @@ v1 Wi-Fi API 和 TCM1 音频保持兼容。新增 BLE GATT、TCB3 IMA ADPCM 音�
 Mac 0.4.8 在 `~/Library/Application Support/ThinCube/power.jsonl` 记录新样本和断连事件，按设备/boot/ms 去重并拒绝同一启动内倒序的旧样本。每份最多 2 MiB，保留当前和 `power.previous.jsonl` 两份。日志包含电源值、亮度、无线方式、传音/音效状态；不记录 PCM、密钥、PIN 或会话 cookie。断连不能单独证明低电关机，必须结合断连前的数据分析。USB `power` 命令可读回 PM1 配置并输出当前电源状态，不修改配置或刷新活动计时。
 
 v0.4.16 起另有可选 `chip/model/actualBrightness/idleMs/cal` 字段；`chip` 为12位十六进制设备标识，`model` 为显示换算表标识，亮度字段记录实际背光，`cal` 为标定状态诊断。v0.4.17 正常使用 `model=lipo-ref-an4189` 的通用 LiPo 分段参考表，屏幕直接显示百分比；该版本禁用标定启动入口，正常 `cal.state=0`。这些新增字段不改变 `percent=-1` 表示未知的语义。
+
+## v0.4.18 在线省电与可选深睡
+
+HTTP `/api/settings` 与BLE `settings` 增加可选布尔值 `deepSleep`，默认false，保存至设备NVS。完整状态增加可选 `deepSleep`（保存的开关）、`deepSleepAvailable`（启动清理及BMI270检查通过）及 `sleep:{id,phase}`；`phase` 为 `preparing` 或 `awake`，`id` 为当前睡眠尝试的UInt32标识。BLE快速状态携带 `sleep`，Mac仅在同一epoch的完整状态基线中合并。旧固件缺少这些字段时，客户端禁用深睡控件。
+
+设备准备深睡时通过当前控制通道发布 `sleep`。Mac先释放快捷键及音频缓冲，再发送 `{op:"sleep_ack",epoch,sleepId}`；`sleepId` 必须为1…2³²−1的整数，并匹配当前尝试，设备只接受当前控制所有者及epoch的确认。BLE无 `rid` 的确认与心跳一样不附加应用回执。已连接时，设备等待最多2秒；新活动、普通控制命令、失联或供电/忙碌条件变化取消睡眠。原本离线时可在350ms准备窗口后进入，新连接出现后则必须收到确认。等待期间 `/ota/begin` 返回409及 `error=sleep_pending`。
+
+Mac仅将5秒内已确认的当前通知之后的断连显示为深睡待机，并保留正常自动重连；取消、新epoch及重新连接使旧通知失效。USB供电下不进入深睡。主控断电后A/B或Mac指令不能唤醒；运动或机身电源键是配置的唤醒源。实现与实机验证范围见 [v0.4.18记录](power-saving-v0.4.18.md)。
+
+`power` 增加可选 `cpuMHz`（当前CPU频率）、`bleInterval`（实际BLE连接间隔，单位1.25ms；0表示未知/未连接）、`onlineSaving`（主循环的在线闲置省电模式）字段。BLE待机请求60–90ms，语音开始前要求已确认的连接间隔不超过30ms；恢复期间 `voiceBlock=radio`，Mac显示正在恢复语音连接速度。手动开始请求最多保留5秒，过期、停止、失联或禁用/静音时清除，音频采样格式不变。

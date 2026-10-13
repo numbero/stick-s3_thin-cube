@@ -1,5 +1,6 @@
 #include "ble_link.h"
 #include "ble_framing.h"
+#include "power_save_policy.h"
 #include <Arduino.h>
 #include <esp_bt.h>
 #include <esp_bt_main.h>
@@ -41,6 +42,11 @@ BLEControlAssembly rx;
 Message* statusPending=nullptr;
 Message* snapshotPending=nullptr;
 uint32_t audioDropped=0;AudioMessage audioTx{};
+BLEPowerPolicy powerPolicy;
+bool idleRequested=false;
+bool modemSleep=false;
+std::atomic<uint32_t> intervalObservation{0},intervalRevision{0};
+uint32_t observedIntervalRevision=0;
 uint16_t nextMessage=0;uint32_t observedGeneration=0,lastPump=0;
 esp_ble_adv_params_t params={.adv_int_min=0x30,.adv_int_max=0x60,.adv_type=ADV_TYPE_IND,.own_addr_type=BLE_ADDR_TYPE_PUBLIC,
   .channel_map=ADV_CHNL_ALL,.adv_filter_policy=ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY};
@@ -53,6 +59,8 @@ void gap(esp_gap_ble_cb_event_t event,esp_ble_gap_cb_param_t* p){
     // system passkey. ThinCube's PIN authenticates the application separately.
     case ESP_GAP_BLE_SEC_REQ_EVT:esp_ble_gap_security_rsp(p->ble_security.ble_req.bd_addr,true);break;
     case ESP_GAP_BLE_UPDATE_CONN_PARAMS_EVT:
+      intervalObservation.store((uint32_t(p->update_conn_params.status==ESP_BT_STATUS_SUCCESS)<<16)|p->update_conn_params.conn_int);
+      intervalRevision.fetch_add(1);
       Serial.printf("[ble] interval %u x1.25ms latency %u status %u\n",p->update_conn_params.conn_int,p->update_conn_params.latency,p->update_conn_params.status);break;
     case ESP_GAP_BLE_SET_PKT_LENGTH_COMPLETE_EVT:
       Serial.printf("[ble] data length tx %u rx %u status %u\n",p->pkt_data_lenth_cmpl.params.tx_len,p->pkt_data_lenth_cmpl.params.rx_len,p->pkt_data_lenth_cmpl.status);break;
@@ -85,8 +93,8 @@ void gatts(esp_gatts_cb_event_t event,esp_gatt_if_t iface,esp_ble_gatts_cb_param
       memcpy(remote,p->connect.remote_bda,6);connection=p->connect.conn_id;linked=true;secured=false;congested=false;
       controlSubscribed=audioSubscribed=false;mtu=23;generation.fetch_add(1);
       notifyPending=0;
-      esp_ble_conn_update_params_t cp{};memcpy(cp.bda,remote,6);cp.min_int=12;cp.max_int=18;cp.latency=0;cp.timeout=400;
-      esp_ble_gap_update_conn_params(&cp);esp_ble_set_encryption(remote,ESP_BLE_SEC_ENCRYPT);break;
+      intervalObservation=0;intervalRevision.fetch_add(1);
+      esp_ble_set_encryption(remote,ESP_BLE_SEC_ENCRYPT);break;
     }
     case ESP_GATTS_DISCONNECT_EVT:
       Serial.printf("[ble] disconnect reason 0x%02x\n",p->disconnect.reason);
@@ -151,7 +159,21 @@ bool bleBegin(const char* name){
   snapshotPending=static_cast<Message*>(heap_caps_calloc(1,sizeof(Message),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   if(!incoming||!controlOut||!audioOut||!complete||!statusPending||!snapshotPending)return false;
   esp_bt_controller_config_t config=BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-  if(esp_bt_controller_init(&config)!=ESP_OK||esp_bt_controller_enable(ESP_BT_MODE_BLE)!=ESP_OK||esp_bluedroid_init()!=ESP_OK||esp_bluedroid_enable()!=ESP_OK)return false;
+  config.sleep_mode=ESP_BT_SLEEP_MODE_1;config.sleep_clock=ESP_BT_SLEEP_CLOCK_MAIN_XTAL;
+  esp_err_t result=esp_bt_controller_init(&config);
+  if(result==ESP_OK)result=esp_bt_controller_enable(ESP_BT_MODE_BLE);
+  if(result==ESP_OK)result=esp_bt_sleep_enable();
+  modemSleep=result==ESP_OK;
+  if(!modemSleep){
+    Serial.printf("[ble] modem sleep unavailable %d; using normal controller\n",int(result));
+    if(esp_bt_controller_get_status()==ESP_BT_CONTROLLER_STATUS_ENABLED)esp_bt_controller_disable();
+    if(esp_bt_controller_get_status()==ESP_BT_CONTROLLER_STATUS_INITED)esp_bt_controller_deinit();
+    if(esp_bt_controller_get_status()!=ESP_BT_CONTROLLER_STATUS_IDLE)return false;
+    config.sleep_mode=ESP_BT_SLEEP_MODE_NONE;config.sleep_clock=ESP_BT_SLEEP_CLOCK_NONE;
+    if(esp_bt_controller_init(&config)!=ESP_OK||esp_bt_controller_enable(ESP_BT_MODE_BLE)!=ESP_OK)return false;
+  }
+  Serial.printf("[ble] modem sleep %d main XTAL\n",modemSleep);
+  if(esp_bluedroid_init()!=ESP_OK||esp_bluedroid_enable()!=ESP_OK)return false;
   esp_ble_gap_register_callback(gap);esp_ble_gatts_register_callback(gatts);esp_ble_gatt_set_local_mtu(517);
   const auto phyResult=esp_ble_gap_set_prefered_default_phy(ESP_BLE_GAP_PHY_2M_PREF_MASK,ESP_BLE_GAP_PHY_2M_PREF_MASK);
   Serial.printf("[ble] default 2M request result %d\n",int(phyResult));
@@ -174,7 +196,22 @@ bool bleBegin(const char* name){
 }
 void bleTick(uint32_t now){
   if(!incoming||!complete||!controlOut||!audioOut||!statusPending)return;
-  if(observedGeneration!=generation){observedGeneration=generation;rx={};controlTx={};audioTx={};if(statusPending)*statusPending={};if(snapshotPending)*snapshotPending={};xQueueReset(incoming);xQueueReset(complete);xQueueReset(controlOut);xQueueReset(audioOut);}
+  if(observedGeneration!=generation){
+    observedGeneration=generation;rx={};controlTx={};audioTx={};
+    if(statusPending)*statusPending={};if(snapshotPending)*snapshotPending={};
+    xQueueReset(incoming);xQueueReset(complete);xQueueReset(controlOut);xQueueReset(audioOut);
+    powerPolicy.reset();observedIntervalRevision=intervalRevision.load();
+    const uint32_t value=intervalObservation.load();
+    if(value>>16)powerPolicy.observed(value&0xffff,true);
+  }
+  const uint32_t revision=intervalRevision.load();
+  if(revision!=observedIntervalRevision){observedIntervalRevision=revision;const uint32_t value=intervalObservation.load();powerPolicy.observed(value&0xffff,value>>16);}
+  if(bleConnected()&&powerPolicy.requestDue(now,idleRequested)){
+    esp_ble_conn_update_params_t cp{};memcpy(cp.bda,remote,6);
+    cp.min_int=powerPolicy.idle?BLEPowerPolicy::IdleMin:BLEPowerPolicy::FastMin;
+    cp.max_int=powerPolicy.idle?BLEPowerPolicy::IdleMax:BLEPowerPolicy::FastMax;cp.latency=0;cp.timeout=400;
+    powerPolicy.requested(now,esp_ble_gap_update_conn_params(&cp)==ESP_OK);
+  }
   Fragment f;
   for(int i=0;i<8&&xQueueReceive(incoming,&f,0)==pdTRUE;i++){
     if(rx.accept(f.data,f.length,now)){
@@ -209,6 +246,9 @@ bool bleAudioReady(){return bleConnected()&&audioSubscribed&&mtu>=185;}
 uint32_t bleGeneration(){return generation;}
 void bleClearAudio(){if(audioOut)xQueueReset(audioOut);audioTx={};}
 void bleDisconnect(){if(linked)esp_ble_gap_disconnect(remote);}
+void bleSetIdle(bool idle){idleRequested=idle;}
+bool blePerformanceReady(){return powerPolicy.audioReady();}
+uint16_t bleConnectionInterval(){return powerPolicy.actual;}
 
 void bleSendStatus(const char* text){
   if(!bleConnected()||!controlSubscribed||!statusPending)return;

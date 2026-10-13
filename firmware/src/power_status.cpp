@@ -8,6 +8,8 @@
 #include "transport.h"
 #include "ui.h"
 #include "sound_effects.h"
+#include "power_save.h"
+#include "ble_link.h"
 #include <M5Unified.h>
 #include <esp_system.h>
 #include <atomic>
@@ -77,11 +79,12 @@ uint32_t powerSampleAt(){return sampleAt;}
 bool powerFormatJSON(char* out,size_t capacity,uint32_t ms){
   const bool chargeKnown=chargeRead&&uint32_t(ms-chargeAt)<BatteryGauge::StaleMs;
   const int size=snprintf(out,capacity,
-    "{\"boot\":%u,\"ms\":%u,\"rawMv\":%d,\"medianMv\":%d,\"filteredMv\":%d,\"percent\":%d,\"otaPercent\":%d,\"source\":%d,\"vinMv\":%d,\"charging\":%s,\"chargeKnown\":%s,\"low\":%s,\"cutoffMv\":%d,\"failures\":%u,\"chip\":\"%012llx\",\"model\":\"%s\",\"actualBrightness\":%u,\"idleMs\":%u,\"cal\":{\"run\":%u,\"state\":%d,\"elapsed\":%u,\"phase\":%d,\"phaseMs\":%u,\"stableMs\":%u,\"reason\":%d}}",
+    "{\"boot\":%u,\"ms\":%u,\"rawMv\":%d,\"medianMv\":%d,\"filteredMv\":%d,\"percent\":%d,\"otaPercent\":%d,\"source\":%d,\"vinMv\":%d,\"charging\":%s,\"chargeKnown\":%s,\"low\":%s,\"cutoffMv\":%d,\"failures\":%u,\"chip\":\"%012llx\",\"model\":\"%s\",\"actualBrightness\":%u,\"idleMs\":%u,\"cpuMHz\":%u,\"bleInterval\":%u,\"onlineSaving\":%s,\"cal\":{\"run\":%u,\"state\":%d,\"elapsed\":%u,\"phase\":%d,\"phaseMs\":%u,\"stableMs\":%u,\"reason\":%d}}",
     unsigned(bootId),unsigned(sampleAt),gauge.rawMillivolts(),gauge.medianMillivolts(),gauge.filteredMillivolts(),
     gauge.level(ms),gauge.otaLevel(ms),powerInputSource(ms),vbusMv,
     chargeKnown&&charging?"true":"false",chargeKnown?"true":"false",gauge.low(ms)?"true":"false",cutoffMv,unsigned(failures),
     (unsigned long long)ESP.getEfuseMac(),curveModel,unsigned(uiActualBrightness()),unsigned(uiIdleAgeMs(ms)),
+    unsigned(getCpuFrequencyMhz()),unsigned(bleConnectionInterval()),powerSaveActive()?"true":"false",
     unsigned(calibration.id()),int(calibration.state()),unsigned(calibration.elapsed(ms)),calibration.phase(ms),
     unsigned(calibration.phaseAge(ms)),unsigned(calibration.chargeStable(ms)),int(calibration.reason()));
   return size>=0&&size_t(size)<capacity;

@@ -19,6 +19,8 @@ struct DeviceStatus: Decodable {
     let transportTransaction: TransportTransaction?, transportError: String?, rejectedRequest: String?
     let bleMtu: Int?, bleAudioDropped: UInt32?
     let power: PowerTelemetry?
+    let deepSleep, deepSleepAvailable: Bool?
+    let sleep: DeviceSleepNotice?
     struct Calibration: Decodable { let seq: UInt32; let op: String; let ok: Bool }
     let epoch: UInt32, allowed: Bool, muted: Bool, localSound: Bool, streaming: Bool, manual: Bool, held: Bool
     let micReady: Bool, inverted: Bool, calibrated: Bool, faceCalibrated: Bool, bootVerified: Bool
@@ -47,6 +49,7 @@ struct DeviceStatus: Decodable {
         case "calibration": return "请先完成竖向倒立校准"
         case "sleeping": return "Clawd 正在休息"
         case "microphone": return "麦克风正在准备"
+        case "radio": return "正在恢复语音连接速度"
         case "rearm": return "请屏幕朝上平放，再倒立以开始传音；也可手动开始"
         case "invert": return "待命：竖向倒立并稍作停稳即可传音"
         default: return "待命"
@@ -77,6 +80,12 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published var connected = false
     @Published var connecting = false
     @Published private(set) var reconnecting = false
+    @Published private(set) var deviceSleeping = false
+    @Published private(set) var deepSleepSettingBusy = false
+    @Published private(set) var deepSleepEnabled = false
+    private var sleepTracker = DeviceSleepTracker()
+    private var sleepAckInFlight = false
+    private var deepSleepSettingTask: Task<Void, Never>?
     @Published var audioPrepared = false
     @Published private(set) var switching = false
     @Published private(set) var transportPhase = ""
@@ -223,7 +232,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 "bleMtu": status?.bleMtu ?? 0, "bleAudioDropped": status?.bleAudioDropped ?? 0,
                 "brightness": status?.brightness ?? 0, "calibrated": status?.calibrated ?? false,
                 "faceCalibrated": status?.faceCalibrated ?? false, "keysActive": keys.isActive,
-                "power": status?.power?.dictionary ?? [:], "note": note]
+                "power": status?.power?.dictionary ?? [:], "deepSleep": deepSleepEnabled,
+                "deepSleepAvailable": status?.deepSleepAvailable ?? false, "deviceSleeping": deviceSleeping, "note": note]
     }
     private func makeBase(_ selectedHost: String) throws -> URL {
         let value = selectedHost.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -272,6 +282,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     func selectDevice(_ id: String) {
         guard !connected, !connecting, !switching, !updating else { return }
         target = ConnectionTarget(host: "", deviceID: id.isEmpty ? nil : id)
+        sleepTracker.reset(); deviceSleeping = false; deepSleepEnabled = false
         host = ""; pin = ""; transportPhase = ""
         refreshRecoveryAddress()
     }
@@ -586,6 +597,26 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         if let id = next.deviceId, id != name { return false }
         lastStatus = Date()
+        sleepTracker.observe(next.sleep, epoch: next.epoch, now: ProcessInfo.processInfo.systemUptime)
+        deviceSleeping = false
+        if next.sleep?.phase == "preparing" {
+            keys.release(); buffer.setSession(nil)
+            if !sleepAckInFlight, !updating, !switching, !next.streaming, !next.held,
+               next.deepSleep == true, next.deepSleepAvailable == true,
+               let sleepID = sleepTracker.acknowledgementNeeded {
+                sleepAckInFlight = true
+                let connectionID = generation, sleepEpoch = next.epoch
+                Task { [weak self] in
+                    guard let self else { return }
+                    defer { if self.generation == connectionID { self.sleepAckInFlight = false } }
+                    do {
+                        try await self.sendControl(["op": "sleep_ack", "epoch": sleepEpoch, "sleepId": sleepID])
+                        guard self.generation == connectionID else { return }
+                        self.sleepTracker.didAcknowledge(id: sleepID, epoch: sleepEpoch, now: ProcessInfo.processInfo.systemUptime)
+                    } catch { /* The device cancels when the sleep acknowledgement is missing. */ }
+                }
+            }
+        }
         let blocked = shortcutBlock(next)
         let keyUpdate = keyStream.receive(session: next.epoch, edge: next.edge, canInject: blocked == nil)
         if keyUpdate.sessionChanged {
@@ -597,6 +628,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if status == nil || brightness == Double(status!.brightness) { brightness = Double(next.brightness) }
         if status == nil || soundVolume == Double(status?.soundVolume ?? 35) { soundVolume = Double(next.soundVolume ?? 35) }
         status = next
+        deepSleepEnabled = next.deepSleep ?? false
         if let power = next.power {
             powerDiagnostics.sample(power, device: name, transport: currentTransport,
                                     brightness: next.brightness, streaming: next.streaming,
@@ -623,6 +655,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         return true
     }
     private func shortcutBlock(_ status: DeviceStatus) -> String? {
+        if status.sleep?.phase == "preparing" { return "设备正在进入深睡" }
         if !connected || connecting { return "控制连接尚未确认" }
         if updating { return "固件升级中" }
         if switching { return "连接模式切换中" }
@@ -735,6 +768,25 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if settings["muted"] as? Bool == true || settings["allowed"] as? Bool == false { stopLocally = true; keys.release(); buffer.setSession(nil) }
         do { _ = try await json("api/settings", body: settings) } catch { note = error.localizedDescription }
     }
+    func setDeepSleep(_ enabled: Bool) {
+        guard connected, !updating, !switching, status?.deepSleepAvailable == true else { return }
+        deepSleepSettingTask?.cancel(); deepSleepSettingBusy = true
+        let connectionID = generation
+        deepSleepSettingTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.generation == connectionID { self.deepSleepSettingBusy = false } }
+            await self.apply(["deepSleep": enabled])
+            let deadline = Date().addingTimeInterval(3)
+            while !Task.isCancelled, self.generation == connectionID, Date() < deadline {
+                if self.status?.deepSleep == enabled {
+                    self.note = enabled ? "深睡待机已开启；使用电池静置五分钟后进入，拿起或按机身电源键唤醒。" : "深睡待机已关闭；恢复五分钟息屏、十分钟电池关机。"
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if !Task.isCancelled, self.generation == connectionID { self.note = "设备未确认深睡设置，请稍后重试。" }
+        }
+    }
     private func prepareAudioNow() throws {
         try bridge.start()
         do { if !activeBLE { try receiver.start(buffer: buffer) }; audioPrepared = true }
@@ -817,6 +869,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         } catch { keys.release(); buffer.setSession(nil); note = error.localizedDescription }
     }
     func disconnect(note message: String = "已断开") {
+        sleepTracker.reset(); deviceSleeping = false
         recovery.disconnect(); switching = false; transportIntent = nil; modeBeforeSwitch = nil; transportPhase = ""; UserDefaults.standard.set(false, forKey: "autoReconnect")
         teardown(note: message)
     }
@@ -825,7 +878,9 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         teardown(note: "")
     }
     private func connectionLost(note message: String) {
-        teardown(note: message)
+        let asleep = sleepTracker.didDisconnect(now: ProcessInfo.processInfo.systemUptime)
+        deviceSleeping = asleep
+        teardown(note: asleep ? "设备正在深睡，拿起或按机身电源键唤醒后将自动连接。" : message)
         scheduleRecovery()
     }
     private func connectionFailed(_ error: Error) {
@@ -837,7 +892,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         default: permanent = false
         }
         if permanent && !switching { recovery.requireUserAction(); cachedCredential = nil }
-        if !switching && !permanent && connectionMode == .automatic { preferredTransport = preferredTransport == "ble" ? "wifi" : "ble" }
+        if permanent { sleepTracker.reset(); deviceSleeping = false }
+        if !switching && !permanent && !sleepTracker.sleeping && connectionMode == .automatic { preferredTransport = preferredTransport == "ble" ? "wifi" : "ble" }
         connectionLost(note: error.localizedDescription + (permanent ? " 请处理后点击“连接”重试。" : ""))
     }
     private func suspendRecovery(_ reason: ConnectionRecovery.Suspension, note message: String) {
@@ -897,7 +953,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         discovery.refresh(id: target.deviceID)
         let delay = immediate ? 0 : (recovery.nextDelay() ?? 30)
         reconnecting = true
-        if delay > 0 { note += " \(Int(delay)) 秒后自动重试。" }
+        if sleepTracker.sleeping { note = "设备正在深睡，拿起或按机身电源键唤醒后将自动连接。" }
+        else if delay > 0 { note += " \(Int(delay)) 秒后自动重试。" }
         let id = generation
         reconnectTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
@@ -907,6 +964,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
     }
     private func teardown(note message: String) {
+        deepSleepSettingTask?.cancel(); deepSleepSettingTask = nil; deepSleepSettingBusy = false
+        sleepAckInFlight = false
         pairingSession = nil; pairingError = ""; pin = ""; connectionProgress.reset()
         let authorization = pairingContinuation; pairingContinuation = nil
         authorization?.resume(throwing: CancellationError())

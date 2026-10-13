@@ -1,5 +1,6 @@
 #include "sound_effects.h"
 #include "audio_input.h"
+#include "power_save.h"
 #include <M5Unified.h>
 #include <math.h>
 
@@ -49,6 +50,7 @@ void soundTick(uint32_t ms,bool reserved){
   }
   const auto cue=policy.take(ms,reserved);
   if(cue==SoundCue::None)return;
+  powerSavePerformance();
   audioTick(false); // Stop/join the Mic callback before touching the shared codec.
   const unsigned length=synth(cue);
   M5.Speaker.setVolume(policy.speakerVolume());

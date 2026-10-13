@@ -14,6 +14,9 @@
 #include "power_status.h"
 #include "transport.h"
 #include "ble_link.h"
+#include "power_save.h"
+#include "power_save_policy.h"
+#include "deep_sleep.h"
 #include <esp_heap_caps.h>
 
 #ifndef CLAWD_FW_VER
@@ -93,6 +96,7 @@ void setup(){
   Serial.printf("imu       : %s\n", M5.Imu.isEnabled() ? "enabled" : "NOT AVAILABLE");
 
   reportBootInfo();
+  deepSleepBegin();
 
   uiBegin();
   transportBegin();
@@ -177,7 +181,7 @@ void loop(){
   if(uiScreenOff()){uiUsbDebug();delay(5);return;}
   static uint32_t last = 0;
   const uint32_t drawMs=millis();
-  if (drawMs - last < (uiRotationActive()?20u:33u)) { delay(1); return; }
+  if (drawMs - last < (uiRotationActive()?20u:powerSaveActive()?IdleWorkProfile::IdleDrawMs:33u)) { delay(1); return; }
   last = drawMs;
   uiDraw(drawMs);
   uiUsbDebug();

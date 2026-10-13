@@ -1,4 +1,6 @@
 #include "ui.h"
+#include "power_save.h"
+#include "deep_sleep.h"
 #include "theme.h"
 #include "pet.h"
 #include "motion.h"
@@ -292,6 +294,7 @@ void uiBegin(){
 bool uiHealthy(){return canvas.getBuffer()!=nullptr;}
 uint8_t uiActualBrightness(){return M5.Display.getBrightness();}
 uint32_t uiIdleAgeMs(uint32_t ms){return idlePower.elapsed(ms);}
+void uiPowerActivity(){idlePower.activity(millis());}
 void uiSetOrientation(uint8_t requested,uint32_t ms){
   if(powerCalibrationOwnsUI())requested=0;
   const bool critical=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
@@ -451,6 +454,7 @@ void goSleep(const char* why){
   uiLog("sleep: %s", why);
 }
 void goWake(const char* why){
+  powerSavePerformance();
   standby=false;
   if (petState() != PET_SLEEP) return;
   idlePower.activity(millis());
@@ -505,6 +509,7 @@ void uiTick(uint32_t ms){
   storyButton=button;storyMotion=motionActivityDetected()||ev!=MEV_NONE;
   storyStrongMotion=ev==MEV_SHAKE||ev==MEV_FACE_DOWN;
   if(button||motionActivityDetected()){
+    deepSleepCancel();
     idlePower.activity(ms);
     standby=false;
     if(petState()==PET_SLEEP&&(button||devicePose()!=DevicePose::FaceDown))goWake(button?"button":"motion");
@@ -671,6 +676,7 @@ void uiStoriesTick(uint32_t ms){
 }
 void uiPowerTick(uint32_t ms,bool bootVerified){
   if(powerCalibrationOwnsUI()){
+    powerSavePerformance();
     idlePower.activity(ms);standby=false;screenOff=false;
     M5.Display.setBrightness(powerCalibrationBrightness(ms));
     if(!codecOff){soundCancel();audioTick(false);codecOff=audioPowerDown();}
@@ -690,6 +696,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
   const bool blocked=busy||!motionActivityHealthy(ms);
   const auto action=idlePower.update(ms,blocked,standby,powerAutoOffAllowed(ms));
   if(blocked)standby=false;
+  if(deepSleepTick(ms,bootVerified&&!blocked&&!soundPlaying(),deviceControlConnected(ms)))return;
   if(bootVerified&&!soundPlaying()&&action==IdlePowerPolicy::Action::Sleep){
     goSleep("idle standby 5m");standby=true;
     Serial.printf("[idle] standby after %us inactive\n",unsigned(idlePower.elapsed(ms)/1000));
@@ -698,7 +705,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     // OTA begin shares this admission lock. Recheck after acquiring it so an
     // upload arriving at the deadline cannot race a physical power cut.
     std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
-    if(admission.owns_lock()&&!otaActive()&&!provActive()&&!transportBusy()&&powerConfirmAutoOff()){
+    if(admission.owns_lock()&&!otaActive()&&!provActive()&&!transportBusy()&&powerConfirmAutoOff()&&deepSleepDisarm()){
       Serial.printf("[idle] power-off after %us inactive\n",unsigned(idlePower.elapsed(ms)/1000));
       deviceStop();soundCancel();audioTick(false);M5.Speaker.end();
       M5.Display.setBrightness(0);
@@ -722,6 +729,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     codecAttemptAt=ms;codecOff=audioPowerDown();
     Serial.printf("[idle] codec power-down %s\n",codecOff?"ok":"retry");
   }
+  powerSaveTick(bootVerified&&settled&&!soundPlaying());
 }
 
 /* 诊断页：IMU 链路是否通、原始三轴、静止判定、事件计数 */

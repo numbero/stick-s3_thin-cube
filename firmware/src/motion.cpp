@@ -1,4 +1,6 @@
 #include "motion.h"
+#include "power_save.h"
+#include "power_save_policy.h"
 #include <M5Unified.h>
 #include <math.h>
 #include "device.h"
@@ -50,6 +52,9 @@ void motionPrintHome(){
 
 MotionEv motionPoll(uint32_t ms){
   s_activityDetected=false;
+  static uint32_t lastPoll=0;
+  if(powerSaveActive()&&uint32_t(ms-lastPoll)<IdleWorkProfile::IdleMotionMs)return MEV_NONE;
+  lastPoll=ms;
   s_reads++;
   if (!M5.Imu.update()) return MEV_NONE;
   s_updates++;
