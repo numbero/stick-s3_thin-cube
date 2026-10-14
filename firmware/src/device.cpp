@@ -400,6 +400,7 @@ const char* deviceVoiceBlock(){return voiceBlock();}
 float deviceLevel(){return voice.muted||soundSuppressListening(millis())?0:audioLevel();}
 uint8_t deviceBrightness(){return brightness;}
 DevicePose devicePose(){return pose.stable;}
+DevicePose devicePoseCandidate(){return pose.candidate;}
 void deviceMotion(float x,float y,float z,float gyro,uint32_t ms){
   pose.update(x,y,z,gyro,ms);
   const uint8_t previous=displayOrientation.rotation;

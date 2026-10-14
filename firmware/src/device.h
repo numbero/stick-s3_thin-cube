@@ -28,6 +28,7 @@ void deviceOpenPairing();
 void deviceToggleMute();
 void deviceMotion(float x, float y, float z, float gyro, uint32_t ms);
 DevicePose devicePose();
+DevicePose devicePoseCandidate();
 bool deviceTakeNetwork(char* ssid, char* pass);
 bool deviceDeepSleepEnabled();
 bool deviceSaveForSleep();

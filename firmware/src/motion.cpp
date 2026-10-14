@@ -10,8 +10,6 @@ namespace {
 /* 阈值（待真机标定，先给保守值） */
 constexpr float STILL_DEV   = 0.10f;   /* 偏离 1g 小于此值算静止 */
 constexpr float HOME_LATCH  = 1.20f;   /* 持续静止这么久才认「家」的朝向（秒） */
-constexpr float DOWN_DOT    = -0.85f;  /* 朝向与 home 的点积小于此值 = 反扣 */
-constexpr float DOWN_HOLD   = 1.50f;   /* 反扣保持这么久才判睡（秒） */
 constexpr uint32_t SHAKE_WIN_MS = 800;
 constexpr int      SHAKE_FLIPS  = 4;
 constexpr uint32_t PICKUP_GAP_MS = 2000;
@@ -20,7 +18,7 @@ float    s_home[3] = {0, 0, -1};
 bool     s_homeSet = false;
 uint32_t s_stillSince = 0;
 uint32_t s_moveSeenAt = 0;
-uint32_t s_downSince  = 0;
+bool     s_wasFaceDown = false;
 uint32_t s_flipWin    = 0;
 int      s_flips      = 0;
 float    s_lastSign   = 0;
@@ -63,6 +61,11 @@ MotionEv motionPoll(uint32_t ms){
   const float gyro = sqrtf(d.gyro.x*d.gyro.x+d.gyro.y*d.gyro.y+d.gyro.z*d.gyro.z);
   s_activityDetected=s_activity.update(x,y,z,gyro,ms);
   deviceMotion(x,y,z,gyro,ms);
+  // PoseDetector already holds face-down for 1.5s. Record only its entry,
+  // without a second dwell or repeated events while lying on the desk.
+  const bool faceDown=devicePose()==DevicePose::FaceDown&&devicePoseCandidate()==DevicePose::FaceDown;
+  const bool enteredFaceDown=faceDown&&!s_wasFaceDown;
+  s_wasFaceDown=faceDown;
   s_lastAcc[0] = x; s_lastAcc[1] = y; s_lastAcc[2] = z;
 
   const float mag = sqrtf(x * x + y * y + z * z);
@@ -112,17 +115,7 @@ MotionEv motionPoll(uint32_t ms){
     return MEV_PICKUP;
   }
 
-  /* 屏幕朝下与屏幕平面内上下倒置分别判定，home 仅保留诊断用途。 */
-  if (still){
-    if (devicePose() == DevicePose::FaceDown){
-      if (s_downSince == 0) s_downSince = ms;
-      if (ms - s_downSince > DOWN_HOLD * 1000){
-        s_downSince = ms;
-        s_downs++;
-        return MEV_FACE_DOWN;
-      }
-    } else s_downSince = 0;
-  } else s_downSince = 0;
+  if(enteredFaceDown){s_downs++;return MEV_FACE_DOWN;}
 
   return MEV_NONE;
 }

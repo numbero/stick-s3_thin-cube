@@ -14,7 +14,7 @@ inline const char* poseName(DevicePose pose) {
   }
 }
 struct PoseDetector {
-  static constexpr uint32_t VerticalHoldMs = 220, FaceUpHoldMs = 160;
+  static constexpr uint32_t VerticalHoldMs = 220, FaceUpHoldMs = 160, FaceDownHoldMs = 1500;
   int uprightSign = 0, faceUpSign = 0;
   DevicePose stable = DevicePose::Other, candidate = DevicePose::Other;
   uint32_t since = 0;
@@ -60,7 +60,7 @@ public:
          fabsf(y)/n < .55f && fabsf(z)/n < .5f) p=DevicePose::Landscape;
     }
     if (p != candidate) { candidate = p; since = now; }
-    const uint32_t dwell = p == DevicePose::FaceDown ? 1500 : (p == DevicePose::FaceUp || p==DevicePose::Landscape) ? FaceUpHoldMs : p == DevicePose::Other ? 100 : VerticalHoldMs;
+    const uint32_t dwell = p == DevicePose::FaceDown ? FaceDownHoldMs : (p == DevicePose::FaceUp || p==DevicePose::Landscape) ? FaceUpHoldMs : p == DevicePose::Other ? 100 : VerticalHoldMs;
     if (uint32_t(now-since) >= dwell) stable = p;
     return stable;
   }

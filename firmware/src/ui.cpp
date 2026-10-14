@@ -13,6 +13,7 @@
 #include "sound_effects.h"
 #include "ui_timing.h"
 #include "idle_power.h"
+#include "face_down_rest.h"
 #include "power_status.h"
 #include "button_gestures.h"
 #include "transport.h"
@@ -40,6 +41,7 @@ StarCatch& catchStars=games.catchStars;
 LandscapeButton gameButton;
 bool landscapeVisible=false;
 IdlePowerPolicy idlePower;
+FaceDownRestPolicy faceDownRest;
 bool standby=false,screenOff=false,codecOff=false;
 bool wakeAConsumed=false;
 ClawdStory::Policy stories;
@@ -311,7 +313,7 @@ bool uiRotationActive(){return rotation.active;}
 void uiReportTiming(){
   Serial.printf("[render] frames %u mean %uus max %uus rotation_frames %u rotation_max %uus\n",unsigned(frameTiming.count),unsigned(frameTiming.count?frameTiming.totalUs/frameTiming.count:0),unsigned(frameTiming.maxUs),unsigned(frameTiming.rotatingCount),unsigned(frameTiming.rotatingMaxUs));
   frameTiming=FrameTiming{};
-  Serial.printf("[idle] age %us standby %d screen_off %d bright %u codec_off %d\n",unsigned(idlePower.elapsed(millis())/1000),standby,screenOff,unsigned(M5.Display.getBrightness()),codecOff);
+  Serial.printf("[idle] age %us standby %d face_down %d screen_off %d bright %u codec_off %d\n",unsigned(idlePower.elapsed(millis())/1000),standby,faceDownRest.active,screenOff,unsigned(M5.Display.getBrightness()),codecOff);
   Serial.printf("[story] active %s demo %d awake %us next %us budget %u\n",ClawdStory::name(stories.current()),stories.isDemo(),unsigned(stories.awakeMs()/1000),unsigned(stories.opportunityAt()/1000),stories.usedBudget());
 }
 
@@ -454,6 +456,7 @@ void goSleep(const char* why){
   uiLog("sleep: %s", why);
 }
 void goWake(const char* why){
+  faceDownRest.cancel();
   powerSavePerformance();
   standby=false;
   if (petState() != PET_SLEEP) return;
@@ -489,7 +492,7 @@ void tickOta(){
 bool uiButtonAForVoice(){return M5.BtnA.isPressed()&&!wakeAConsumed&&!gestures.suppressA&&!games.active()&&!gameButton.blocked;}
 bool uiLandscapeActive(){return games.active();}
 
-void uiWakeForVoice(){ idlePower.activity(millis());goWake("Mac voice start"); }
+void uiWakeForVoice(){ faceDownRest.overrideWake();idlePower.activity(millis());goWake("Mac voice start"); }
 
 void uiTick(uint32_t ms){
   if(deviceStreaming())s_debug=false;
@@ -498,7 +501,7 @@ void uiTick(uint32_t ms){
   // Keep sensor acquisition and diagnostics alive while setup/OTA own the UI.
   const MotionEv ev = motionPoll(ms);
   if(powerCalibrationOwnsUI()){
-    games.cancel();s_debug=false;standby=false;
+    faceDownRest.cancel();games.cancel();s_debug=false;standby=false;
     if(powerCalibrationRunning()&&(motionActivityDetected()||M5.BtnA.isPressed()||M5.BtnB.isPressed()))powerCalibrationCancel(7);
     if(petState()!=PET_IDLE)setPet(PET_IDLE,"battery calibration");
     return;
@@ -512,10 +515,19 @@ void uiTick(uint32_t ms){
     deepSleepCancel();
     idlePower.activity(ms);
     standby=false;
-    if(petState()==PET_SLEEP&&(button||devicePose()!=DevicePose::FaceDown))goWake(button?"button":"motion");
+    if(petState()==PET_SLEEP&&(button||(!faceDownRest.active&&devicePose()!=DevicePose::FaceDown)))goWake(button?"button":"motion");
   }
   const bool special=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(special)games.cancel();
+  const auto restAction=faceDownRest.update(ms,devicePose(),devicePoseCandidate(),motionActivityHealthy(ms),
+    special||games.active()||deviceStreaming()||uiRotationActive(),motionActivityDetected(),button);
+  if(restAction==FaceDownRestPolicy::Action::Sleep){
+    goSleep("face down standby");
+    // Rest is silent and shuts down capture before deviceTick sees PET_SLEEP.
+    soundCancel();audioTick(false);M5.Speaker.end();codecOff=false;
+  }else if(restAction==FaceDownRestPolicy::Action::Wake){
+    deepSleepCancel();goWake("face down lifted or interrupted");
+  }
 
   /* 配网 / OTA 期间接管屏幕与按键，暂停小爪的日常循环 */
   if (provActive()){ gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),false,false,true);gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);tickProv(); return; }
@@ -584,11 +596,9 @@ void uiTick(uint32_t ms){
       snprintf(echo, sizeof(echo), "shaken");
       uiLog("shaken");
     }
-  } else if (ev == MEV_PICKUP){
+  } else if (ev == MEV_PICKUP && !faceDownRest.active){
     if (petState() == PET_SLEEP) goWake("picked up");
     else if (petState() == PET_IDLE) setPet(PET_CURIOUS, "moved");
-  } else if (ev == MEV_FACE_DOWN && !games.active() && !button){
-    goSleep("face down");
   }
 
   /* ---- 按键 ---- */
@@ -676,6 +686,7 @@ void uiStoriesTick(uint32_t ms){
 }
 void uiPowerTick(uint32_t ms,bool bootVerified){
   if(powerCalibrationOwnsUI()){
+    faceDownRest.cancel();
     powerSavePerformance();
     idlePower.activity(ms);standby=false;screenOff=false;
     M5.Display.setBrightness(powerCalibrationBrightness(ms));
@@ -694,6 +705,11 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     games.active()||deviceStreaming()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
   // Broken/stale IMU input cannot be interpreted as prolonged inactivity.
   const bool blocked=busy||!motionActivityHealthy(ms);
+  // Commands may start a protected task after uiTick in the same main loop.
+  if(blocked){
+    const bool wasResting=faceDownRest.active;faceDownRest.cancel();
+    if(wasResting)goWake("face down task or sensor interruption");
+  }
   const auto action=idlePower.update(ms,blocked,standby,powerAutoOffAllowed(ms));
   if(blocked)standby=false;
   if(deepSleepTick(ms,bootVerified&&!blocked&&!soundPlaying(),deviceControlConnected(ms)))return;
@@ -719,8 +735,8 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
       Serial.println("[idle] power-off returned; remaining in standby");
     }
   }
-  const bool settled=petState()==PET_SLEEP&&!busy&&petStateElapsed(ms,s_stateAt)>=1200;
-  const bool blank=standby&&settled;
+  const bool settled=petState()==PET_SLEEP&&!busy&&(faceDownRest.active||petStateElapsed(ms,s_stateAt)>=1200);
+  const bool blank=(standby||faceDownRest.active)&&settled;
   const uint8_t brightness=blank?0:petState()==PET_SLEEP&&!busy?BRIGHT_ASLEEP:deviceBrightness();
   if(M5.Display.getBrightness()!=brightness)M5.Display.setBrightness(brightness);
   if(blank!=screenOff){screenOff=blank;Serial.printf("[idle] screen %s inactive %us\n",screenOff?"off":"on",unsigned(idlePower.elapsed(ms)/1000));}
