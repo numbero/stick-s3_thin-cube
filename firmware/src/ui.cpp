@@ -204,7 +204,16 @@ void segBar(int x, int y, int segs, uint16_t on){
   for (int i = 0; i < 10; i++) canvas.fillRect(x + i * (segW + gap), y, segW, 5, i < segs ? on : C::dim2);
 }
 int  rowPitch(){ int p = s_glyphH + 2; if (p < 12) p = 12; if (p > 18) p = 18; return p; }
-void putCenter(const char* s, int y, uint16_t col){ put(s, (W - strW(s)) / 2, y, col); }
+// Center with the same font metrics used by drawString. The calibrated strW
+// estimate varies with the characters and shifts longer labels to the right.
+void putCenter(const char* s, int y, uint16_t col, const lgfx::IFont* font=nullptr){
+  setFontNow();
+  if(font)canvas.setFont(font);
+  canvas.setTextDatum(textdatum_t::top_center);
+  canvas.setTextColor(col);
+  canvas.drawString(s,W/2,y);
+  setFontNow();
+}
 
 constexpr int BATTERY_W = 46;  // 34px 电池主体 + 电极 + 充电闪电
 constexpr int BATTERY_H = 14;
@@ -1055,15 +1064,15 @@ void uiDraw(uint32_t ms){
     putCenter(connectionHintLabel(shown),shortLayout?100:130,C::ok);present(ms);return;
   }
   if(devicePairWindow()){
-    canvas.fillSprite(C::screen);const int pitch=rowPitch();const bool shortLayout=H==135;
-    putCenter("ThinCube",shortLayout?4:8,C::ink);rule((shortLayout?4:8)+pitch+4);
-    putCenter("PAIR PIN",shortLayout?31:45,C::dim);putCenter(devicePairPin(),shortLayout?54:45+pitch+8,C::glow);
-    if(shortLayout){
-      putCenter(connectionHintLabel(transportMode()),80,C::ok);putCenter("open ThinCube on Mac",106,C::ink);
-    }else{
-      putCenter("open ThinCube",100,C::ink);putCenter("on your Mac",100+pitch,C::ink);
-      putCenter(connectionHintLabel(transportMode()),100+2*pitch+4,C::ok);
-      putCenter("A+B hold: pair",H-2*pitch,C::dim);
+    canvas.fillSprite(C::screen);const bool shortLayout=H==135;
+    putCenter("ThinCube",shortLayout?4:8,C::ink);rule(shortLayout?26:30);
+    putCenter("PAIR PIN",shortLayout?36:70,C::dim);
+    constexpr int pinBoxWidth=96;
+    canvas.drawRect((W-pinBoxWidth)/2,shortLayout?60:94,pinBoxWidth,shortLayout?28:32,C::glow);
+    putCenter(devicePairPin(),shortLayout?64:100,C::glow,&fonts::FreeSans12pt7b);
+    putCenter(connectionHintLabel(transportMode()),shortLayout?104:142,C::ok);
+    if(!shortLayout){
+      rule(H-42);putCenter("A+B hold: pair",H-28,C::dim);
     }
     present(ms);return;
   }

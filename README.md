@@ -1,10 +1,12 @@
 # ThinCube
 
-ThinCube 是 StickS3 上的 Clawd 电子伙伴与 Mac Wi-Fi / BLE 麦克风。Mac 软件同名 ThinCube，角色名保留 Clawd。当前 Mac 为 v0.4.7，设备已通过 USB 更新至 v0.4.14，兼容 v1 通信协议固件。已完成配网、恢复已存配对、Bonjour 发现，以及 Wi-Fi 音频送达 BlackHole 音频桥的实测；设备端连续采样达到每秒 100 帧。屏幕朝上平放后竖向倒立已在真机触发传音并显示悬浮对讲机。无线 OTA 正常升级、重启与连接恢复已实测；A 键快捷键与目标应用录音仍待用户在场联调。
+ThinCube 是 StickS3 上的 Clawd 电子伙伴与 Mac Wi-Fi / BLE 麦克风。Mac 软件同名 ThinCube，角色名保留 Clawd。当前 Mac 为 v0.4.7，设备已通过 USB 更新至 v0.4.23，兼容 v1 通信协议固件。已完成配网、恢复已存配对、Bonjour 发现，以及 Wi-Fi 音频送达 BlackHole 音频桥的实测；设备端连续采样达到每秒 100 帧。屏幕朝上平放后竖向倒立已在真机触发传音并显示悬浮对讲机。无线 OTA 正常升级、重启与连接恢复已实测；A 键快捷键与目标应用录音仍待用户在场联调。
 
 v0.4.0 起已实现 Wi-Fi / BLE 互斥模式、上位机及长按 B 切换、BLE 控制/语音和 A+B 重新配对。v0.4.4 移除模式未连接时的自动回退，切换后持久保持所选模式。完整 Flash 备份、烧录与原设置保留已完成。**上位机两个方向各两次切换成功，用户实测 B 短按静音及长按双向切换正常。**三分钟语音暴露的丢帧问题经 v0.4.1 修复后，最终一分钟复测设备队列丢帧为 0、播放补零约 0.016%，全程连接正常。按用户要求未执行长时间压力测试，端到端时延尚未测量。完整协议、结果与验收范围见 [Wi-Fi / BLE 实现](docs/wifi-ble-implementation.md)。
 
 ## 已实现
+
+- 设备固件 v0.4.23 实施已确认的简洁配对页：移除 Mac 操作提示，六位配对码使用普通字重 FreeSans12pt7b 与居中矩形细框，重新平衡标签、配对码和连接方式的间距。横竖屏与 Wi-Fi / 蓝牙布局检查、编译及 USB 烧录通过；见 [简洁配对页记录](docs/connection-pairing-v0.4.6.md#简洁配对页-v0423)。
 
 - 设备固件 v0.4.19 新增朝下在线息屏：屏幕朝下稳定约 1.5 秒后关闭背光、停绘和闲置音频，复用在线省电；确认翻起后恢复亮度和性能，轻缓翻转也能唤醒。按键与 Mac 手动语音可覆盖朝下休息，忙碌任务及 IMU 异常保留保护。云端验证和真机验收范围见 [朝下息屏与翻起唤醒](docs/face-down-rest-v0.4.19.md)。
 
@@ -60,7 +62,7 @@ Mac 应用与菜单栏使用以 StickS3 瘦长机身、屏幕和蓝色按键为�
 
 - `artifacts/ThinCube.app`：本机 Apple Silicon 构建，macOS 13+，固定 Apple Development 签名，未公证。
 - `artifacts/ThinCube-v0.4.0-mac-arm64.zip`：本次联调构建的便携压缩包；与已安装应用一起刷新，签名以包内应用为准。
-- `artifacts/clawd-stories-v0.4.13/thincube-v0.4.13.bin`：当前 USB 安装的十三段轻巧动画 app 镜像，保留既有电源优化。仅供兼容 v1 协议的 A/B 分区设备使用，不能当作整片 Flash 备份。
+- `artifacts/thincube-v0.4.23.bin`：最新固件 app 镜像，配套校验信息见 `artifacts/firmware-manifest.json`。仅供兼容 v1 协议的 A/B 分区设备使用，不能当作整片 Flash 备份。设备已通过 USB 更新至 v0.4.23。
 - `artifacts/clawd-stories-v0.4.13/`：正式镜像清单、完整 Flash 备份、源码快照、测试、编译、烧录与实机记录。
 - `artifacts/clawd-stories-v0.4.11/`：首版 demo 镜像、备份及用户确认的五段实机屏幕截图与播放记录。
 - `artifacts/connection-pairing-v0.4.6/`：此前 v0.4.10 镜像与连接配对验证记录。
