@@ -57,6 +57,7 @@ uint8_t brightness = 128, nonce[16] = {};
 Edge edges[32];
 unsigned edgeRead = 0, edgeCount = 0;
 bool lastHeld = false, lastStreaming = false, networkPending = false, healthy = false;
+bool captureRequested=false,voicePreparing=false;
 PoseVoiceController poseVoice;
 uint32_t calibrationSeq = 0;
 char calibrationOp[24] = {};
@@ -202,7 +203,7 @@ const char* voiceBlock() {
   if(!pose.uprightSign)return "calibration";
   if(voice.sleeping)return "sleeping";
   if(transportMode()==TransportMode::BLE&&audioReady()&&!blePerformanceReady())return "radio";
-  if(!voice.captureReady)return "microphone";
+  if(!voice.captureReady&&captureRequested)return "microphone";
   if(voice.streaming)return "";
   return voice.inverted ? "rearm" : "invert";
 }
@@ -236,6 +237,7 @@ void publish() {
   cJSON_AddNumberToObject(sleeping,"id",deepSleepSequence());cJSON_AddStringToObject(sleeping,"phase",deepSleepPending()?"preparing":"awake");
   cJSON_AddBoolToObject(j,"manual",voice.manual);cJSON_AddBoolToObject(j,"held",voice.held);
   cJSON_AddBoolToObject(j,"micReady",voice.captureReady);cJSON_AddBoolToObject(j,"inverted",voice.inverted);
+  cJSON_AddBoolToObject(j,"micDemand",captureRequested);
   cJSON_AddBoolToObject(j,"calibrated",pose.uprightSign!=0);cJSON_AddBoolToObject(j,"faceCalibrated",pose.faceUpSign!=0);
   cJSON_AddStringToObject(j,"pose",poseName(pose.stable));
   cJSON_AddStringToObject(j,"voiceBlock",voiceBlock());
@@ -383,6 +385,8 @@ const char* deviceName(){return name;}
 void deviceStop(){voice.stop();}
 void deviceToggleMute(){voice.muted=!voice.muted;if(voice.muted)voice.stop();persist();}
 bool deviceStreaming(){return voice.streaming;}
+bool deviceCaptureRequested(){return captureRequested;}
+bool deviceVoicePreparing(){return voicePreparing||voice.pendingGesture||voice.pendingManual;}
 bool deviceHeld(){return voice.held;}
 bool deviceMuted(){return voice.muted;}
 bool deviceLocalSound(){return voice.localSound&&!voice.muted;}
@@ -394,7 +398,7 @@ bool deviceControlConnected(uint32_t ms){
   return link&&!transportBusy()&&controlLease.connected(ms);
 }
 UIStatus::VoiceInputs deviceVoiceStatus(uint32_t ms){
-  return {voice.muted,voice.streaming,voice.allowed,deviceControlConnected(ms),voice.peer,voice.captureReady,pose.uprightSign!=0,voice.sleeping};
+  return {voice.muted,voice.streaming,voice.allowed,deviceControlConnected(ms),voice.peer,voice.captureReady,pose.uprightSign!=0,voice.sleeping,captureRequested};
 }
 const char* deviceVoiceBlock(){return voiceBlock();}
 float deviceLevel(){return voice.muted||soundSuppressListening(millis())?0:audioLevel();}
@@ -417,7 +421,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   Command c;
   bool commandChanged=false;
   while(xQueueReceive(commands,&c,0)==pdTRUE) {
-    if(strcmp(c.op,"heartbeat"))commandChanged=true;
+    if(strcmp(c.op,"heartbeat")){commandChanged=true;uiPowerActivity();}
     if(strcmp(c.op,"heartbeat")&&strcmp(c.op,"sleep_ack"))deepSleepCancel();
     voice.busy=busy||networkPending||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
     if(!strcmp(c.op,"connect")){
@@ -490,10 +494,11 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   if(powerCalibrationOwnsUI()){voice.busy=true;voice.stop();}
   // Reserve audio as soon as an inverted gesture is forming, before pose
   // confirmation. A manual start cancels effects above before starting capture.
-  const bool voiceReserved=voice.streaming||voice.pendingGesture||
-    (!uiLandscapeActive()&&voice.voiceEnabled()&&(pose.stable==DevicePose::Inverted||pose.candidate==DevicePose::Inverted||displayOrientation.rotation==2));
+  voicePreparing=poseVoice.prepareCapture(voice,pose.candidate,uiLandscapeActive());
+  const bool voiceReserved=voice.streaming||voice.pendingGesture||voice.pendingManual||voicePreparing;
   soundTick(millis(),voiceReserved||voice.busy||networkPending||devicePairWindow());
-  audioTick(voice.captureWanted()&&!soundPlaying());
+  captureRequested=voice.captureWanted(voicePreparing);
+  audioTick(captureRequested&&!soundPlaying());
   voice.captureReady=audioReady()&&(transportMode()!=TransportMode::BLE||blePerformanceReady());
   poseVoice.update(voice,pose.stable,uiButtonAForVoice(),uiLandscapeActive(),pose.candidate==pose.stable);
   voice.button(uiButtonAForVoice() && !(displayOrientation.rotation&1));

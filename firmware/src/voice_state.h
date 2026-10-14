@@ -14,7 +14,10 @@ struct VoiceState {
 
   bool voiceEnabled() const { return allowed && !muted && !sleeping && !busy && peer; }
   bool canStream() const { return voiceEnabled() && captureReady; }
-  bool captureWanted() const { return !muted && !sleeping && !busy && (localSound || streaming || (allowed && peer)); }
+  bool captureWanted(bool preparing=false) const {
+    return !muted && !sleeping && !busy &&
+      (localSound || (allowed && peer && (streaming || pendingGesture || pendingManual || preparing)));
+  }
   void stop() { streaming = manual = held = armed = pendingGesture = pendingManual = false; }
   void setPeer(bool ready, uint32_t now) {
     peer = ready; leaseAt = now;

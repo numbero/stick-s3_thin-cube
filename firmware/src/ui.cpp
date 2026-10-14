@@ -14,6 +14,7 @@
 #include "ui_timing.h"
 #include "idle_power.h"
 #include "face_down_rest.h"
+#include "awake_power.h"
 #include "power_status.h"
 #include "button_gestures.h"
 #include "transport.h"
@@ -42,6 +43,8 @@ LandscapeButton gameButton;
 bool landscapeVisible=false;
 IdlePowerPolicy idlePower;
 FaceDownRestPolicy faceDownRest;
+IdleDimPolicy idleDim;
+SleepFrameGate sleepFrames;
 bool standby=false,screenOff=false,codecOff=false;
 bool wakeAConsumed=false;
 ClawdStory::Policy stories;
@@ -56,7 +59,7 @@ uint32_t transportHintUntil=0;
 bool s_debug=false;
 uint32_t rotationFrames = 0;
 struct FrameTiming {
-  uint32_t count=0,totalUs=0,maxUs=0,rotatingCount=0,rotatingMaxUs=0;
+  uint32_t count=0,totalUs=0,maxUs=0,rotatingCount=0,rotatingMaxUs=0,skipped=0;
 } frameTiming;
 struct FrameTimer {
   uint32_t started=micros();
@@ -271,7 +274,7 @@ const char* connectionCaption(uint32_t ms){
   if(state.sleeping)return "sleep";
   if(!state.calibrated)return "calibration needed";
   if(!state.audioReady)return "audio not ready";
-  if(!state.captureReady)return "mic not ready";
+  if(!state.captureReady&&state.captureDemand)return "mic not ready";
   return !strcmp(deviceVoiceBlock(),"rearm")?"flip again to talk":"Mac online";
 }
 }
@@ -311,9 +314,9 @@ void uiSetOrientation(uint8_t requested,uint32_t ms){
 }
 bool uiRotationActive(){return rotation.active;}
 void uiReportTiming(){
-  Serial.printf("[render] frames %u mean %uus max %uus rotation_frames %u rotation_max %uus\n",unsigned(frameTiming.count),unsigned(frameTiming.count?frameTiming.totalUs/frameTiming.count:0),unsigned(frameTiming.maxUs),unsigned(frameTiming.rotatingCount),unsigned(frameTiming.rotatingMaxUs));
+  Serial.printf("[render] frames %u mean %uus max %uus rotation_frames %u rotation_max %uus skipped %u\n",unsigned(frameTiming.count),unsigned(frameTiming.count?frameTiming.totalUs/frameTiming.count:0),unsigned(frameTiming.maxUs),unsigned(frameTiming.rotatingCount),unsigned(frameTiming.rotatingMaxUs),unsigned(frameTiming.skipped));
   frameTiming=FrameTiming{};
-  Serial.printf("[idle] age %us standby %d face_down %d screen_off %d bright %u codec_off %d\n",unsigned(idlePower.elapsed(millis())/1000),standby,faceDownRest.active,screenOff,unsigned(M5.Display.getBrightness()),codecOff);
+  Serial.printf("[idle] age %us standby %d face_down %d screen_off %d bright %u codec_off %d dimmed %d mic_demand %d\n",unsigned(idlePower.elapsed(millis())/1000),standby,faceDownRest.active,screenOff,unsigned(M5.Display.getBrightness()),codecOff,idleDim.dimmed,deviceCaptureRequested());
   Serial.printf("[story] active %s demo %d awake %us next %us budget %u\n",ClawdStory::name(stories.current()),stories.isDemo(),unsigned(stories.awakeMs()/1000),unsigned(stories.opportunityAt()/1000),stories.usedBudget());
 }
 
@@ -674,7 +677,12 @@ void uiStoriesTick(uint32_t ms){
   if(!in.awake||takeover){storyPoked=false;storyPortrait=false;}
   const auto previous=stories.current();const bool wasDemo=stories.isDemo();
   const auto event=stories.update(ms,in,esp_random());
-  if(event==ClawdStory::Event::Started)Serial.printf("[story] start %s auto\n",ClawdStory::name(stories.current()));
+  if(event==ClawdStory::Event::Started){
+    // Story admission happens after uiPowerTick; restore before its first frame.
+    idleDim.update(ms,idlePower.elapsed(ms),deviceBrightness(),false,false);
+    M5.Display.setBrightness(deviceBrightness());
+    Serial.printf("[story] start %s auto\n",ClawdStory::name(stories.current()));
+  }
   else if(event!=ClawdStory::Event::None)Serial.printf("[story] %s %s %s\n",event==ClawdStory::Event::Finished?"finish":"cancel",ClawdStory::name(previous),wasDemo?"demo":"auto");
   if(ClawdStory::valid(storyDemoRequest)){
     if(petStateElapsed(ms,storyDemoRequestedAt)>2000||busy||!s_debug){Serial.println("[story] preview rejected");storyDemoRequest=ClawdStory::Id::None;}
@@ -702,7 +710,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     return;
   }
   const bool busy=provActive()||otaActive()||transportBusy()||devicePairWindow()||
-    games.active()||deviceStreaming()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
+    games.active()||deviceStreaming()||deviceVoicePreparing()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
   // Broken/stale IMU input cannot be interpreted as prolonged inactivity.
   const bool blocked=busy||!motionActivityHealthy(ms);
   // Commands may start a protected task after uiTick in the same main loop.
@@ -737,10 +745,18 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
   }
   const bool settled=petState()==PET_SLEEP&&!busy&&(faceDownRest.active||petStateElapsed(ms,s_stateAt)>=1200);
   const bool blank=(standby||faceDownRest.active)&&settled;
-  const uint8_t brightness=blank?0:petState()==PET_SLEEP&&!busy?BRIGHT_ASLEEP:deviceBrightness();
+  const bool dimEligible=!blocked&&petState()!=PET_SLEEP&&!deviceInverted()&&
+    devicePoseCandidate()!=DevicePose::Inverted&&!deviceVoicePreparing()&&!soundPlaying()&&!stories.playing()&&
+    !(transportHintUntil&&int32_t(transportHintUntil-ms)>0);
+  const uint8_t awakeBrightness=idleDim.update(ms,idlePower.elapsed(ms),deviceBrightness(),
+    powerInputSource(ms)==0,dimEligible);
+  const uint8_t brightness=blank?0:petState()==PET_SLEEP&&!busy?BRIGHT_ASLEEP:awakeBrightness;
   if(M5.Display.getBrightness()!=brightness)M5.Display.setBrightness(brightness);
   if(blank!=screenOff){screenOff=blank;Serial.printf("[idle] screen %s inactive %us\n",screenOff?"off":"on",unsigned(idlePower.elapsed(ms)/1000));}
-  if(!settled||soundPlaying())codecOff=false;
+  // Intentional on-demand standby may park the codec while the pet is awake.
+  // Actual capture/playback must invalidate the parked state before reuse.
+  const bool audioIdle=!deviceCaptureRequested()&&!audioReady()&&!soundPlaying();
+  if(!audioIdle)codecOff=false;
   else if(!codecOff&&uint32_t(ms-codecAttemptAt)>=1000){
     codecAttemptAt=ms;codecOff=audioPowerDown();
     Serial.printf("[idle] codec power-down %s\n",codecOff?"ok":"retry");
@@ -1006,8 +1022,27 @@ void renderStarCatch(uint32_t ms){
 }
 
 void uiDraw(uint32_t ms){
-  FrameTimer frameTimer;
   prepareCanvas(ms);
+  const auto voice=deviceVoiceStatus(ms);
+  const bool bluetooth=transportMode()==TransportMode::BLE;
+  const bool linked=bluetooth?bleConnected():otaConnected();
+  const bool joining=bluetooth?bleConnecting():WiFi.status()==WL_IDLE_STATUS;
+  const uint32_t flags=unsigned(s_chgShown)|(unsigned(powerBatteryLow(ms))<<1)|(unsigned(bluetooth)<<2)|
+    (unsigned(linked)<<3)|(unsigned(joining)<<4)|(unsigned(voice.muted)<<5)|(unsigned(voice.streaming)<<6)|
+    (unsigned(voice.allowed)<<7)|(unsigned(voice.connected)<<8)|(unsigned(voice.audioReady)<<9)|
+    (unsigned(voice.captureReady)<<10)|(unsigned(voice.calibrated)<<11)|(unsigned(voice.sleeping)<<12)|
+    (unsigned(voice.captureDemand)<<13);
+  // Landscape backgrounds, games, stories, entry/wake transitions and all
+  // operation pages retain their animation cadence. Only a settled static
+  // portrait sleep frame can be cached; every visible input is part of its key.
+  const bool staticSleep=petState()==PET_SLEEP&&W==135&&!rotation.active&&!games.active()&&
+    !deviceStreaming()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!transportBusy()&&
+    !powerCalibrationOwnsUI()&&!s_debug&&!stories.playing()&&!gestures.switchReady&&!gestures.comboReady&&
+    !(transportHintUntil&&int32_t(transportHintUntil-ms)>0);
+  if(!sleepFrames.draw(ms,s_stateAt,staticSleep,{s_lvlShown,flags,rotation.target})){
+    frameTiming.skipped++;return;
+  }
+  FrameTimer frameTimer;
   if (provActive()){ renderProv(ms); return; }
   if (otaActive()){ renderOta(ms); return; }
   if(gestures.switchReady||gestures.comboReady||transportBusy()||(transportHintUntil&&int32_t(transportHintUntil-ms)>0)){

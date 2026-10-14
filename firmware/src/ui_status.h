@@ -6,11 +6,15 @@ constexpr int IconSize = 12, SlotPitch = 16, Width = IconSize + 2*SlotPitch;
 enum class VoiceIcon { None, Wave, Muted, Warning };
 struct VoiceInputs {
   bool muted, streaming, allowed, connected, audioReady, captureReady, calibrated, sleeping;
+  bool captureDemand;
+  VoiceInputs(bool mute,bool stream,bool allow,bool connect,bool audio,bool capture,bool calibration,bool sleep,bool demand=true)
+    :muted(mute),streaming(stream),allowed(allow),connected(connect),audioReady(audio),captureReady(capture),
+     calibrated(calibration),sleeping(sleep),captureDemand(demand){}
 };
 inline VoiceIcon voiceIcon(const VoiceInputs& s) {
   if(s.muted) return VoiceIcon::Muted;
   if(s.streaming) return VoiceIcon::Wave;
-  if(s.allowed && s.connected && !s.sleeping && (!s.audioReady || !s.captureReady || !s.calibrated)) return VoiceIcon::Warning;
+  if(s.allowed && s.connected && !s.sleeping && (!s.audioReady || (!s.captureReady&&s.captureDemand) || !s.calibrated)) return VoiceIcon::Warning;
   return VoiceIcon::None;
 }
 enum class Icon { WiFi, Bluetooth, Mac, Wave, Muted, Warning };

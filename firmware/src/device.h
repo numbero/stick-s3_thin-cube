@@ -10,6 +10,8 @@ void deviceTick(uint32_t ms, bool sleeping, bool busy);
 bool deviceAuthorized(httpd_req_t* req);
 void deviceStop();
 bool deviceStreaming();
+bool deviceCaptureRequested(); // includes prewarming and fresh pending starts
+bool deviceVoicePreparing();
 bool deviceHeld();
 bool deviceMuted();
 bool deviceLocalSound();

@@ -7,6 +7,12 @@
 // next face-up -> inverted transition must be processed as a new gesture.
 struct PoseVoiceController {
   bool initialized = false, suppressed = false;
+  bool prepareCapture(const VoiceState& voice,DevicePose candidate,bool exploring)const{
+    // Only prewarm a fresh forming inversion. Boot/reconnect/stop while held
+    // inverted must not start capture or replay the cancelled voice gesture.
+    return initialized&&!suppressed&&!exploring&&voice.voiceEnabled()&&
+      !voice.inverted&&candidate==DevicePose::Inverted;
+  }
   void calibrated(VoiceState& voice, DevicePose pose) {
     voice.stop();
     voice.inverted = pose == DevicePose::Inverted;
