@@ -9,6 +9,12 @@ struct LandscapeTilt {
     if(!isfinite(x)||!isfinite(y)||x*x+y*y<.01f)return NAN;
     return atan2f(rotation==1?-y:y,fabsf(x))*57.2957795f;
   }
+  static float verticalDegrees(float x,float y,float z) {
+    if(!isfinite(x)||!isfinite(y)||!isfinite(z)||x*x+y*y+z*z<.01f)return NAN;
+    // Pitch uses the screen normal; an in-plane rotation does not reverse it.
+    // Tilting toward face-up moves the probe upward (negative screen Y).
+    return atan2f(-z,hypotf(x,y))*57.2957795f;
+  }
   static float mapped(float degrees) {
     const float magnitude=fabsf(degrees);
     if(magnitude<=DeadDegrees)return 0;

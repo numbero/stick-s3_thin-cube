@@ -563,19 +563,20 @@ void uiTick(uint32_t ms){
   if(deck&&!special){
     const MotionDiag input=motionDiag();
     const float tilt=LandscapeTilt::tiltDegrees(input.ax,input.ay,deviceDisplayRotation());
+    const float vertical=LandscapeTilt::verticalDegrees(input.ax,input.ay,input.az);
     const bool catching=LandscapeGames::scene(deviceDisplayRotation())==LandscapeGames::Scene::Catch;
     if(gameAction==LandscapeButton::Action::Exit){
       games.cancel();idlePower.activity(ms);uiLog(catching?"catch cancelled":"explore cancelled");
     }
     if(gameAction==LandscapeButton::Action::Enter&&!wakeAConsumed&&!debugHeld&&!s_debug){
       if(petState()==PET_SLEEP)goWake("game A");
-      else if(games.begin(deviceDisplayRotation(),tilt,ms)){
+      else if(games.begin(deviceDisplayRotation(),tilt,vertical,ms)){
         idlePower.activity(ms);uiLog(catching?"catch start":"explore start");
         if(catching)Serial.printf("[catch] begin rot %u base %.1f round %u duration %ums\n",deviceDisplayRotation(),tilt,catchStars.rounds,unsigned(StarCatch::RoundMs));
-        else Serial.printf("[explore] begin rot %u base %.1f target %.1f\n",deviceDisplayRotation(),tilt,exploration.targetX());
+        else Serial.printf("[explore] begin rot %u base %.1f,%.1f target %.1f,%.1f\n",deviceDisplayRotation(),tilt,vertical,exploration.targetX(),exploration.targetY());
       }
     }
-    const auto event=games.update(deviceDisplayRotation(),tilt,petState()!=PET_SLEEP,ms);
+    const auto event=games.update(deviceDisplayRotation(),tilt,vertical,petState()!=PET_SLEEP,ms);
     if(event.explore==Exploration::Event::Locked){
       idlePower.activity(ms);petPoke();soundRequest(SoundCue::Scan);s_stateAt=ms;uiLog("target locked");
     }else if(event.explore==Exploration::Event::Found){
@@ -925,11 +926,11 @@ void renderExploration(uint32_t ms){
   const float progress=exploration.progress(ms);
   const int px=lroundf(exploration.probeX());
   const int tx=lroundf(exploration.targetX());
+  const int ty=lroundf(exploration.targetY());
   const float sound=!asleep&&deviceLocalSound()?deviceLevel():0;
-  const int py=Exploration::AimY+(asleep||exploration.active?0:lroundf(sinf(ms/390.f)*2-sound*3));
+  const int py=exploration.active?lroundf(exploration.probeY()):lroundf(Exploration::CenterY)+(asleep?0:lroundf(sinf(ms/390.f)*2-sound*3));
   canvas.setClipRect(129,39,104,60);
   if(exploration.active){
-    const int ty=Exploration::AimY;
     canvas.drawCircle(tx,ty,4,exploration.near?C::glow:C::dim);
     canvas.drawFastHLine(tx-7,ty,3,C::dim);canvas.drawFastHLine(tx+5,ty,3,C::dim);
     if(exploration.scanning)canvas.drawRect(tx-10,ty-10,21,21,C::ok);
@@ -937,7 +938,7 @@ void renderExploration(uint32_t ms){
   if(!asleep&&(!exploration.revealed||exploration.active)){
     // Suspended probe: two detached particles keep a clear gap to the pet.
     canvas.fillRect(px-15,py+5,2,2,C::lite);
-    canvas.fillRect(px-12,py+15,2,2,C::lite);
+    canvas.fillRect(px-12,py-5,2,2,C::lite);
     canvas.drawLine(px,py-8,px+8,py,C::ink);canvas.drawLine(px+8,py,px,py+8,C::ink);
     canvas.drawLine(px,py+8,px-8,py,C::ink);canvas.drawLine(px-8,py,px,py-8,C::ink);
     canvas.fillRect(px-2,py-2,5,5,exploration.scanning?C::ok:C::glow);
@@ -948,7 +949,7 @@ void renderExploration(uint32_t ms){
   }
   const char* names[]={"CHIP","CRYSTAL","ORBIT","SIGNAL"};
   if(exploration.revealed){
-    const int x=tx,y=Exploration::AimY;
+    const int x=tx,y=ty;
     switch(exploration.artifact()){
       case 0:
         canvas.drawRect(x-7,y-7,14,14,C::ok);canvas.fillRect(x-3,y-3,6,6,C::dim);

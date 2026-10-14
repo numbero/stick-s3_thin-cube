@@ -13,17 +13,17 @@ struct LandscapeGames {
   static Scene scene(uint8_t rotation){return rotation==1?Scene::Explore:rotation==3?Scene::Catch:Scene::None;}
   bool active()const{return exploration.active||catchStars.active;}
   void cancel(){exploration.cancel();catchStars.cancel();playing=Scene::None;}
-  bool begin(uint8_t rotation,float degrees,uint32_t now){
+  bool begin(uint8_t rotation,float degrees,float vertical,uint32_t now){
     if(active())return false;
     const auto selected=scene(rotation);
-    const bool began=selected==Scene::Explore?exploration.begin(degrees,now):selected==Scene::Catch?catchStars.begin(degrees,now):false;
+    const bool began=selected==Scene::Explore?exploration.begin(degrees,vertical,now):selected==Scene::Catch?catchStars.begin(degrees,now):false;
     if(began)playing=selected;
     return began;
   }
-  Events update(uint8_t rotation,float degrees,bool awake,uint32_t now){
+  Events update(uint8_t rotation,float degrees,float vertical,bool awake,uint32_t now){
     Events events;
     if(!awake||(active()&&scene(rotation)!=playing)){cancel();return events;}
-    if(playing==Scene::Explore)events.explore=exploration.update(degrees,awake,now);
+    if(playing==Scene::Explore)events.explore=exploration.update(degrees,vertical,awake,now);
     else if(playing==Scene::Catch)events.catchStars=catchStars.update(degrees,awake,now);
     if(!active())playing=Scene::None;
     return events;
