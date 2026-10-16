@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 void audioBegin(bool ble=false);
+bool audioInitialized(); // configured microphone and allocated local capture queue
 void audioTick(bool capture);
 bool audioPowerDown(); // main loop only, after capture and sound playback stop
 bool audioReady();

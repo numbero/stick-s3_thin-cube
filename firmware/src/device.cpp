@@ -12,6 +12,8 @@
 #include "power_status.h"
 #include "power_save.h"
 #include "power_save_policy.h"
+#include "power_led_policy.h"
+#include "motion.h"
 #include "deep_sleep.h"
 #include "ima_adpcm.h"
 #include <M5Unified.h>
@@ -35,7 +37,7 @@ struct Command {
   int fd = -1, port = 0, flags = 0, brightness = 128, soundVolume = 35;
   uint32_t ack = 0, epoch = 0, address = 0;
   float gain = 1;
-  bool allowed = false, muted = false, local = true, ready = false, soundMuted = false,deepSleep=false;
+  bool allowed = false, muted = false, local = true, ready = false, soundMuted = false,deepSleep=false,powerLedDebug=false;
 };
 struct Edge { uint32_t seq; bool down; };
 QueueHandle_t commands;
@@ -48,6 +50,9 @@ WiFiUDP udp;
 char name[24], pin[7], key[33] = {}, published[2048] = "{}";
 bool bleSnapshotDirty=true;
 bool deepSleepEnabled=false;
+PowerLedPolicy powerLedPolicy;
+bool powerLedDebug=false,powerLedOn=true,powerLedAvailable=false;
+uint32_t powerLedAttemptAt=0;
 std::atomic<uint32_t> pairingUntil{0};
 uint32_t lastPairTry = 0, epoch = 0, edgeSeq = 0, seq = 0, clockSample = 0;
 int pairTries = 0, owner = -1, outputPort = 0;
@@ -80,6 +85,26 @@ bool persist() {
   p.putUChar("sndVol",soundVolume());p.putBool("sndMute",soundMuted());
   p.putInt("upright",pose.uprightSign); p.putInt("faceup",pose.faceUpSign);
   const bool saved=p.putBool("deep",deepSleepEnabled)==1;p.end();return saved;
+}
+bool applyPowerLed(bool enabled) {
+  // PM1 PWR_CFG bit4 controls only LED_EN; preserve charging and power rails.
+  powerLedAttemptAt=millis();
+  uint8_t config=0;
+  powerLedAvailable=M5.Power.M5pm1.setLedEnLevel(enabled)&&
+    M5.Power.M5pm1.readRegister(0x06,&config,1)&&bool(config&0x10)==enabled;
+  if(powerLedAvailable)powerLedOn=enabled;
+  return powerLedAvailable;
+}
+void changePowerLedDebug(bool enabled) {
+  const bool applied=applyPowerLed(powerLedPolicy.light(enabled));
+  bool saved=false;
+  if(applied){
+    Preferences p;
+    if(p.begin("thincube",false)){saved=p.putBool("ledDebug",enabled)==1;p.end();}
+  }
+  if(saved)powerLedDebug=enabled;
+  else applyPowerLed(powerLedPolicy.light(powerLedDebug));
+  Serial.printf("[power-led] debug requested %d applied %d saved %d current %d ready %d on %d available %d\n",enabled,applied,saved,powerLedDebug,powerLedPolicy.ready,powerLedOn,powerLedAvailable);
 }
 esp_err_t json(httpd_req_t* r, const char* data, const char* status="200 OK") {
   httpd_resp_set_status(r,status); httpd_resp_set_type(r,"application/json");
@@ -132,7 +157,7 @@ esp_err_t settings(httpd_req_t* r) {
   cJSON* j=body(r); if(!cJSON_IsObject(j)){cJSON_Delete(j);return json(r,"{\"error\":\"bad_json\"}","400 Bad Request");}
   Command c; strcpy(c.op,"settings"); bool valid=true;
   auto flag=[&](const char* n,int bit,bool& v){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsBool(x))valid=false;else{c.flags|=bit;v=cJSON_IsTrue(x);}}};
-  flag("allowed",1,c.allowed); flag("muted",2,c.muted); flag("localSound",4,c.local); flag("soundMuted",32,c.soundMuted);flag("deepSleep",128,c.deepSleep);
+  flag("allowed",1,c.allowed); flag("muted",2,c.muted); flag("localSound",4,c.local); flag("soundMuted",32,c.soundMuted);flag("deepSleep",128,c.deepSleep);flag("powerLedDebug",256,c.powerLedDebug);
   auto b=cJSON_GetObjectItemCaseSensitive(j,"brightness");
   if(b){if(!cJSON_IsNumber(b)||b->valuedouble<8||b->valuedouble>255)valid=false;else{c.flags|=8;c.brightness=b->valueint;}}
   auto g=cJSON_GetObjectItemCaseSensitive(j,"gain");
@@ -233,6 +258,8 @@ void publish() {
   cJSON_AddBoolToObject(j,"allowed",voice.allowed);cJSON_AddBoolToObject(j,"muted",voice.muted);
   cJSON_AddBoolToObject(j,"localSound",voice.localSound);cJSON_AddBoolToObject(j,"streaming",voice.streaming);
   cJSON_AddBoolToObject(j,"deepSleep",deepSleepEnabled);cJSON_AddBoolToObject(j,"deepSleepAvailable",deepSleepAvailable());
+  cJSON_AddBoolToObject(j,"powerLedDebug",powerLedDebug);cJSON_AddBoolToObject(j,"powerLedAvailable",powerLedAvailable);
+  cJSON_AddBoolToObject(j,"powerLedReady",powerLedPolicy.ready);cJSON_AddBoolToObject(j,"powerLedOn",powerLedOn);
   auto sleeping=cJSON_AddObjectToObject(j,"sleep");
   cJSON_AddNumberToObject(sleeping,"id",deepSleepSequence());cJSON_AddStringToObject(sleeping,"phase",deepSleepPending()?"preparing":"awake");
   cJSON_AddBoolToObject(j,"manual",voice.manual);cJSON_AddBoolToObject(j,"held",voice.held);
@@ -310,7 +337,7 @@ void bleRequest(const char* text){
     c.epoch=uint32_t(number("epoch"));c.ack=uint32_t(number("ack"));c.ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ready"));
     if(!strcmp(operation,"settings")){
       auto flag=[&](const char* n,int bit,bool& v){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsBool(x))valid=false;else{c.flags|=bit;v=cJSON_IsTrue(x);}}};
-      flag("allowed",1,c.allowed);flag("muted",2,c.muted);flag("localSound",4,c.local);flag("soundMuted",32,c.soundMuted);flag("deepSleep",128,c.deepSleep);
+      flag("allowed",1,c.allowed);flag("muted",2,c.muted);flag("localSound",4,c.local);flag("soundMuted",32,c.soundMuted);flag("deepSleep",128,c.deepSleep);flag("powerLedDebug",256,c.powerLedDebug);
       auto numeric=[&](const char* n,int bit,double low,double high,double& value){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsNumber(x)||!isfinite(x->valuedouble)||x->valuedouble<low||x->valuedouble>high)valid=false;else{c.flags|=bit;value=x->valuedouble;}}};
       double bright=c.brightness,volume=c.soundVolume,g=c.gain;numeric("brightness",8,8,255,bright);numeric("gain",16,.1,4,g);numeric("soundVolume",64,0,100,volume);
       if(bright!=int(bright)||volume!=int(volume))valid=false;c.brightness=bright;c.gain=g;c.soundVolume=volume;
@@ -335,6 +362,34 @@ void bleRequest(const char* text){
 
 }
 
+void devicePowerLedBegin(){
+  powerLedPolicy=PowerLedPolicy{};
+  applyPowerLed(true);
+}
+void devicePowerLedTick(uint32_t now){
+  const bool captureWanted=voice.captureWanted()&&!soundPlaying();
+  const PowerLedPolicy::Health health{
+    uiStartupReady(),motionActivityHealthy(now),
+    audioInitialized()&&(!captureWanted||(audioReady()&&audioDelivered())),healthy,
+    transportMode()==TransportMode::BLE?bleHealthy():WiFi.getMode()!=WIFI_OFF
+  };
+  const bool wasReady=powerLedPolicy.ready,wasAvailable=powerLedAvailable,wasOn=powerLedOn;
+  powerLedPolicy.update(now,health);
+  const bool target=powerLedPolicy.light(powerLedDebug);
+  if((!powerLedAvailable||target!=powerLedOn)&&
+     (powerLedAvailable||uint32_t(now-powerLedAttemptAt)>=1000)){
+    const bool applied=applyPowerLed(target);
+    Serial.printf("[power-led] output %d confirmed %d\n",target,applied);
+  }
+  if(wasReady!=powerLedPolicy.ready||wasAvailable!=powerLedAvailable||wasOn!=powerLedOn)bleSnapshotDirty=true;
+  if(!wasReady&&powerLedPolicy.ready)Serial.printf("[boot-ready] local startup stable %ums; LED debug %d on %d available %d\n",unsigned(PowerLedPolicy::StableMs),powerLedDebug,powerLedOn,powerLedAvailable);
+  static uint32_t lastReport=0;
+  if(!powerLedPolicy.ready&&uint32_t(now-lastReport)>=5000){
+    lastReport=now;
+    Serial.printf("[boot-ready] waiting display %d motion %d audio %d control %d radio %d\n",health.display,health.motion,health.audio,health.control,health.radio);
+  }
+}
+
 void deviceBegin() {
   commands=xQueueCreate(12,sizeof(Command));publication=xSemaphoreCreateMutex();
   snprintf(name,sizeof(name),"ThinCube-%06X",unsigned(ESP.getEfuseMac()>>24)&0xffffff);
@@ -343,8 +398,10 @@ void deviceBegin() {
     soundConfigure(p.getUChar("sndVol",35),p.getBool("sndMute",false));
     gain=p.getFloat("gain",1);brightness=p.getUChar("bright",128);pose.uprightSign=p.getInt("upright",0);pose.faceUpSign=p.getInt("faceup",0);
     deepSleepEnabled=p.getBool("deep",false);
+    powerLedDebug=p.getBool("ledDebug",p.getBool("pwrLed",false));
     snprintf(key,sizeof(key),"%s",p.getString("key","").c_str());p.end();
   }
+  Serial.printf("[power-led] boot debug %d on %d available %d\n",powerLedDebug,powerLedOn,powerLedAvailable);
   snprintf(pin,sizeof(pin),"%06u",unsigned(esp_random()%1000000));
   audioBegin(transportMode()==TransportMode::BLE);if(!key[0])deviceOpenPairing();
   healthy=commands&&publication&&M5.Mic.isEnabled();
@@ -435,6 +492,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       if(c.flags&128)deepSleepEnabled=c.deepSleep&&deepSleepAvailable();
       if(c.flags&(32|64))soundConfigure(c.flags&64?c.soundVolume:soundVolume(),c.flags&32?c.soundMuted:soundMuted());
       if(!voice.allowed||voice.muted)voice.stop();if(!persist())deepSleepEnabled=previousDeep;
+      if(c.flags&256)changePowerLedDebug(c.powerLedDebug);
     } else if(!strcmp(c.op,"wifi")) {
       if(busy||transportBusy()||powerCalibrationOwnsUI())continue;voice.stop();strcpy(nextSSID,c.ssid);strcpy(nextPass,c.pass);networkPending=true;
     } else if(c.fd==owner&&c.epoch==epoch) {

@@ -5,6 +5,8 @@
 #include "ui_status.h"
 
 void deviceBegin();
+void devicePowerLedBegin(); // after M5.begin: retain the startup indicator
+void devicePowerLedTick(uint32_t ms); // local readiness, independent of OTA/host
 void deviceRegister(httpd_handle_t server);
 void deviceTick(uint32_t ms, bool sleeping, bool busy);
 bool deviceAuthorized(httpd_req_t* req);

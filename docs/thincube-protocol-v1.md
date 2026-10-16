@@ -103,3 +103,23 @@ HTTP `/api/settings` 与BLE `settings` 增加可选布尔值 `deepSleep`，默�
 Mac仅将5秒内已确认的当前通知之后的断连显示为深睡待机，并保留正常自动重连；取消、新epoch及重新连接使旧通知失效。USB供电下不进入深睡。主控断电后A/B或Mac指令不能唤醒；运动或机身电源键是配置的唤醒源。实现与实机验证范围见 [v0.4.18记录](power-saving-v0.4.18.md)。
 
 `power` 增加可选 `cpuMHz`（当前CPU频率）、`bleInterval`（实际BLE连接间隔，单位1.25ms；0表示未知/未连接）、`onlineSaving`（主循环的在线闲置省电模式）字段。BLE待机请求60–90ms，语音开始前要求已确认的连接间隔不超过30ms；恢复期间 `voiceBlock=radio`，Mac显示正在恢复语音连接速度。手动开始请求最多保留5秒，过期、停止、失联或禁用/静音时清除，音频采样格式不变。
+
+## v0.4.21 启动指示灯与运行时常亮调试
+
+默认自动控制电源指示灯：`M5.begin()` 返回后立即确认亮灯，覆盖后续初始化；主循环确认以下本机条件全部成立并连续运行2000ms后熄灯：显示缓冲及屏幕尺寸有效、至少完成一帧显示；IMU 有有效且一秒内新鲜的样本；麦克风配置与捕获队列初始化成功；控制队列、发布互斥量及本机初始化健康；BLE 服务启动成功或 Wi-Fi 工作模式已启用。正常请求采集时，还要求采集已启动并已取得音频帧；静音、休息或配网等主动停止采集的状态无需等待音频帧。
+
+任一条件失败或观察期间两次主循环检查间隔超过250ms，重新计算连续就绪时间；启动未就绪时保持亮灯，每五秒串口输出 `[boot-ready] waiting` 及各模块状态，成功时输出一次 `local startup stable`。完成后本次启动的就绪状态锁定，后续离线、休眠或闲置不重新进入启动指示。此判断不要求 AP 可达、Wi-Fi 连接成功、Mac 连接、配对、倒置校准或传音，不修改60秒 OTA 健康确认及90秒失败回滚逻辑。熄灯表示本机启动检查通过，不替代 OTA 确认或完整硬件检测。
+
+HTTP `/api/settings` 与 BLE `settings` 增加可选布尔值 `powerLedDebug`：`true` 为“运行时常亮（调试）”，`false` 为默认自动。非布尔值拒绝，鉴权与排队行为沿用既有设置协议。完整状态包含 `powerLedDebug`（保存的选择）、`powerLedReady`（本次本机启动就绪）、`powerLedOn`（最后确认的输出）及 `powerLedAvailable`（该输出已成功写入读回）。不可用时 `powerLedOn` 不表示当前物理灯状态；固件最多每秒重试一次，确认恢复后更新状态。就绪、灯输出或可用性变化与设置命令均触发新的完整 BLE 快照，快速状态沿用同一 epoch 的完整基线。
+
+选择保存于 `thincube/ledDebug`，缺少配置时默认false；兼容读取 v0.4.20 原型的 `pwrLed` 选择，第一次调试设置保存后以 `ledDebug` 为准。无论保存的选择如何，启动阶段始终亮灯；启动中关闭调试仅恢复自动，不能提前熄灯。就绪后开启调试立即亮灯，关闭立即熄灯。硬件写入读回并保存成功后才发布新的选择；失败时尝试恢复原策略的输出，不将失败请求发布为成功。
+
+通过固定 M5Unified 的 `M5.Power.M5pm1.setLedEnLevel()` 只修改 `PWR_CFG (0x06)` bit4，保留充电、DCDC、LDO 和外部5V位。PM1 在业务固件运行前的复位/下载闪灯保持硬件原有行为。Mac v0.4.13 在“设备 → 设备设置”的亮度下方提供“运行时常亮（调试）”，采用设备确认值，等待期间禁用重复操作，3秒未确认会提示重试，断连取消等待。旧固件缺少 `powerLedDebug` 或指示灯暂不可控时禁用开关。
+
+硬件依据：[M5PM1 官方手册 V1.9](https://m5stack-doc.oss-cn-shenzhen.aliyuncs.com/1207/M5PM1_Datasheet_CN.pdf) 的 `PWR_CFG` 位定义及 LED 指示状态；固定驱动 [M5PM1_Class.inl](https://github.com/m5stack/M5Unified/blob/8b63555e7bd9ac71978c55ad868fd1d1d3b2ef3e/src/utility/power/M5PM1_Class.inl#L106)。本次没有电流或放电实测，关闭常亮灯的续航收益尚未量化。
+
+验证包括启动条件失败/恢复、连续两秒门限、主循环停顿、实际 IMU 数据失效及过期、静音离线配网、调试切换、重启与计时回绕。macOS Swift 测试需要 Mac；当前云端未连接设备，未烧录或进行真机灯光验证。Mac 上应运行 `bash scripts/build-macos.sh`，由脚本完成签名并替换 `/Applications/ThinCube.app`；固件包通过现有升级流程安装。
+
+云端验证结果：`bash scripts/test-local.sh` 的24个 C++ 测试程序及5个 Python 测试通过；新增启动 LED 测试在固件所用的 C++11 下再次通过。`pio run -d firmware` 最终编译成功，RAM 105592 / 327680 字节，Flash 1719209 / 2097152 字节。`python3 scripts/package-firmware.py` 生成 `artifacts/thincube-v0.4.21.bin` 及清单，镜像型号、版本、大小、SHA-256 与最终编译产物一致性校验通过。Linux 跳过 macOS Swift 测试，未构建或安装 Mac 应用。
+
+真机验收：分别在 Wi-Fi / BLE、USB / 电池供电下确认启动亮灯、就绪两秒后熄灯，Wi-Fi 不可达、无 Mac、未配对、静音、朝下休息和配网均可正常进入就绪；本机初始化失败时灯保持亮并能从串口定位条件。确认调试选择切换、重启恢复、启动中关闭调试不能提前熄灯，以及充电与原有供电功能正常。验证断连、旧固件、设置失败时界面不误报成功。实际电流与续航需另行测量。

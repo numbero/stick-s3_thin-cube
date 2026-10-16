@@ -16,6 +16,7 @@ void uiDumpMetrics();              /* 把实测字体/屏幕度量打到串口 *
 void uiPoke();                     /* BtnA：逗小爪 */
 void uiWakeForVoice();             /* Explicit Mac start wakes the companion. */
 bool uiHealthy();
+bool uiStartupReady(); // local display initialized and at least one frame presented
 void uiUsbDebug();                 /* USB screenshot: stable idle UI, excludes pairing PIN/live/OTA */
 
 bool uiButtonAForVoice(); // physical combo gestures consume A before voice injection

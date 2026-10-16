@@ -344,6 +344,10 @@ struct MainView: View {
                                   valueLabel: "\(Int(model.brightness))") {
                     Task { await model.apply(["brightness": Int(model.brightness)]) }
                 }
+                Toggle("运行时常亮（调试）", isOn: Binding(get: { model.status?.powerLedDebug ?? false }, set: { model.setPowerLedDebug($0) }))
+                    .disabled(model.powerLedSettingBusy || model.status?.powerLedDebug == nil || model.status?.powerLedAvailable != true)
+                Text(model.status?.powerLedDebug == nil ? "此设置需要升级设备固件。" : "默认自动：启动期间亮灯，本机就绪并稳定运行约 2 秒后熄灭，无需等待联网或连接 Mac。开启此项会在运行期间保持亮灯，设备会记住选择。")
+                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 Toggle("深睡待机", isOn: Binding(get: { model.deepSleepEnabled }, set: { model.setDeepSleep($0) }))
                     .disabled(model.deepSleepSettingBusy || model.status?.deepSleepAvailable != true)
                 Text("开启后，使用电池静置五分钟会断开连接并进入深睡；拿起或按机身电源键唤醒后自动重连。USB供电时保持在线。深睡期间A/B键和Mac指令不能唤醒。需要完全关机时，先唤醒并关闭此开关。")
