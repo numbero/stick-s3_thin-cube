@@ -43,6 +43,7 @@ bool landscapeVisible=false;
 IdlePowerPolicy idlePower;
 FaceDownRestPolicy faceDownRest;
 bool standby=false,screenOff=false,codecOff=false;
+bool presented=false;
 bool wakeAConsumed=false;
 ClawdStory::Policy stories;
 ClawdStory::Id storyDemoRequest=ClawdStory::Id::None;
@@ -109,6 +110,7 @@ void present(uint32_t ms){
     }
     canvas.pushSprite(0,0);
   }
+  presented=true;
   if(wasActive && !rotation.active){
     if((previousRotation&1)&&rotation.target==0&&!s_debug){storyPortrait=true;storyPortraitAt=ms;}
     Serial.printf("[rotation] done target %d elapsed %ums frames %u\n",rotation.target,unsigned(millis()-rotation.started),unsigned(rotationFrames));
@@ -294,6 +296,7 @@ void uiBegin(){
   uiCalibrate();
 }
 bool uiHealthy(){return canvas.getBuffer()!=nullptr;}
+bool uiStartupReady(){return uiHealthy()&&M5.Display.width()>0&&M5.Display.height()>0&&presented;}
 uint8_t uiActualBrightness(){return M5.Display.getBrightness();}
 uint32_t uiIdleAgeMs(uint32_t ms){return idlePower.elapsed(ms);}
 void uiPowerActivity(){idlePower.activity(millis());}

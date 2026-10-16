@@ -51,6 +51,7 @@ void audioTick(bool capture) {
     }
   }
 }
+bool audioInitialized() { return completed&&M5.Mic.isEnabled(); }
 bool audioReady() { return running.load()&&!refillFailed.load(); }
 bool audioPowerDown() {
   if(running.load()||M5.Speaker.isPlaying())return false;

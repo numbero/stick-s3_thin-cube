@@ -20,6 +20,7 @@ struct DeviceStatus: Decodable {
     let bleMtu: Int?, bleAudioDropped: UInt32?
     let power: PowerTelemetry?
     let deepSleep, deepSleepAvailable: Bool?
+    let powerLedDebug, powerLedAvailable: Bool?
     let sleep: DeviceSleepNotice?
     struct Calibration: Decodable { let seq: UInt32; let op: String; let ok: Bool }
     let epoch: UInt32, allowed: Bool, muted: Bool, localSound: Bool, streaming: Bool, manual: Bool, held: Bool
@@ -82,10 +83,12 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published private(set) var reconnecting = false
     @Published private(set) var deviceSleeping = false
     @Published private(set) var deepSleepSettingBusy = false
+    @Published private(set) var powerLedSettingBusy = false
     @Published private(set) var deepSleepEnabled = false
     private var sleepTracker = DeviceSleepTracker()
     private var sleepAckInFlight = false
     private var deepSleepSettingTask: Task<Void, Never>?
+    private var powerLedSettingTask: Task<Void, Never>?
     @Published var audioPrepared = false
     @Published private(set) var switching = false
     @Published private(set) var transportPhase = ""
@@ -787,6 +790,30 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             if !Task.isCancelled, self.generation == connectionID { self.note = "设备未确认深睡设置，请稍后重试。" }
         }
     }
+    func setPowerLedDebug(_ enabled: Bool) {
+        guard connected, !updating, !switching, !powerLedSettingBusy,
+              status?.powerLedAvailable == true, status?.powerLedDebug != nil, status?.powerLedDebug != enabled else { return }
+        powerLedSettingBusy = true
+        let connectionID = generation
+        powerLedSettingTask = Task { [weak self] in
+            guard let self else { return }
+            defer { if self.generation == connectionID { self.powerLedSettingBusy = false } }
+            do { _ = try await self.json("api/settings", body: ["powerLedDebug": enabled]) }
+            catch {
+                if !Task.isCancelled, self.generation == connectionID { self.note = error.localizedDescription }
+                return
+            }
+            let deadline = Date().addingTimeInterval(3)
+            while !Task.isCancelled, self.generation == connectionID, Date() < deadline {
+                if self.status?.powerLedDebug == enabled, self.status?.powerLedAvailable == true {
+                    self.note = enabled ? "运行时常亮已开启，设备已保存设置。" : "已恢复自动：启动就绪后熄灭电源指示灯。"
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 100_000_000)
+            }
+            if !Task.isCancelled, self.generation == connectionID { self.note = "设备未确认指示灯调试设置，请稍后重试。" }
+        }
+    }
     private func prepareAudioNow() throws {
         try bridge.start()
         do { if !activeBLE { try receiver.start(buffer: buffer) }; audioPrepared = true }
@@ -965,6 +992,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     private func teardown(note message: String) {
         deepSleepSettingTask?.cancel(); deepSleepSettingTask = nil; deepSleepSettingBusy = false
+        powerLedSettingTask?.cancel(); powerLedSettingTask = nil; powerLedSettingBusy = false
         sleepAckInFlight = false
         pairingSession = nil; pairingError = ""; pin = ""; connectionProgress.reset()
         let authorization = pairingContinuation; pairingContinuation = nil

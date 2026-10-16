@@ -80,6 +80,7 @@ void setup(){
   cfg.output_power=false;
   cfg.fallback_board=m5::board_t::board_M5StickS3;
   M5.begin(cfg);
+  devicePowerLedBegin();
   if(!M5.Display.width()){delay(100);M5.Display.init();}
   Serial.begin(115200);
   delay(200);
@@ -148,6 +149,7 @@ void loop(){
   if(!otaActive()&&deviceTakeNetwork(nextSSID,nextPass)){deviceStop();audioTick(false);otaStopServer();provBeginWithCredentials(nextSSID,nextPass);memset(nextPass,0,sizeof(nextPass));}
   uiPowerTick(millis(),validMarked);
   uiStoriesTick(millis());
+  devicePowerLedTick(millis());
 
   /* 心跳：每 5 秒一行，不用接屏幕也能判断固件是否活着、跑在哪个槽 */
   static uint32_t lastBeat = 0;
