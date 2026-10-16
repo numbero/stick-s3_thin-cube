@@ -52,8 +52,8 @@ struct ChangeWiFiSheet: View {
     @FocusState private var ssidFocused: Bool
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            HelpSectionHeader("更换 Wi-Fi", helpTitle: "更换网络帮助") {
-                HelpParagraph("验证与保存", "设备会先验证新网络，成功后保存并重启；失败时保留旧凭据。更换网络会停止语音，Mac 接入同一局域网后可恢复连接。")
+            HelpSectionHeader("配置 Wi-Fi", helpTitle: "配置网络帮助") {
+                HelpParagraph("验证与保存", "蓝牙或 Wi-Fi 连接均可提交配置。验证期间暂时断开，成功后保存并使用新 Wi-Fi；失败恢复原连接和原网络。设备配对与校准保留。请让 Mac 接入目标网络。")
                 HelpParagraph("开放网络", "网络无需密码时，将密码留空。")
             }.font(.title2.bold())
             VStack(alignment: .leading, spacing: 6) {
@@ -73,8 +73,8 @@ struct ChangeWiFiSheet: View {
                 if submitting { ProgressView("正在提交…").controlSize(.small) }
                 Spacer()
                 Button("取消") { dismiss() }.keyboardShortcut(.cancelAction).disabled(submitting)
-                Button("验证并更换") { submit() }.keyboardShortcut(.defaultAction)
-                    .disabled(submitting || ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !model.connected || model.currentTransport != "wifi" || model.updating || model.switching)
+                Button("验证并使用 Wi-Fi") { submit() }.keyboardShortcut(.defaultAction)
+                    .disabled(submitting || ssid.isEmpty || !model.canConfigureWiFi)
             }
         }.padding(24).frame(width: 420)
             .onAppear { ssidFocused = true }
@@ -82,8 +82,7 @@ struct ChangeWiFiSheet: View {
             .onChange(of: password) { _ in error = nil }
     }
     private func submit() {
-        guard !submitting, !ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              model.connected, model.currentTransport == "wifi", !model.updating, !model.switching else { return }
+        guard !submitting, !ssid.isEmpty, model.canConfigureWiFi else { return }
         submitting = true; error = nil
         model.wifiSSID = ssid; model.wifiPassword = password
         Task {

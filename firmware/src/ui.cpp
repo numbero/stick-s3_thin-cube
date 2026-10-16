@@ -1,4 +1,5 @@
 #include "ui.h"
+#include "connection_setup.h"
 #include "power_save.h"
 #include "deep_sleep.h"
 #include "theme.h"
@@ -314,7 +315,7 @@ uint32_t uiIdleAgeMs(uint32_t ms){return idlePower.elapsed(ms);}
 void uiPowerActivity(){idlePower.activity(millis());}
 void uiSetOrientation(uint8_t requested,uint32_t ms){
   if(powerCalibrationOwnsUI())requested=0;
-  const bool critical=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
+  const bool critical=connectionSetupActive()||provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(critical)games.cancel();
   else if(games.active())return;
   if(critical)requested=requested==2?2:0;
@@ -352,7 +353,7 @@ void uiUsbDebug(){
     }
     if(!strcmp(command,"story stop")){storyDemoRequest=ClawdStory::Id::None;stories.cancel(esp_random());s_debug=false;continue;}
     if(strcmp(command,"screen"))continue;
-    if(otaActive()||devicePairWindow()||transportBusy()||deviceStreaming()||rotation.active||!uiHealthy()){Serial.println("TCFB unavailable: idle stable screen only");continue;}
+  if(otaActive()||(devicePairWindow()&&!connectionSetupActive()&&!provActive())||transportBusy()||deviceStreaming()||rotation.active||!uiHealthy()){Serial.println("TCFB unavailable: idle stable screen only");continue;}
     // Serial frame export can take longer than the local capture queue. Do not
     // export in a live session; pause only local capture until the next tick.
     audioTick(false);
@@ -532,7 +533,7 @@ void uiTick(uint32_t ms){
     standby=false;
     if(petState()==PET_SLEEP&&(button||(!faceDownRest.active&&devicePose()!=DevicePose::FaceDown)))goWake(button?"button":"motion");
   }
-  const bool special=provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
+  const bool special=connectionSetupActive()||provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(special)games.cancel();
   const auto restAction=faceDownRest.update(ms,devicePose(),devicePoseCandidate(),motionActivityHealthy(ms),
     special||games.active()||deviceStreaming()||uiRotationActive(),motionActivityDetected(),button);
@@ -545,7 +546,20 @@ void uiTick(uint32_t ms){
   }
 
   /* 配网 / OTA 期间接管屏幕与按键，暂停小爪的日常循环 */
-  if (provActive()){ gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),false,false,true);gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);tickProv(); return; }
+  if(connectionSetupActive()){
+    gameButton.update(ms,M5.BtnA.isPressed(),false,false,false,true);
+    gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);
+    connectionSetupTick(M5.BtnA.isPressed(),M5.BtnB.isPressed(),M5.BtnA.wasClicked(),M5.BtnB.wasClicked());return;
+  }
+  if (provActive()){
+    gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),false,false,true);
+    const auto action=gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,provCanLeave(provStage())&&!transportBusy(),false);
+    if(action==ButtonGestures::Action::Switch){
+      char id[37];snprintf(id,sizeof(id),"setup-%08x",unsigned(ms));
+      const char* error=requestTransportSwitch(TransportMode::BLE,"button",id);if(error)uiLog("switch: %s",error);
+    }
+    tickProv();return;
+  }
   if (otaActive()){ gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),false,false,true);gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);tickOta(); return; }
 
   const auto gesture=gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),M5.BtnB.wasClicked(),!transportBusy(),!deviceStreaming());
@@ -559,7 +573,11 @@ void uiTick(uint32_t ms){
   if(M5.BtnA.isPressed()&&M5.BtnA.pressedFor(1200)&&!debugHeld&&!debugBlocked&&!games.active()&&!gameButton.blocked){
     debugHeld=true;s_debug=!s_debug;goWake("diagnostics");idlePower.activity(ms);
   }
-  if(gesture==ButtonGestures::Action::Mute){deviceToggleMute();uiLog(deviceMuted()?"mic muted":"mic unmuted");}
+  if(gesture==ButtonGestures::Action::Mute&&!devicePairWindow()){deviceToggleMute();uiLog(deviceMuted()?"mic muted":"mic unmuted");}
+  if(devicePairWindow()){
+    if(M5.BtnA.wasClicked()&&!gestures.suppressA)deviceRefreshPairing();
+    if(gesture==ButtonGestures::Action::Mute)deviceCancelPairing();
+  }
   if(gesture==ButtonGestures::Action::Pair){deviceOpenPairing();goWake("pairing");uiLog("pair via %s",transportName(transportMode()));}
   if(gesture==ButtonGestures::Action::Switch){
     char id[37];snprintf(id,sizeof(id),"button-%08x-%08x",unsigned(esp_random()),unsigned(ms));
@@ -665,8 +683,8 @@ void uiStoriesTick(uint32_t ms){
   const bool changing=known&&(lastCharging!=s_chgShown||lastState!=petState());
   const bool connectionChanged=known&&lastConnected!=connected;
   const bool disconnected=known&&lastConnected&&!connected;
-  const bool busy=provActive()||otaActive()||transportBusy()||devicePairWindow()||games.active()||
-    deviceStreaming()||deviceHeld()||uiRotationActive()||gestures.switchReady||gestures.comboReady||
+  const bool busy=connectionSetupActive()||provActive()||otaActive()||transportBusy()||devicePairWindow()||games.active()||
+    connectionSetupActive()||deviceStreaming()||deviceHeld()||uiRotationActive()||gestures.switchReady||gestures.comboReady||
     (transportHintUntil&&int32_t(transportHintUntil-ms)>0);
   const bool takeover=busy||s_debug;
   if(!known||changing||connectionChanged||storyButton||storyMotion||takeover||lastTakeover!=takeover)storyQuietAt=ms;
@@ -722,8 +740,8 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     }
     return;
   }
-  const bool busy=provActive()||otaActive()||transportBusy()||devicePairWindow()||
-    games.active()||deviceStreaming()||deviceVoicePreparing()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
+  const bool busy=connectionSetupActive()||provActive()||otaActive()||transportBusy()||devicePairWindow()||
+    connectionSetupActive()||games.active()||deviceStreaming()||deviceVoicePreparing()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
   // Broken/stale IMU input cannot be interpreted as prolonged inactivity.
   const bool blocked=busy||!motionActivityHealthy(ms);
   // Commands may start a protected task after uiTick in the same main loop.
@@ -805,9 +823,40 @@ void renderDebug(uint32_t ms){
   present(ms);
 }
 
+void renderConnectionSetup(uint32_t ms){
+  canvas.fillSprite(C::screen);canvas.setTextWrap(false,false);
+  auto line=[&](const char* text,int y,uint16_t color,const lgfx::IFont* font=&fonts::Font0){
+    canvas.setFont(font);canvas.setTextSize(1);canvas.setTextDatum(textdatum_t::top_center);canvas.setTextColor(color);canvas.drawString(text,W/2,y);
+  };
+  const auto page=connectionSetupPage();
+  if(page==SetupPage::Choose){
+    line("ThinCube",12,C::ink,&fonts::Font2);rule(39);line("CHOOSE CONNECTION",48,C::dim);
+    canvas.drawRect(8,70,W-16,54,C::dim2);line("A  BLUETOOTH",79,C::ok,&fonts::Font2);line("No Wi-Fi required",105,C::dim);
+    canvas.drawRect(8,138,W-16,54,C::dim2);line("B  WI-FI",147,C::glow,&fonts::Font2);line("Use device hotspot",173,C::dim);
+    line("Then pair on Mac",216,C::dim);
+  }else if(page==SetupPage::ResetConfirm){
+    line("RESET NETWORK",18,C::glow,&fonts::Font2);rule(45);
+    line("Clear Wi-Fi and",68,C::ink);line("Mac authorization",84,C::ink);
+    line("Keep calibration",116,C::dim);line("and device settings",132,C::dim);
+    line("A: CONFIRM",174,C::err,&fonts::Font2);line("B: CANCEL",205,C::dim,&fonts::Font2);
+  }else if(page==SetupPage::Error){
+    line("SETUP FAILED",35,C::err,&fonts::Font2);line(connectionSetupError(),95,C::ink);line("B: restart",175,C::dim);
+  }else{line("RESTARTING",70,C::ok,&fonts::Font2);line("Restarting...",113,C::dim);}
+  setFontNow();present(ms);
+}
+
 /* Fixed 135x240 setup layout. Critical strings are complete, never ellipsized. */
 void renderProv(uint32_t ms){
   canvas.fillSprite(C::screen);
+  if(provManagedChange()){
+    putCenter("WI-FI",30,C::glow,&fonts::Font2);
+    const auto st=provStage();
+    putCenter(st==PROV_OK?"CONNECTED":st==PROV_FAIL?"FAILED":"VERIFYING",78,st==PROV_FAIL?C::err:C::ink,&fonts::Font2);
+    char progress[24];snprintf(progress,sizeof(progress),"Attempt %d/%d",provTries(),PROV_MAX_TRIES);
+    putCenter(progress,114,C::dim,&fonts::Font0);putCenter("Pairing kept",160,C::ok,&fonts::Font0);
+    putCenter(st==PROV_FAIL?"Restoring connection":"Please wait",188,C::dim,&fonts::Font0);
+    present(ms);return;
+  }
   canvas.setTextWrap(false,false);
   canvas.setTextDatum(textdatum_t::top_left);
   int rightmost=0,bottommost=0;
@@ -848,7 +897,8 @@ void renderProv(uint32_t ms){
     case PROV_FAIL:snprintf(status,sizeof(status),"Failed. Retry: A");break;
     default:snprintf(status,sizeof(status),"Waiting for Wi-Fi");break;
   }
-  line(status,223,&fonts::Font0,1,st==PROV_FAIL?C::err:C::dim);
+  line(status,216,&fonts::Font0,1,st==PROV_FAIL?C::err:C::dim);
+  if(provCanLeave(st))line("hold B: Bluetooth",230,&fonts::Font0,1,C::ok);
   static bool reported=false;
   if(!reported){Serial.printf("[prov-ui] text bounds right=%d bottom=%d viewport=%dx%d\n",rightmost,bottommost,W,H);reported=true;}
   setFontNow();
@@ -1049,14 +1099,15 @@ void uiDraw(uint32_t ms){
   // operation pages retain their animation cadence. Only a settled static
   // portrait sleep frame can be cached; every visible input is part of its key.
   const bool staticSleep=petState()==PET_SLEEP&&W==135&&!rotation.active&&!games.active()&&
-    !deviceStreaming()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!transportBusy()&&
+    !deviceStreaming()&&!connectionSetupActive()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!transportBusy()&&
     !powerCalibrationOwnsUI()&&!s_debug&&!stories.playing()&&!gestures.switchReady&&!gestures.comboReady&&
     !(transportHintUntil&&int32_t(transportHintUntil-ms)>0);
   if(!sleepFrames.draw(ms,s_stateAt,staticSleep,{s_lvlShown,flags,rotation.target})){
     frameTiming.skipped++;return;
   }
   FrameTimer frameTimer;
-  if (provActive()){ renderProv(ms); return; }
+  if(connectionSetupActive()){renderConnectionSetup(ms);return;}
+  if (provActive()&&!gestures.switchReady&&!transportBusy()){ renderProv(ms); return; }
   if (otaActive()){ renderOta(ms); return; }
   if(gestures.switchReady||gestures.comboReady||transportBusy()||(transportHintUntil&&int32_t(transportHintUntil-ms)>0)){
     canvas.fillSprite(C::screen);const bool shortLayout=H==135;putCenter("ThinCube",shortLayout?6:12,C::ink);
@@ -1069,13 +1120,19 @@ void uiDraw(uint32_t ms){
   if(devicePairWindow()){
     canvas.fillSprite(C::screen);const bool shortLayout=H==135;
     putCenter("ThinCube",shortLayout?4:8,C::ink);rule(shortLayout?26:30);
-    putCenter("PAIR PIN",shortLayout?36:70,C::dim);
-    constexpr int pinBoxWidth=96;
-    canvas.drawRect((W-pinBoxWidth)/2,shortLayout?60:94,pinBoxWidth,shortLayout?28:32,C::glow);
-    putCenter(devicePairPin(),shortLayout?64:100,C::glow,&fonts::FreeSans12pt7b);
+    if(devicePairCodeActive()){
+      putCenter("PAIR PIN",shortLayout?36:70,C::dim);
+      constexpr int pinBoxWidth=96;
+      canvas.drawRect((W-pinBoxWidth)/2,shortLayout?60:94,pinBoxWidth,shortLayout?28:32,C::glow);
+      putCenter(devicePairPin(),shortLayout?64:100,C::glow,&fonts::FreeSans12pt7b);
+    }else{
+      putCenter("PAIR READY",shortLayout?42:76,C::ink);
+      putCenter("A: show code",shortLayout?72:108,C::dim,&fonts::Font0);
+    }
     putCenter(connectionHintLabel(transportMode()),shortLayout?104:142,C::ok);
     if(!shortLayout){
-      rule(H-42);putCenter("A+B hold: pair",H-28,C::dim);
+      rule(H-42);putCenter("A: new code",H-30,C::dim,&fonts::Font0);
+      putCenter(devicePaired()?"B: cancel":"hold B: mode",H-16,C::dim,&fonts::Font0);
     }
     present(ms);return;
   }

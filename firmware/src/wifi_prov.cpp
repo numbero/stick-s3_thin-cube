@@ -1,5 +1,10 @@
 #include "wifi_prov.h"
 #include "ui.h"
+#include "transport.h"
+#include "ota.h"
+#include "deep_sleep.h"
+#include "power_status.h"
+#include "connection_setup.h"
 #include <WiFi.h>
 #include <Preferences.h>
 #include <DNSServer.h>
@@ -22,6 +27,21 @@ char apSSID[32]{},apPass[9]{},error[32]{};
 std::atomic<int> tries{0};
 uint32_t verifyAt=0,okAt=0;
 bool started=false,scanPending=false;
+WiFiChange change;
+bool managedChange=false;
+uint32_t changeRebootAt=0;
+bool saveChange(const WiFiChange& value){
+  Preferences p;if(!p.begin("clawd",false))return false;
+  const bool ok=p.putBytes("wifiChange",&value,sizeof(value))==sizeof(value);p.end();return ok;
+}
+void finishChange(bool success,const char* why){
+  std::lock_guard<std::mutex> g(lock);
+  auto next=change;next.finish(success,why);
+  if(!saveChange(next)){strcpy(error,"storage failed");stage=PROV_FAIL;return;}
+  change=next;
+  if(!success&&!transportSetMode(change.previous)){strcpy(error,"mode storage failed");stage=PROV_FAIL;return;}
+  changeRebootAt=millis()+1500;
+}
 const char portal[]=R"HTML(<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>ThinCube 配网</title><style>body{max-width:440px;margin:40px auto;padding:20px;background:#0d0d0d;color:#f8b000;font:16px/1.6 system-ui}input,button,select{box-sizing:border-box;width:100%;padding:12px;margin:8px 0;font:inherit}label{display:block}button{cursor:pointer}#status{white-space:pre-wrap}</style><h1>ThinCube</h1><p>选择 2.4 GHz Wi-Fi。连接成功后，在 Mac 上打开 ThinCube 完成配对。</p><select id="net"><option value="">选择网络或手动输入</option></select><form id="form"><label>Wi-Fi 名称<input id="ssid" maxlength="32" required autocomplete="off"></label><label>Wi-Fi 密码<input id="pass" type="password" maxlength="63" autocomplete="off"></label><button id="save">连接 Wi-Fi</button></form><p role="status" id="status"></p><script>
 const $=s=>document.querySelector(s);let polling=false;
 async function scan(){try{const r=await fetch('/scan');const list=await r.json();for(const n of list){const o=document.createElement('option');o.value=n.s;o.textContent=n.s+' ('+n.r+' dBm)';$('#net').append(o);}if(!list.length)setTimeout(scan,1800);}catch{}}
@@ -40,7 +60,7 @@ esp_err_t save(httpd_req_t* r){
   if(r->content_len<2||r->content_len>512)return response(r,"{}","application/json","400 Bad Request");
   char b[513];size_t n=0;while(n<r->content_len){int got=httpd_req_recv(r,b+n,r->content_len-n);if(got<=0)return ESP_FAIL;n+=got;}b[n]=0;
   cJSON* j=cJSON_Parse(b);auto s=cJSON_GetObjectItemCaseSensitive(j,"ssid");auto p=cJSON_GetObjectItemCaseSensitive(j,"password");
-  const bool valid=cJSON_IsString(s)&&cJSON_IsString(p)&&strlen(s->valuestring)>0&&strlen(s->valuestring)<=32&&strlen(p->valuestring)<=63&&(strlen(p->valuestring)==0||strlen(p->valuestring)>=8);
+  const bool valid=cJSON_IsString(s)&&cJSON_IsString(p)&&validWiFiCredentials(s->valuestring,p->valuestring);
   Submission sub{};if(valid){strcpy(sub.ssid,s->valuestring);strcpy(sub.pass,p->valuestring);}cJSON_Delete(j);
   if(!valid)return response(r,"{\"error\":\"invalid_wifi\"}","application/json","400 Bad Request");
   return xQueueSend(submissions,&sub,0)==pdTRUE?response(r,"{\"accepted\":true}"):response(r,"{\"error\":\"busy\"}","application/json","503 Service Unavailable");
@@ -70,9 +90,51 @@ bool provSaveCreds(const char* ssid,const char* pass){
   Submission sub{};snprintf(sub.ssid,sizeof(sub.ssid),"%s",ssid);snprintf(sub.pass,sizeof(sub.pass),"%s",pass);
   bool ok=p.putBytes("wifi",&sub,sizeof(sub))==sizeof(sub);p.end();return ok;
 }
-void provForgetCreds(){Preferences p;if(p.begin("clawd",false)){p.remove("wifi");p.remove("ssid");p.remove("pass");p.end();}}
+bool provForgetCreds(){
+  Preferences p;if(!p.begin("clawd",false))return false;
+  bool ok=true;for(const auto* name:{"wifi","ssid","pass","wifiChange"})if(p.isKey(name))ok=p.remove(name)&&ok;
+  p.end();if(ok){std::lock_guard<std::mutex> g(lock);change=WiFiChange{};}return ok;
+}
+void provLeave(){stage=PROV_LEAVING;memset(target.pass,0,sizeof(target.pass));}
+WiFiChange provChangeRecord(){std::lock_guard<std::mutex> g(lock);return change;}
+bool provManagedChange(){return managedChange;}
+const char* provRequestNetwork(const char* ssid,const char* pass,const char* requestId){
+  if(!validWiFiCredentials(ssid,pass))return "invalid_wifi";
+  if(!requestId||!requestId[0]||strlen(requestId)>36)return "invalid_request";
+  std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
+  if(!admission.owns_lock()||provActive()||otaActive()||transportBusy()||deepSleepPending()||powerCalibrationOwnsUI()||connectionSetupActive())return "busy";
+  if(!transportBootVerified())return "boot_unverified";
+  std::lock_guard<std::mutex> g(lock);
+  WiFiChange next;next.phase=WiFiChange::Pending;next.previous=transportMode();
+  strcpy(next.ssid,ssid);strcpy(next.pass,pass);strcpy(next.request,requestId);
+  if(!saveChange(next))return "storage_failed";
+  const auto previous=change;
+  change=next;
+  if(!transportScheduleRestart(TransportMode::WiFi,"network",requestId)){
+    change=previous;saveChange(previous);return "storage_failed";
+  }
+  return nullptr;
+}
+void provPrepareChange(){
+  Preferences p;if(p.begin("clawd",true)){
+    if(p.getBytesLength("wifiChange")==sizeof(change))p.getBytes("wifiChange",&change,sizeof(change));p.end();
+  }
+  if(!change.valid())change=WiFiChange{};
+  if(change.phase==WiFiChange::Pending&&!transportSetMode(TransportMode::WiFi)){strcpy(error,"mode storage failed");stage=PROV_FAIL;}
+  if(change.rebootPending){
+    if(!transportSetMode(change.phase==WiFiChange::Succeeded?TransportMode::WiFi:change.previous)){strcpy(error,"mode storage failed");stage=PROV_FAIL;return;}
+    change.rebootPending=false;if(!saveChange(change)){strcpy(error,"storage failed");stage=PROV_FAIL;}
+  }
+}
+bool provResumeChange(){
+  if(stage==PROV_FAIL)return true;
+  if(change.phase!=WiFiChange::Pending)return false;
+  managedChange=true;provBeginWithCredentials(change.ssid,change.pass);return true;
+}
 void provBegin(){
   if(started)return;started=true;submissions=xQueueCreate(2,sizeof(Submission));
+  if(!submissions){strcpy(error,"queue allocation failed");stage=PROV_FAIL;return;}
+  if(managedChange){WiFi.mode(WIFI_STA);stage=PROV_WAIT;uiLog("wifi verify");return;}
   snprintf(apSSID,sizeof(apSSID),"ThinCube-Setup-%06X",unsigned(ESP.getEfuseMac()>>24)&0xffffff);
   Preferences p;
   if(p.begin("thincube",false)){
@@ -99,9 +161,14 @@ void provBegin(){
   for(auto& route:routes)httpd_register_uri_handler(server,&route);
   WiFi.scanNetworks(true);scanPending=true;stage=PROV_WAIT;uiLog("wifi setup");
 }
-void provBeginWithCredentials(const char* ssid,const char* pass){provBegin();Submission s{};snprintf(s.ssid,sizeof(s.ssid),"%s",ssid);snprintf(s.pass,sizeof(s.pass),"%s",pass);xQueueSend(submissions,&s,0);}
+void provBeginWithCredentials(const char* ssid,const char* pass){
+  provBegin();Submission s{};snprintf(s.ssid,sizeof(s.ssid),"%s",ssid);snprintf(s.pass,sizeof(s.pass),"%s",pass);
+  if(!submissions||stage==PROV_FAIL||xQueueSend(submissions,&s,0)!=pdTRUE){stage=PROV_FAIL;if(managedChange)finishChange(false,"setup_failed");}
+  memset(s.pass,0,sizeof(s.pass));
+}
 void provTick(){
-  if(!started)return;dns.processNextRequest();
+  if(changeRebootAt&&int32_t(millis()-changeRebootAt)>=0)ESP.restart();
+  if(!started||stage==PROV_LEAVING)return;if(!managedChange)dns.processNextRequest();
   if(scanPending){int n=WiFi.scanComplete();if(n>=0){auto list=cJSON_CreateArray();for(int i=0;i<n&&i<20;i++){auto item=cJSON_CreateObject();cJSON_AddStringToObject(item,"s",WiFi.SSID(i).c_str());cJSON_AddNumberToObject(item,"r",WiFi.RSSI(i));cJSON_AddItemToArray(list,item);}char* j=cJSON_PrintUnformatted(list);if(j){std::lock_guard<std::mutex> g(lock);scanJSON=j;cJSON_free(j);}cJSON_Delete(list);WiFi.scanDelete();scanPending=false;}}
   Submission sub;const uint32_t ms=millis();
   if((stage==PROV_WAIT||stage==PROV_FAIL)&&xQueueReceive(submissions,&sub,0)==pdTRUE){
@@ -109,12 +176,13 @@ void provTick(){
   }
   if(stage==PROV_VERIFY){
     if(WiFi.status()==WL_CONNECTED&&WiFi.SSID()==target.ssid){
-      if(provSaveCreds(target.ssid,target.pass)){stage=PROV_OK;okAt=ms;memset(target.pass,0,sizeof(target.pass));}
+      if(provSaveCreds(target.ssid,target.pass)){stage=PROV_OK;okAt=ms;memset(target.pass,0,sizeof(target.pass));if(managedChange)finishChange(true,"");}
       else{std::lock_guard<std::mutex> g(lock);strcpy(error,"storage failed");stage=PROV_FAIL;}
     }else if(ms-verifyAt>12000){
       if(tries>=PROV_MAX_TRIES){std::lock_guard<std::mutex> g(lock);strcpy(error,"network or password");stage=PROV_FAIL;WiFi.disconnect(false,false);}
       else{tries++;WiFi.disconnect(false,false);WiFi.begin(target.ssid,target.pass);verifyAt=ms;}
     }
   }
-  if(stage==PROV_OK&&ms-okAt>2000)ESP.restart();
+  if(managedChange&&stage==PROV_FAIL&&!changeRebootAt)finishChange(false,error[0]?error:"network_or_password");
+  if(!managedChange&&stage==PROV_OK&&ms-okAt>2000)ESP.restart();
 }

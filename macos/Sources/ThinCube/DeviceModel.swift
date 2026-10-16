@@ -17,6 +17,7 @@ struct DeviceStatus: Decodable {
     struct TransportTransaction: Decodable { let requestId: String, source: String, target: String, previous: String, phase: String }
     let deviceId: String?, transport: String?, transportSwitch: Bool?, audioRate: Int?, transportAudioReady: Bool?
     let transportTransaction: TransportTransaction?, transportError: String?, rejectedRequest: String?
+    let wifiProvisioning: Bool?
     let bleMtu: Int?, bleAudioDropped: UInt32?
     let power: PowerTelemetry?
     let deepSleep, deepSleepAvailable: Bool?
@@ -112,6 +113,10 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private var shortcutRecordingCount = 0
     @Published var wifiSSID = ""
     @Published var wifiPassword = ""
+    @Published private(set) var networkConfigurationNote = ""
+    var canConfigureWiFi: Bool { connected && !connecting && !updating && !switching && (currentTransport == "wifi" || status?.wifiProvisioning == true) }
+    private var pairingV2 = false
+    private var networkIntent: (id: String, previous: String, started: Date)?
     @Published var gain = 1.0
     @Published var brightness = 128.0
     @Published var soundVolume = 35.0
@@ -271,7 +276,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private func json(_ path: String, body: [String: Any]? = nil, authenticated: Bool = true) async throws -> [String: Any] {
         if activeBLE {
             var value = body ?? [:]
-            switch path { case "api/info": value["op"] = "info"; case "api/pair": value["op"] = "pair"; case "api/status": value["op"] = "status"; case "api/settings": value["op"] = "settings"; default: throw ClientError.message("此操作需要 Wi-Fi，请先切换连接方式。") }
+            guard let operation = DeviceBLEOperation.forPath(path) else { throw ClientError.message("此操作需要 Wi-Fi，请先切换连接方式。") }
+            value["op"] = operation
             return try await discovery.ble.exchange(value)
         }
         let (data, response) = try await session.data(for: request(path, body: body, authenticated: authenticated))
@@ -364,6 +370,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             guard info["protocol"] as? Int == 1, let found = info["name"] as? String, found.hasPrefix("ThinCube-") else { throw ClientError.message("设备协议不兼容，请先安装 ThinCube v0.3 固件。") }
             guard selected.accepts(found) else { throw ClientError.message("此地址上的设备与所选设备不同，请重新选择设备并点击连接。") }
             name = found; version = info["version"] as? String ?? ""
+            pairingV2 = info["pairingV2"] as? Bool == true
             target.deviceID = found
             connectionProgress.advance(.authorization, attempt: attempt)
             loadShortcut()
@@ -383,6 +390,9 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             do { try await authenticate(secret: secret, found: found) }
             catch ClientError.http(let code, _) where code == 401 || code == 403 {
                 cachedCredential = nil
+                if PairingRecovery.pauseAutomaticConnection(automatic: automatic, paired: info["paired"] as? Bool == true, windowOpen: info["pairingOpen"] as? Bool == true) {
+                    throw ClientError.message("设备正在重新配对，已暂停自动连接以便其他上位机连接。需要继续使用本机时，请在设备上取消重新配对，再点击连接。")
+                }
                 secret = try await authorizeDevice(found: found, attempt: attempt)
                 try await authenticate(secret: secret, found: found)
             }
@@ -448,6 +458,12 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         _ = try await json("api/status")
     }
     private func authorizeDevice(found: String, attempt: UUID) async throws -> String {
+        if pairingV2 {
+            do { _ = try await json("api/pair/begin", body: [:], authenticated: false) }
+            catch ClientError.http(_, let error) where error == "pairing_not_open" {
+                throw ClientError.message("设备已配对。请在设备上同时按住 A+B 三秒并松开，再点击连接；现有 Wi-Fi 与设置会保留。")
+            }
+        }
         var hint = "请输入设备屏幕上的六位配对码；配对后 Wi-Fi 和蓝牙共用已保存的授权。"
         while generation == attempt, !Task.isCancelled {
             pin = ""; connectionProgress.advance(.pairing, attempt: attempt); note = hint
@@ -463,6 +479,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
                 return pairedKey
             } catch ClientError.http(let status, let error) where (status == 400 || status == 403) && error == "invalid_pin_or_window" {
+                if pairingV2 { _ = try await json("api/pair/begin", body: [:], authenticated: false) }
                 hint = "配对码有误或已过期。请核对 PAIR PIN；如已过期，同时按住 A+B 3 秒并松开，重新连接后输入新码。"
                 pairingError = hint
             }
@@ -500,6 +517,17 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             transportPhase = "已连接设备当前模式：" + transportLabel; note = transportPhase
         }
         if let status { handleTransport(status) }
+        if networkIntent != nil {
+            let attempt = generation
+            Task { [weak self] in
+                guard let self else { return }
+                do {
+                    let value = try await self.json("api/network")
+                    let result = try JSONDecoder().decode(NetworkConfigurationStatus.self, from: JSONSerialization.data(withJSONObject: value))
+                    if self.generation == attempt { self.handleNetworkConfiguration(result) }
+                } catch { if self.generation == attempt { self.networkConfigurationNote = "设备已连接，网络配置结果暂未读取，请重新连接后确认。" } }
+            }
+        }
     }
     // Opt-in hardware validation: open an encrypted BLE link without proving
     // the saved application key. No credential is read or exposed by this test.
@@ -850,13 +878,30 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     @discardableResult func changeWifi() async -> Bool {
         defer { wifiPassword = "" }
-        guard connected, !updating, !wifiSSID.isEmpty, !activeBLE, !switching else { note = "请先连接 Wi-Fi，再修改网络。"; return false }
+        guard canConfigureWiFi else { note = "请先连接设备；通过蓝牙配网需要新版设备固件。"; return false }
+        let configuration = WiFiConfiguration(ssid: wifiSSID, password: wifiPassword)
+        if let error = configuration.validationError { note = error; return false }
         await command("stop")
         do {
-            _ = try await json("api/wifi", body: ["ssid": wifiSSID, "password": wifiPassword])
-            wifiPassword = ""; connectionLost(note: "设备正在验证新的 Wi-Fi，成功后重启。Mac 接入同一网络后将自动恢复连接；失败可通过设备热点重试。")
+            let id = UUID().uuidString, previous = currentTransport
+            _ = try await json("api/wifi", body: ["ssid": configuration.ssid, "password": configuration.password, "requestId": id])
+            if status?.wifiProvisioning == true {
+                networkIntent = (id, previous, Date()); transportIntent = (id, "wifi", previous, Date())
+                preferredTransport = "wifi"; switching = true
+                networkConfigurationNote = "正在验证 Wi-Fi。成功后使用新网络；失败后恢复原连接，配对和原网络会保留。"
+            }
+            wifiPassword = ""; connectionLost(note: "设备正在验证 Wi-Fi，连接将暂时中断。请让 Mac 接入目标网络，等待设备返回结果。")
             return true
         } catch { note = error.localizedDescription; return false }
+    }
+    private func handleNetworkConfiguration(_ result: NetworkConfigurationStatus) {
+        guard connected, let intent = networkIntent,
+              result.requestId == intent.id, result.finished else { return }
+        networkIntent = nil; transportIntent = nil; switching = false; modeBeforeSwitch = nil
+        preferredTransport = currentTransport
+        if connectionMode != .automatic { setConnectionMode(currentTransport == "ble" ? .ble : .wifi) }
+        networkConfigurationNote = result.phase == "succeeded" ? "Wi-Fi 配置成功，已保留原配对。" : "Wi-Fi 配置失败：\(result.failureDescription)，已恢复原连接及网络配置，请修改后重试。"
+        transportPhase = ""; note = networkConfigurationNote
     }
     func chooseFirmware() {
         guard !activeBLE, !switching else { note = "固件升级需要 Wi-Fi，请先切换连接模式。"; return }
@@ -896,6 +941,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         } catch { keys.release(); buffer.setSession(nil); note = error.localizedDescription }
     }
     func disconnect(note message: String = "已断开") {
+        networkIntent = nil
         sleepTracker.reset(); deviceSleeping = false
         recovery.disconnect(); switching = false; transportIntent = nil; modeBeforeSwitch = nil; transportPhase = ""; UserDefaults.standard.set(false, forKey: "autoReconnect")
         teardown(note: message)
@@ -939,7 +985,11 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 transportPhase = "已选择" + (intent.target == "ble" ? "蓝牙" : "Wi-Fi") + "，等待设备连接；可长按设备 B 键再次切换。"
             }
         }
-        if transportIntent != nil && connectionMode != .automatic { resolvingMode = ConnectionMode(rawValue: preferredTransport) ?? .automatic }
+        if let intent = networkIntent {
+            resolvingMode = WiFiConfigurationRecovery.mode(elapsed: Date().timeIntervalSince(intent.started),
+                bluetoothRediscovered: discovery.devices.contains(where: { $0.id == target.deviceID && $0.host.hasPrefix("ble://") }))
+            preferredTransport = resolvingMode.rawValue
+        } else if transportIntent != nil && connectionMode != .automatic { resolvingMode = ConnectionMode(rawValue: preferredTransport) ?? .automatic }
         else { resolvingMode = connectionMode }
         guard let id = target.deviceID else { return }
         let endpoints = discovery.devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) }
@@ -963,7 +1013,11 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         // The publisher delivers before Discovery.devices changes. Resolve with
         // the delivered snapshot so switching devices can wake recovery immediately.
         guard let id = target.deviceID else { return }
-        let mode = transportIntent == nil || connectionMode == .automatic ? connectionMode : (ConnectionMode(rawValue: preferredTransport) ?? .automatic)
+        let mode: ConnectionMode
+        if let intent = networkIntent {
+            mode = WiFiConfigurationRecovery.mode(elapsed: Date().timeIntervalSince(intent.started),
+                bluetoothRediscovered: devices.contains(where: { $0.id == id && $0.host.hasPrefix("ble://") }))
+        } else { mode = transportIntent == nil || connectionMode == .automatic ? connectionMode : (ConnectionMode(rawValue: preferredTransport) ?? .automatic) }
         guard let match = mode.endpoint(for: id, in: devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) },
                                        preferredTransport: preferredTransport, wifiAvailable: pathSatisfied,
                                        bluetoothAvailable: discovery.ble.permissionHint == nil), target.host != match.host else { return }
@@ -972,7 +1026,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if recovery.enabled { scheduleRecovery(immediate: true) }
     }
     private func scheduleRecovery(immediate: Bool = false) {
-        guard recovery.canAttempt, !connected, !connecting, !updating, !target.host.isEmpty else { return }
+        guard recovery.canAttempt, !connected, !connecting, !updating, !target.host.isEmpty || networkIntent != nil else { return }
         if reconnectTask != nil && !immediate { return }
         reconnectTask?.cancel()
         refreshRecoveryAddress()
@@ -987,6 +1041,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
             guard let self, !Task.isCancelled, self.generation == id, self.recovery.canAttempt else { return }
             self.reconnectTask = nil; self.reconnecting = false
+            if self.target.host.isEmpty, self.networkIntent != nil { self.scheduleRecovery(); return }
             self.beginConnection(automatic: true)
         }
     }

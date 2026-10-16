@@ -13,6 +13,7 @@ namespace {
 TransportRecord record;
 uint32_t rebootAt=0;
 bool storageOK=true;
+bool hasChoice=false;
 std::mutex admission;
 std::atomic<bool> busyPublished{false};
 bool save(const TransportRecord& value){
@@ -22,7 +23,7 @@ bool save(const TransportRecord& value){
 }
 void transportBegin(){
   Preferences p;if(p.begin("tcmode",true)){
-    if(p.getBytesLength("transaction")==sizeof(record))p.getBytes("transaction",&record,sizeof(record));p.end();
+    if(p.getBytesLength("transaction")==sizeof(record))hasChoice=p.getBytes("transaction",&record,sizeof(record))==sizeof(record)&&record.valid();p.end();
   }
   if(!record.valid())record=TransportRecord{};
   const auto before=record.phase;record.boot();
@@ -40,14 +41,30 @@ const char* requestTransportSwitch(TransportMode target,const char* source,const
   if(!id||!id[0]||strlen(id)>36)return "invalid_request";
   if(!strcmp(record.request,id))return record.mode==target&&record.phase!=SwitchPhase::RolledBack?nullptr:"request_conflict";
   if(!storageOK)return "storage_failed";
-  if(provActive()||otaActive()||transportBusy()||deepSleepPending())return "busy";
+  const bool leaveSetup=provCanLeave(provStage())&&target==TransportMode::BLE&&!strcmp(source,"button");
+  if((provActive()&&!leaveSetup)||otaActive()||transportBusy()||deepSleepPending())return "busy";
   if(!transportBootVerified())return "boot_unverified";
   if(target==transportMode())return "already_active";
   // Wi-Fi without saved credentials starts provisioning after reboot.
   auto next=record;if(!next.begin(target,id,source))return "invalid_request";
   if(!save(next))return "storage_failed";
+  if(leaveSetup)provLeave();
   record=next;busyPublished=true;deviceStop();soundCancel();audioTick(false);
   rebootAt=millis()+700;return nullptr;
+}
+
+bool transportHasChoice(){return connectionChoiceSaved(hasChoice,record);}
+bool transportSetMode(TransportMode mode){
+  TransportRecord next;next.mode=next.previous=mode;strcpy(next.source,"setup");
+  if(!save(next))return false;record=next;hasChoice=true;return true;
+}
+bool transportScheduleRestart(TransportMode mode,const char* source,const char* id){
+  if(!id||!id[0]||strlen(id)>36||!source||strlen(source)>8)return false;
+  auto next=record;next.previous=transportMode();next.mode=mode;next.phase=SwitchPhase::Pending;
+  strcpy(next.request,id);strcpy(next.source,source);
+  if(!save(next))return false;
+  record=next;hasChoice=true;busyPublished=true;deviceStop();soundCancel();audioTick(false);
+  rebootAt=millis()+700;return true;
 }
 bool transportCommit(const char* id){
   auto next=record;if(!next.commit(id))return false;

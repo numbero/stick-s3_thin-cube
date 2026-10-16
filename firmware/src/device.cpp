@@ -16,6 +16,8 @@
 #include "motion.h"
 #include "deep_sleep.h"
 #include "ima_adpcm.h"
+#include "wifi_prov.h"
+#include "pairing_policy.h"
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <WiFiUdp.h>
@@ -53,22 +55,23 @@ bool deepSleepEnabled=false;
 PowerLedPolicy powerLedPolicy;
 bool powerLedDebug=false,powerLedOn=true,powerLedAvailable=false;
 uint32_t powerLedAttemptAt=0;
-std::atomic<uint32_t> pairingUntil{0};
-uint32_t lastPairTry = 0, epoch = 0, edgeSeq = 0, seq = 0, clockSample = 0;
-int pairTries = 0, owner = -1, outputPort = 0;
+PairingPolicy pairing;
+std::atomic<bool> pairingVisible{false},pairingCodeActive{false};
+char candidateKey[33]{};
+uint32_t candidateAt=0, epoch = 0, edgeSeq = 0, seq = 0, clockSample = 0;
+int owner = -1, outputPort = 0;
 IPAddress outputIP;
 float gain = 1;
 uint8_t brightness = 128, nonce[16] = {};
 Edge edges[32];
 unsigned edgeRead = 0, edgeCount = 0;
-bool lastHeld = false, lastStreaming = false, networkPending = false, healthy = false;
+bool lastHeld = false, lastStreaming = false, healthy = false;
 bool captureRequested=false,voicePreparing=false;
 PoseVoiceController poseVoice;
 uint32_t calibrationSeq = 0;
 char calibrationOp[24] = {};
 bool calibrationOK = false;
 bool runtimeRegistered = false;
-char nextSSID[33] = {}, nextPass[65] = {};
 bool bleAuthenticated=false;
 uint32_t bleSeenGeneration=0, challengeUntil=0;
 char challenge[33]={}, switchError[40]={}, rejectedRequest[37]={};
@@ -76,6 +79,32 @@ char challenge[33]={}, switchError[40]={}, rejectedRequest[37]={};
 
 void hexRandom(char* out, size_t bytes) {
   for (size_t i=0;i<bytes;i++) { uint8_t b=esp_random(); snprintf(out+i*2,3,"%02x",b); }
+}
+bool sameKey(const char* a,const char* b){
+  if(!a||!b||strlen(a)!=32||strlen(b)!=32)return false;
+  unsigned diff=0;for(unsigned i=0;i<32;i++)diff|=uint8_t(a[i])^uint8_t(b[i]);return !diff;
+}
+void publishPairing(){pairingVisible=pairing.visible;pairingCodeActive=pairing.active(millis());}
+void newPairCode(){snprintf(pin,sizeof(pin),"%06u",unsigned(esp_random()%1000000));memset(candidateKey,0,sizeof(candidateKey));}
+bool beginPairing(){
+  xSemaphoreTake(publication,portMAX_DELAY);
+  const bool allowed=pairing.visible||!key[0];
+  if(allowed){if(!pairing.visible)pairing.offer(millis(),false);if(pairing.begin(millis()))newPairCode();publishPairing();}
+  xSemaphoreGive(publication);return allowed;
+}
+const char* issuePairKey(const char* code,char* result){
+  xSemaphoreTake(publication,portMAX_DELAY);
+  const bool allowed=pairing.attempt(millis())&&code&&strlen(code)==6&&!strcmp(code,pin);
+  if(allowed){hexRandom(candidateKey,16);candidateAt=millis();strcpy(result,candidateKey);}
+  xSemaphoreGive(publication);return allowed?nullptr:"invalid_pin_or_window";
+}
+// The Mac saves the candidate to Keychain before proving possession. A failed
+// PIN, cancelled dialog or failed storage write never destroys the old key.
+bool commitCandidate(){
+  if(!candidateKey[0]||!pairing.active(millis())||uint32_t(millis()-candidateAt)>30000)return false;
+  Preferences p;if(!p.begin("thincube",false))return false;
+  const bool saved=p.putString("key",candidateKey)==32;p.end();if(!saved)return false;
+  strcpy(key,candidateKey);memset(candidateKey,0,sizeof(candidateKey));pairing.close();publishPairing();return true;
 }
 bool persist() {
   Preferences p;
@@ -127,30 +156,37 @@ bool auth(httpd_req_t* r) {
   json(r,"{\"error\":\"pairing_required\"}","401 Unauthorized"); return false;
 }
 esp_err_t info(httpd_req_t* r) {
-  char b[256];
+  char b[384];
   xSemaphoreTake(publication,portMAX_DELAY);bool paired=key[0];xSemaphoreGive(publication);
-  snprintf(b,sizeof(b),"{\"name\":\"%s\",\"version\":\"%s\",\"protocol\":1,\"transport\":\"wifi\",\"transportSwitch\":true,\"paired\":%s}",name,firmwareVersion(),paired?"true":"false");
+  snprintf(b,sizeof(b),"{\"name\":\"%s\",\"version\":\"%s\",\"protocol\":1,\"transport\":\"wifi\",\"transportSwitch\":true,\"pairingV2\":true,\"pairingOpen\":%s,\"wifiProvisioning\":true,\"paired\":%s}",name,firmwareVersion(),devicePairWindow()?"true":"false",paired?"true":"false");
   return json(r,b);
+}
+esp_err_t pairingBegin(httpd_req_t* r){
+  cJSON* request=body(r);const bool valid=cJSON_IsObject(request);cJSON_Delete(request);
+  if(!valid)return json(r,"{\"error\":\"bad_json\"}","400 Bad Request");
+  return beginPairing()?json(r,"{\"expiresIn\":120}"):json(r,"{\"error\":\"pairing_not_open\"}","403 Forbidden");
 }
 esp_err_t pair(httpd_req_t* r) {
   cJSON* j=body(r); const cJSON* p=cJSON_GetObjectItemCaseSensitive(j,"pin");
-  xSemaphoreTake(publication,portMAX_DELAY);
-  const uint32_t now=millis();
-  const bool ok=devicePairWindow() && pairTries<10 && uint32_t(now-lastPairTry)>1000 && cJSON_IsString(p) && !strcmp(p->valuestring,pin);
-  lastPairTry=now; pairTries++;
-  if (!ok) { xSemaphoreGive(publication); cJSON_Delete(j); return json(r,"{\"error\":\"invalid_pin_or_window\"}","403 Forbidden"); }
-  hexRandom(key,16);
-  Preferences prefs;bool saved=false;
-  if(prefs.begin("thincube",false)){saved=prefs.putString("key",key)==32;prefs.end();}
-  if(!saved){key[0]=0;xSemaphoreGive(publication);cJSON_Delete(j);return json(r,"{\"error\":\"key_storage_failed\"}","500 Internal Server Error");}
-  pairingUntil=0;
-  char b[128]; snprintf(b,sizeof(b),"{\"key\":\"%s\",\"name\":\"%s\"}",key,name);
-  xSemaphoreGive(publication); cJSON_Delete(j); return json(r,b);
+  char issued[33]{};const auto error=issuePairKey(cJSON_IsString(p)?p->valuestring:nullptr,issued);cJSON_Delete(j);
+  if(error)return json(r,"{\"error\":\"invalid_pin_or_window\"}","403 Forbidden");
+  char b[128];snprintf(b,sizeof(b),"{\"key\":\"%s\",\"name\":\"%s\"}",issued,name);memset(issued,0,sizeof(issued));return json(r,b);
 }
 esp_err_t status(httpd_req_t* r) {
   if(!auth(r)) return ESP_OK;
   char b[sizeof(published)]; xSemaphoreTake(publication,portMAX_DELAY); strcpy(b,published); xSemaphoreGive(publication);
   return json(r,b);
+}
+void networkResult(cJSON* result){
+  const auto network=provChangeRecord();
+  cJSON_AddStringToObject(result,"requestId",network.request);
+  cJSON_AddStringToObject(result,"phase",network.phase==WiFiChange::Pending?"pending":network.phase==WiFiChange::Succeeded?"succeeded":network.phase==WiFiChange::Failed?"failed":"idle");
+  cJSON_AddStringToObject(result,"error",network.error);
+}
+esp_err_t networkStatus(httpd_req_t* r){
+  if(!auth(r))return ESP_OK;
+  auto result=cJSON_CreateObject();networkResult(result);char b[192]{};
+  cJSON_PrintPreallocated(result,b,sizeof(b),false);cJSON_Delete(result);return json(r,b);
 }
 esp_err_t settings(httpd_req_t* r) {
   if(!auth(r)) return ESP_OK;
@@ -171,11 +207,13 @@ esp_err_t settings(httpd_req_t* r) {
 esp_err_t wifi(httpd_req_t* r) {
   if(!auth(r))return ESP_OK;
   cJSON* j=body(r);auto s=cJSON_GetObjectItemCaseSensitive(j,"ssid");auto p=cJSON_GetObjectItemCaseSensitive(j,"password");
-  if(!cJSON_IsString(s)||!cJSON_IsString(p)||strlen(s->valuestring)<1||strlen(s->valuestring)>32||strlen(p->valuestring)>63||(strlen(p->valuestring)>0&&strlen(p->valuestring)<8)){
+  if(!cJSON_IsString(s)||!cJSON_IsString(p)||!validWiFiCredentials(s->valuestring,p->valuestring)){
     cJSON_Delete(j);return json(r,"{\"error\":\"invalid_wifi\"}","400 Bad Request");
   }
-  Command c;strcpy(c.op,"wifi");strcpy(c.ssid,s->valuestring);strcpy(c.pass,p->valuestring);cJSON_Delete(j);
-  return enqueue(c)?json(r,"{\"accepted\":true}"):json(r,"{\"error\":\"busy\"}","503 Service Unavailable");
+  auto id=cJSON_GetObjectItemCaseSensitive(j,"requestId");char generated[37];snprintf(generated,sizeof(generated),"wifi-%08x-%08x",unsigned(esp_random()),unsigned(millis()));
+  const char* error=provRequestNetwork(s->valuestring,p->valuestring,cJSON_IsString(id)?id->valuestring:generated);cJSON_Delete(j);
+  if(!error)return json(r,"{\"accepted\":true}");
+  char message[80];snprintf(message,sizeof(message),"{\"error\":\"%s\"}",error);return json(r,message,"409 Conflict");
 }
 esp_err_t ws(httpd_req_t* r) {
   if(r->method==HTTP_GET) {
@@ -245,6 +283,7 @@ void publish() {
   cJSON_AddStringToObject(j,"deviceId",name);
   cJSON_AddStringToObject(j,"transport",transportName(transportMode()));
   cJSON_AddBoolToObject(j,"transportSwitch",true);
+  cJSON_AddBoolToObject(j,"wifiProvisioning",true);
   cJSON_AddNumberToObject(j,"audioRate",transportMode()==TransportMode::BLE?16000:48000);
   cJSON_AddStringToObject(j,"audioCodec",transportMode()==TransportMode::BLE?"ima_adpcm":"pcm_s16le");
   cJSON_AddBoolToObject(j,"transportAudioReady",transportMode()!=TransportMode::BLE||bleAudioReady());
@@ -304,33 +343,38 @@ void bleRequest(const char* text){
     cJSON_AddStringToObject(result,"name",name);cJSON_AddStringToObject(result,"version",firmwareVersion());
     cJSON_AddNumberToObject(result,"protocol",1);cJSON_AddBoolToObject(result,"paired",key[0]);
     cJSON_AddStringToObject(result,"transport","ble");cJSON_AddBoolToObject(result,"transportSwitch",true);
+    cJSON_AddBoolToObject(result,"pairingV2",true);cJSON_AddBoolToObject(result,"pairingOpen",devicePairWindow());cJSON_AddBoolToObject(result,"wifiProvisioning",true);
+  }else if(!strcmp(operation,"pair_begin")){
+    if(!beginPairing())error="pairing_not_open";else cJSON_AddNumberToObject(result,"expiresIn",120);
   }else if(!strcmp(operation,"challenge")){
     hexRandom(challenge,16);challengeUntil=millis()+10000;cJSON_AddStringToObject(result,"nonce",challenge);
   }else if(!strcmp(operation,"pair")){
-    auto p=cJSON_GetObjectItemCaseSensitive(j,"pin");const uint32_t now=millis();
-    bool ok=devicePairWindow()&&pairTries<10&&uint32_t(now-lastPairTry)>1000&&cJSON_IsString(p)&&!strcmp(pin,p->valuestring);
-    lastPairTry=now;pairTries++;
-    if(!ok)error="invalid_pin_or_window";
-    else{
-      xSemaphoreTake(publication,portMAX_DELAY);hexRandom(key,16);
-      Preferences prefs;bool saved=false;if(prefs.begin("thincube",false)){saved=prefs.putString("key",key)==32;prefs.end();}
-      if(!saved){key[0]=0;error="key_storage_failed";}else{pairingUntil=0;cJSON_AddStringToObject(result,"key",key);cJSON_AddStringToObject(result,"name",name);}
-      xSemaphoreGive(publication);
-    }
+    auto p=cJSON_GetObjectItemCaseSensitive(j,"pin");char issued[33]{};
+    error=issuePairKey(cJSON_IsString(p)?p->valuestring:nullptr,issued);
+    if(!error){cJSON_AddStringToObject(result,"key",issued);cJSON_AddStringToObject(result,"name",name);}memset(issued,0,sizeof(issued));
   }else if(!strcmp(operation,"auth")){
     auto proof=cJSON_GetObjectItemCaseSensitive(j,"proof");uint8_t binaryKey[16]={},digest[32]={};char message[128],hex[65]={};
-    for(int i=0;i<16;i++){char h[3]={key[i*2],key[i*2+1],0};binaryKey[i]=strtoul(h,nullptr,16);}
+    const char* proofKey=pairing.visible?candidateKey:key;
+    for(int i=0;i<16;i++){char h[3]={proofKey[i*2],proofKey[i*2+1],0};binaryKey[i]=strtoul(h,nullptr,16);}
     snprintf(message,sizeof(message),"ThinCube-BLE-v1|%s|%s",name,challenge);
     const auto* md=mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
     mbedtls_md_hmac(md,binaryKey,16,(const uint8_t*)message,strlen(message),digest);
     for(int i=0;i<32;i++)snprintf(hex+i*2,3,"%02x",digest[i]);
     unsigned diff=0;if(cJSON_IsString(proof)&&strlen(proof->valuestring)==64)for(int i=0;i<64;i++)diff|=uint8_t(hex[i])^uint8_t(proof->valuestring[i]);else diff=1;
-    const bool valid=key[0]&&challenge[0]&&int32_t(challengeUntil-millis())>0&&!diff;
+    bool valid=proofKey[0]&&challenge[0]&&int32_t(challengeUntil-millis())>0&&!diff;
+    if(valid&&pairing.visible){xSemaphoreTake(publication,portMAX_DELAY);valid=commitCandidate();xSemaphoreGive(publication);}
     challenge[0]=0;memset(binaryKey,0,sizeof(binaryKey));memset(digest,0,sizeof(digest));
     if(!valid)error="pairing_required";
     else{bleAuthenticated=true;Command c;strcpy(c.op,"connect");c.fd=-2;if(!enqueue(c)){bleAuthenticated=false;error="busy";}else cJSON_AddBoolToObject(result,"authenticated",true);}
   }else if(!bleAuthenticated)error="pairing_required";
   else if(!strcmp(operation,"status")){cJSON_Delete(result);result=cJSON_Parse(published);if(!result)result=cJSON_CreateObject();}
+  else if(!strcmp(operation,"network_result")){networkResult(result);}
+  else if(!strcmp(operation,"wifi")){
+    auto s=cJSON_GetObjectItemCaseSensitive(j,"ssid"),p=cJSON_GetObjectItemCaseSensitive(j,"password"),id=cJSON_GetObjectItemCaseSensitive(j,"requestId");
+    if(!cJSON_IsString(s)||!cJSON_IsString(p)||!cJSON_IsString(id))error="invalid_wifi";
+    else error=provRequestNetwork(s->valuestring,p->valuestring,id->valuestring);
+    if(!error)cJSON_AddBoolToObject(result,"accepted",true);
+  }
   else{
     Command c;c.fd=-2;bool valid=true;snprintf(c.op,sizeof(c.op),"%s",operation);
     auto number=[&](const char* n){auto v=cJSON_GetObjectItemCaseSensitive(j,n);return cJSON_IsNumber(v)?v->valuedouble:0;};
@@ -403,14 +447,17 @@ void deviceBegin() {
   }
   Serial.printf("[power-led] boot debug %d on %d available %d\n",powerLedDebug,powerLedOn,powerLedAvailable);
   snprintf(pin,sizeof(pin),"%06u",unsigned(esp_random()%1000000));
-  audioBegin(transportMode()==TransportMode::BLE);if(!key[0])deviceOpenPairing();
+  audioBegin(transportMode()==TransportMode::BLE);
+  if(!key[0]){pairing.offer(millis(),false);publishPairing();}
   healthy=commands&&publication&&M5.Mic.isEnabled();
 }
 void deviceRegister(httpd_handle_t server) {
   const httpd_uri_t routes[]={
     {.uri="/api/info",.method=HTTP_GET,.handler=info},
     {.uri="/api/pair",.method=HTTP_POST,.handler=pair},
+    {.uri="/api/pair/begin",.method=HTTP_POST,.handler=pairingBegin},
     {.uri="/api/status",.method=HTTP_GET,.handler=status},
+    {.uri="/api/network",.method=HTTP_GET,.handler=networkStatus},
     {.uri="/api/settings",.method=HTTP_POST,.handler=settings},
     {.uri="/api/wifi",.method=HTTP_POST,.handler=wifi},
     {.uri="/control",.method=HTTP_GET,.handler=ws,.is_websocket=true},
@@ -424,19 +471,32 @@ void deviceRegister(httpd_handle_t server) {
 bool deviceAuthorized(httpd_req_t* req) {
   char supplied[33]{};
   if(httpd_req_get_hdr_value_str(req,"X-ThinCube-Key",supplied,sizeof(supplied))!=ESP_OK)return false;
-  xSemaphoreTake(publication,portMAX_DELAY);unsigned diff=0;
-  for(int i=0;i<32;i++)diff|=uint8_t(supplied[i])^uint8_t(key[i]);
-  const bool ok=key[0]&&strlen(supplied)==32&&!diff;xSemaphoreGive(publication);return ok;
+  xSemaphoreTake(publication,portMAX_DELAY);
+  const bool ok=pairing.visible?(sameKey(supplied,candidateKey)&&commitCandidate()):sameKey(supplied,key);
+  xSemaphoreGive(publication);return ok;
 }
 void deviceOpenPairing() {
   voice.stop();voice.setPeer(false,millis());controlLease.reset();owner=-1;edgeRead=edgeCount=0;
   xSemaphoreTake(publication,portMAX_DELAY);
-  key[0]=0;snprintf(pin,sizeof(pin),"%06u",unsigned(esp_random()%1000000));pairTries=0;pairingUntil=millis()+120000;
-  Preferences p;if(p.begin("thincube",false)){p.remove("key");p.end();}
+  pairing.offer(millis(),true);newPairCode();publishPairing();
   xSemaphoreGive(publication);
   bleAuthenticated=false;bleDisconnect();
 }
-bool devicePairWindow(){const uint32_t until=pairingUntil.load();return until && int32_t(until-millis())>0;}
+bool devicePairWindow(){return pairingVisible.load();}
+bool devicePairCodeActive(){return pairingCodeActive.load();}
+bool devicePaired(){return key[0];}
+void deviceRefreshPairing(){xSemaphoreTake(publication,portMAX_DELAY);pairing.offer(millis(),true);newPairCode();publishPairing();xSemaphoreGive(publication);}
+void deviceCancelPairing(){
+  xSemaphoreTake(publication,portMAX_DELAY);memset(candidateKey,0,sizeof(candidateKey));
+  if(key[0])pairing.close();else pairing.offer(millis(),false);publishPairing();xSemaphoreGive(publication);
+  bleAuthenticated=false;bleDisconnect();
+}
+bool deviceForgetPairing(){
+  Preferences p;if(!p.begin("thincube",false))return false;
+  const bool ok=!p.isKey("key")||p.remove("key");p.end();if(!ok)return false;
+  xSemaphoreTake(publication,portMAX_DELAY);memset(key,0,sizeof(key));memset(candidateKey,0,sizeof(candidateKey));
+  pairing.offer(millis(),false);publishPairing();xSemaphoreGive(publication);bleAuthenticated=false;deviceStop();bleDisconnect();return true;
+}
 const char* devicePairPin(){return pin;}
 const char* deviceName(){return name;}
 void deviceStop(){voice.stop();}
@@ -468,19 +528,22 @@ void deviceMotion(float x,float y,float z,float gyro,uint32_t ms){
   displayOrientation.update(x,y,z,gyro,pose.uprightSign,ms,uiLandscapeActive());
   if(displayOrientation.rotation!=previous)Serial.printf("[orientation] target %u confirmed %ums\n",displayOrientation.rotation,unsigned(displayOrientation.confirmedAfterMs));
 }
-bool deviceTakeNetwork(char* ssid,char* pass){if(!networkPending)return false;strcpy(ssid,nextSSID);strcpy(pass,nextPass);networkPending=false;return true;}
 void deviceTick(uint32_t ms,bool sleeping,bool busy) {
+  xSemaphoreTake(publication,portMAX_DELAY);
+  const bool expired=pairing.expire(ms,key[0]);if(expired)memset(candidateKey,0,sizeof(candidateKey));publishPairing();
+  xSemaphoreGive(publication);
+  if(expired&&key[0]){bleAuthenticated=false;bleDisconnect();}
   if(transportMode()==TransportMode::BLE){
     if(bleSeenGeneration!=bleGeneration()){bleSeenGeneration=bleGeneration();bleAuthenticated=false;challenge[0]=0;voice.setPeer(false,ms);controlLease.reset();owner=-1;}
     static char message[769];for(int i=0;i<4&&bleTake(message,sizeof(message));i++)bleRequest(message);
   }
-  voice.sleeping=sleeping;voice.busy=busy||networkPending||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
+  voice.sleeping=sleeping;voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
   Command c;
   bool commandChanged=false;
   while(xQueueReceive(commands,&c,0)==pdTRUE) {
     if(strcmp(c.op,"heartbeat")){commandChanged=true;uiPowerActivity();}
     if(strcmp(c.op,"heartbeat")&&strcmp(c.op,"sleep_ack"))deepSleepCancel();
-    voice.busy=busy||networkPending||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
+    voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
     if(!strcmp(c.op,"connect")){
       voice.setPeer(false,ms);controlLease.reset();owner=c.fd;outputIP=IPAddress(c.address);epoch=esp_random();edgeRead=edgeCount=0;lastHeld=false;
       Serial.printf("[control] IPv4 audio peer %s\n",outputIP.toString().c_str());
@@ -493,8 +556,6 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       if(c.flags&(32|64))soundConfigure(c.flags&64?c.soundVolume:soundVolume(),c.flags&32?c.soundMuted:soundMuted());
       if(!voice.allowed||voice.muted)voice.stop();if(!persist())deepSleepEnabled=previousDeep;
       if(c.flags&256)changePowerLedDebug(c.powerLedDebug);
-    } else if(!strcmp(c.op,"wifi")) {
-      if(busy||transportBusy()||powerCalibrationOwnsUI())continue;voice.stop();strcpy(nextSSID,c.ssid);strcpy(nextPass,c.pass);networkPending=true;
     } else if(c.fd==owner&&c.epoch==epoch) {
       if(!strcmp(c.op,"heartbeat")){
         controlLease.heartbeat(ms);
@@ -510,7 +571,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       } else if(!strcmp(c.op,"transport_switch")){
         bleSnapshotDirty=true;
         const char* error;
-        if(networkPending||powerCalibrationOwnsUI())error="busy";
+        if(powerCalibrationOwnsUI())error="busy";
         else if(strcmp(c.target,"wifi")&&strcmp(c.target,"ble"))error="invalid_target";
         else error=requestTransportSwitch(!strcmp(c.target,"ble")?TransportMode::BLE:TransportMode::WiFi,"mac",c.requestId);
         snprintf(switchError,sizeof(switchError),"%s",error?error:"");snprintf(rejectedRequest,sizeof(rejectedRequest),"%s",error?c.requestId:"");
@@ -545,7 +606,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     }
   }
   if(transportMode()==TransportMode::BLE?(!bleConnected()||!bleAuthenticated):WiFi.status()!=WL_CONNECTED){voice.setPeer(false,ms);controlLease.reset();}
-  voice.busy=busy||networkPending||transportBusy()||deepSleepPending();
+  voice.busy=busy||transportBusy()||deepSleepPending();
   voice.tick(ms);
   // Prepare capture after waking, before consuming the inverted gesture. If
   // Mic startup needs a retry, VoiceState retains only this fresh gesture.
@@ -554,7 +615,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   // confirmation. A manual start cancels effects above before starting capture.
   voicePreparing=poseVoice.prepareCapture(voice,pose.candidate,uiLandscapeActive());
   const bool voiceReserved=voice.streaming||voice.pendingGesture||voice.pendingManual||voicePreparing;
-  soundTick(millis(),voiceReserved||voice.busy||networkPending||devicePairWindow());
+  soundTick(millis(),voiceReserved||voice.busy||devicePairWindow());
   captureRequested=voice.captureWanted(voicePreparing);
   audioTick(captureRequested&&!soundPlaying());
   voice.captureReady=audioReady()&&(transportMode()!=TransportMode::BLE||blePerformanceReady());

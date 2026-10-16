@@ -37,7 +37,7 @@ struct PairingSheet: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Text("设备配对窗口约两分钟。未显示 PAIR PIN 或窗口已过期时，请同时按住设备 A+B 三秒并松开，随后重新连接。")
+            Text("开始配对后有两分钟输入配对码。设备短按 A 可刷新码；更换上位机时，同时按住设备 A+B 三秒并松开，再点击连接。短按 B 可取消重新配对，原 Wi-Fi 与设置保留。")
                 .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             Text("配对保存后，Wi-Fi 和蓝牙共用授权，后续连接自动完成。")
                 .font(.callout).foregroundStyle(.secondary)

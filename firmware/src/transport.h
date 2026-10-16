@@ -12,5 +12,9 @@ const char* requestTransportSwitch(TransportMode target,const char* source,const
 bool transportCommit(const char* requestId);
 
 void transportProvisioningOverride();
+bool transportHasChoice();
+bool transportSetMode(TransportMode mode);
+// Caller holds transportAdmission(). Also supports restarting the current mode.
+bool transportScheduleRestart(TransportMode mode,const char* source,const char* requestId);
 
 std::mutex& transportAdmission();

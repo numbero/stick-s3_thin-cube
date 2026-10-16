@@ -17,6 +17,7 @@
 #include "power_save.h"
 #include "power_save_policy.h"
 #include "deep_sleep.h"
+#include "connection_setup.h"
 #include <esp_heap_caps.h>
 
 #ifndef CLAWD_FW_VER
@@ -103,8 +104,9 @@ void setup(){
   transportBegin();
   M5.update();
   const bool bootProvisioning=M5.BtnB.isPressed();
-  if(bootProvisioning)transportProvisioningOverride();
+  if(!bootProvisioning)provPrepareChange();
   deviceBegin();
+  connectionSetupBegin(bootProvisioning);
   M5.Display.setBrightness(deviceBrightness());
   motionBegin();
   uiLog("boot ok");
@@ -116,9 +118,13 @@ void setup(){
   M5.update();
   static char ssid[33], pass[65];
   const bool haveCreds = provLoadCreds(ssid, sizeof(ssid), pass, sizeof(pass));
-  if (transportMode()==TransportMode::BLE){
+  if(connectionSetupActive()){
+    uiLog("connection setup");
+  } else if(provResumeChange()){
+    uiLog("validating network");
+  } else if (transportMode()==TransportMode::BLE){
     if(!bleBegin(deviceName()))uiLog("BLE init failed");
-  } else if (!haveCreds || bootProvisioning){
+  } else if (!haveCreds){
     provBegin();
   } else {
     WiFi.mode(WIFI_STA);
@@ -136,17 +142,15 @@ void loop(){
   if(transportMode()==TransportMode::BLE)bleTick(ms);
   transportTick(ms);
   provTick();               /* 配网状态机（未进配网时是 no-op） */
-  otaTick(ms);              /* 联网后起 OTA httpd + 确认超时 / 重启 */
+  if(!connectionSetupActive())otaTick(ms);
   uiTick(ms);
 
   /* 稳定运行 60 秒才认账，放弃回滚窗口（docs/wifi-prov-ota.md §3.4） */
   static bool validMarked = false;
   if (!validMarked && ms > 60000 && uiHealthy() && deviceHealthy() && motionDiag().updates>0){ validMarked=otaMarkValid(); }
   if (!validMarked) otaRollbackUnhealthy();
-  deviceTick(ms,petState()==PET_SLEEP,provActive()||otaActive());
+  deviceTick(ms,petState()==PET_SLEEP,connectionSetupActive()||devicePairWindow()||provActive()||otaActive());
   uiSetOrientation(deviceDisplayRotation(),ms);
-  char nextSSID[33],nextPass[65];
-  if(!otaActive()&&deviceTakeNetwork(nextSSID,nextPass)){deviceStop();audioTick(false);otaStopServer();provBeginWithCredentials(nextSSID,nextPass);memset(nextPass,0,sizeof(nextPass));}
   uiPowerTick(millis(),validMarked);
   uiStoriesTick(millis());
   devicePowerLedTick(millis());

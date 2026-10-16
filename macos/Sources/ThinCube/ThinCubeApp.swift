@@ -311,7 +311,8 @@ struct MainView: View {
                         HelpParagraph("连接模式", "自动模式会跟随设备当前的 Wi-Fi 或蓝牙方式。已连接时选择 Wi-Fi 或蓝牙，会同步切换设备。")
                         HelpParagraph("首次配对", "先连接信道，再由弹窗引导输入设备 PAIR PIN。蓝牙无需系统验证码；若 macOS 显示配对确认，请点击配对。有效配对会自动复用。")
                         HelpParagraph("设备列表", "已发现表示当前扫描或局域网发现的设备；上次选择但暂未发现属于历史记录。系统忽略蓝牙设备后，仍在广播的设备仍可被发现，ThinCube 的应用授权也会保留。")
-                        HelpParagraph("Wi-Fi 配网", "首次使用时连接 ThinCube-Setup 热点，按设备屏幕上的密码登录，在 192.168.4.1 配置 Wi-Fi。Mac 与设备需在同一局域网。自动发现不到时，可在 Wi-Fi 模式下通过 IP 连接。")
+                        HelpParagraph("首次连接", "设备首次开机可选 A 蓝牙或 B Wi-Fi 热点。蓝牙无需先配网；选择热点时，按屏幕密码连接 ThinCube-Setup，在 192.168.4.1 配置网络，再在同一局域网配对。")
+                        HelpParagraph("重设网络", "按住设备 B，再单击电源/复位键，松开 B 后在设备确认。确认将清除 Wi-Fi 与应用授权，配网后需要重新配对；校准和其他设置保留。")
                         HelpParagraph("设备按键", "短按 B 静音；长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
                         HelpParagraph("电量与休眠", "红色 LOW 表示电压持续偏低，请及时充电。插拔电源后短暂显示 --% 是重新采样。默认静置五分钟息屏，电池供电下十分钟关机。开启深睡后，电池供电下五分钟进入深睡，拿起或按机身电源键唤醒后自动重连。")
                     }
@@ -356,14 +357,20 @@ struct MainView: View {
                     Label("设备正在深睡，等待拿起或电源键唤醒", systemImage: "moon.zzz.fill")
                 }
             }.disabled(!model.connected || model.updating || model.switching)
-            if model.connected && model.currentTransport == "wifi" {
+            if model.connected || !model.networkConfigurationNote.isEmpty {
                 Section {
-                    Button("更换 Wi-Fi…") { activeSheet = .changingNetwork }
-                        .disabled(model.connecting || model.updating || model.switching)
+                    if model.connected {
+                        Button("配置 Wi-Fi…") { activeSheet = .changingNetwork }
+                            .disabled(!model.canConfigureWiFi)
+                        if model.currentTransport == "ble" && model.status?.wifiProvisioning != true {
+                            Text("蓝牙配网需要升级设备固件。").font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                    if !model.networkConfigurationNote.isEmpty { Text(model.networkConfigurationNote).font(.callout).foregroundStyle(.secondary) }
                 } header: {
                     HelpSectionHeader("Wi-Fi 网络", helpTitle: "网络帮助") {
-                        HelpParagraph("更换网络", "输入新的网络名称与密码，设备验证成功后才保存并重启。Mac 接入同一局域网后会自动恢复连接。")
-                        HelpParagraph("验证失败", "旧网络凭据会保留。更换网络前会停止语音输入。")
+                        HelpParagraph("配置网络", "通过已配对的蓝牙或 Wi-Fi 连接提交新网络。验证成功后使用新 Wi-Fi，Mac 接入同一局域网后自动恢复，无需重新配对。")
+                        HelpParagraph("验证失败", "新版设备会恢复原连接和原网络。配置期间停止语音输入；暂时断开属于正常验证过程。")
                     }
                 }
             }
