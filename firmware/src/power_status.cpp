@@ -53,6 +53,7 @@ void powerTick(uint32_t ms){
   const auto selected=selectBatteryCurve(ESP.getEfuseMac(),inputSource==0,
     transportMode()==TransportMode::BLE&&!deviceStreaming()&&!soundPlaying(),uiActualBrightness());
   gauge.setCurve(selected.curve);
+  gauge.setOtaCurve(selected.otaCurve);
   curveModel=selected.model;
   gauge.sample(ms, voltageOK ? int(mv) : -1,inputSource);
   // StickS3 PM1 GPIO0 is active-low CHG_STAT. Unlike isCharging(), this API

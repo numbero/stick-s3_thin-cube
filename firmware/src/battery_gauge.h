@@ -3,9 +3,9 @@
 #include <stdint.h>
 #include "battery_curve.h"
 
-// Voltage-based estimate, not a coulomb counter. Power policy selects the
-// reference table. Keep the pinned M5Unified conversion as an OTA safety cap
-// and defensive fallback for an invalid/missing table.
+// Voltage-based estimate, not a coulomb counter. A null display curve selects
+// the pinned M5Unified conversion. An independent curve may retain a more
+// conservative OTA cap without changing the displayed percentage.
 // Filter millivolts before converting, so integer percentages do not amplify
 // ADC noise. No heap allocation or blocking sampling burst.
 class BatteryGauge {
@@ -17,6 +17,9 @@ class BatteryGauge {
   void setCurve(const BatteryCurve* curve){
     if(curve&&!curve->valid())curve=nullptr;
     if(curve_!=curve){curve_=curve;reset();}
+  }
+  void setOtaCurve(const BatteryCurve* curve){
+    otaCurve_=curve&&curve->valid()?curve:nullptr;
   }
   int estimate(int mv)const{return curve_?curve_->level(mv):voltageLevel(mv);}
 
@@ -70,14 +73,18 @@ class BatteryGauge {
     // Never let a slowly falling display or a single upward spike authorize OTA.
     const int safety=std::min(voltageLevel(rawMv_),
                     std::min(voltageLevel(medianMv_), voltageLevel(filteredMillivolts())));
-    return std::min(safety,std::min(estimate(rawMv_),
-                    std::min(estimate(medianMv_),estimate(filteredMillivolts()))));
+    return std::min(safety,std::min(otaEstimate(rawMv_),
+                    std::min(otaEstimate(medianMv_),otaEstimate(filteredMillivolts()))));
   }
   int rawMillivolts() const {return rawMv_;}
   int medianMillivolts() const {return medianMv_;}
   int filteredMillivolts() const {return filterQ_ ? (filterQ_ + 8) / 16 : -1;}
 
  private:
+  int otaEstimate(int mv) const {
+    const int display=estimate(mv);
+    return otaCurve_?std::min(display,otaCurve_->level(mv)):display;
+  }
   void reset(){
     count_ = next_ = 0;filterQ_ = 0;shown_ = medianMv_ = -1;
     haveValid_ = low_ = false;lowCount_ = recoveryCount_ = 0;
@@ -86,6 +93,7 @@ class BatteryGauge {
   static constexpr unsigned Window = 7, Warmup = 5;
   int samples_[Window]{};
   const BatteryCurve* curve_=nullptr;
+  const BatteryCurve* otaCurve_=nullptr;
   unsigned count_ = 0, next_ = 0;
   int rawMv_ = -1, medianMv_ = -1, filterQ_ = 0, shown_ = -1;
   bool haveValid_ = false, low_ = false;
