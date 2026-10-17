@@ -411,7 +411,7 @@ void devicePowerLedBegin(){
   applyPowerLed(true);
 }
 void devicePowerLedTick(uint32_t now){
-  const bool captureWanted=voice.captureWanted()&&!soundPlaying();
+  const bool captureWanted=captureRequested&&!soundPlaying();
   const PowerLedPolicy::Health health{
     uiStartupReady(),motionActivityHealthy(now),
     audioInitialized()&&(!captureWanted||(audioReady()&&audioDelivered())),healthy,
@@ -509,7 +509,8 @@ bool deviceMuted(){return voice.muted;}
 bool deviceLocalSound(){return voice.localSound&&!voice.muted;}
 bool deviceInverted(){return voice.inverted;}
 uint8_t deviceDisplayRotation(){return displayOrientation.rotation;}
-bool deviceHealthy(){return healthy&&(transportMode()==TransportMode::BLE?bleHealthy():runtimeRegistered)&&(audioDelivered()||voice.muted||(!voice.localSound&&!voice.streaming));}
+bool deviceHealthy(){return healthy&&(transportMode()==TransportMode::BLE?bleHealthy():runtimeRegistered)&&
+  audioInitialized()&&(!captureRequested||(audioReady()&&audioDelivered()));}
 bool deviceControlConnected(uint32_t ms){
   const bool link=transportMode()==TransportMode::BLE?(bleConnected()&&bleAuthenticated):WiFi.status()==WL_CONNECTED;
   return link&&!transportBusy()&&controlLease.connected(ms);
@@ -525,7 +526,7 @@ DevicePose devicePoseCandidate(){return pose.candidate;}
 void deviceMotion(float x,float y,float z,float gyro,uint32_t ms){
   pose.update(x,y,z,gyro,ms);
   const uint8_t previous=displayOrientation.rotation;
-  displayOrientation.update(x,y,z,gyro,pose.uprightSign,ms,uiLandscapeActive());
+  displayOrientation.update(x,y,z,gyro,pose.uprightSign,ms,uiOrientationLocked());
   if(displayOrientation.rotation!=previous)Serial.printf("[orientation] target %u confirmed %ums\n",displayOrientation.rotation,unsigned(displayOrientation.confirmedAfterMs));
 }
 void deviceTick(uint32_t ms,bool sleeping,bool busy) {
@@ -616,7 +617,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   voicePreparing=poseVoice.prepareCapture(voice,pose.candidate,uiLandscapeActive());
   const bool voiceReserved=voice.streaming||voice.pendingGesture||voice.pendingManual||voicePreparing;
   soundTick(millis(),voiceReserved||voice.busy||devicePairWindow());
-  captureRequested=voice.captureWanted(voicePreparing);
+  captureRequested=voice.captureWanted(voicePreparing,uiAmbientCaptureWanted(ms));
   audioTick(captureRequested&&!soundPlaying());
   voice.captureReady=audioReady()&&(transportMode()!=TransportMode::BLE||blePerformanceReady());
   poseVoice.update(voice,pose.stable,uiButtonAForVoice(),uiLandscapeActive(),pose.candidate==pose.stable);
@@ -636,6 +637,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   // A slow network must not keep an independently refilled capture queue
   // nonempty forever and starve buttons, control leases, or OTA cancellation.
   for(unsigned drained=0;drained<4&&audioTake(pcm);++drained) {
+    if(!voiceReserved&&!voice.streaming)uiAmbientSample(millis(),audioRms());
     if(!voice.streaming)continue;
     const unsigned count=transportMode()==TransportMode::BLE?160:480;
     static uint8_t packet[988];memcpy(packet,count==160?"TCB2":"TCM1",4);memcpy(packet+4,nonce,16);

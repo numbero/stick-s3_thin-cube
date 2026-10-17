@@ -23,6 +23,10 @@
 #include "ble_link.h"
 #include "ui_status.h"
 #include "clawd_stories.h"
+#include "clawd_words_render.h"
+#include "clawd_words_font.h"
+#include "clawd_light_render.h"
+#include "clawd_sound_meter.h"
 #include <WiFi.h>
 #include <esp_heap_caps.h>
 #include <stdarg.h>
@@ -59,6 +63,37 @@ ButtonGestures gestures;
 char transportHint[48]={};
 uint32_t transportHintUntil=0;
 bool s_debug=false;
+ClawdWords::Policy words;
+ClawdWords::Font wordsFont;
+ClawdLight::Policy light;
+ClawdSound::Meter soundMeter;
+bool physicalLightPoke=false;
+uint8_t lightDemoRequest=0;
+ClawdWords::Event pendingWords=ClawdWords::Event::None;
+uint32_t pendingWordsAt=0;
+bool wordsGamePlayed=false,wordsCaught=false;
+ClawdWords::Gate wordsGate(uint32_t ms);
+ClawdSound::Gate soundMeterGate(uint32_t ms);
+float lightTilt(){
+  const auto in=motionDiag();
+  return ClawdLight::tiltDegrees(in.ax,in.ay,in.az);
+}
+bool startLight(uint32_t ms,const ClawdWords::Gate& gate,bool demo=false,bool direct=false){
+  if(!demo&&words.talking())return false;
+  if(!light.start(ms,gate,lightTilt(),demo,direct))return false;
+  soundMeter.reset();
+  if(direct)words.hide();
+  else words.say(ClawdLight::Invitation,ClawdLight::Later,ms,gate,true);
+  Serial.printf("[light] start %s %s\n",demo?"demo":"physical",ClawdLight::name(light.stage()));
+  return true;
+}
+void requestWords(ClawdWords::Event event,uint32_t ms){
+  static const unsigned priority[]={0,6,2,3,1,4,5};
+  if(ClawdWords::valid(event)&&(!ClawdWords::valid(pendingWords)||
+     petStateElapsed(ms,pendingWordsAt)>750||priority[unsigned(event)]>=priority[unsigned(pendingWords)])){
+    pendingWords=event;pendingWordsAt=ms;
+  }
+}
 uint32_t rotationFrames = 0;
 struct FrameTiming {
   uint32_t count=0,totalUs=0,maxUs=0,rotatingCount=0,rotatingMaxUs=0,skipped=0;
@@ -116,7 +151,11 @@ void present(uint32_t ms){
   }
   presented=true;
   if(wasActive && !rotation.active){
-    if((previousRotation&1)&&rotation.target==0&&!s_debug){storyPortrait=true;storyPortraitAt=ms;}
+    if((previousRotation&1)&&rotation.target==0&&!s_debug){
+      storyPortrait=true;storyPortraitAt=ms;
+      if(wordsGamePlayed)requestWords(wordsCaught?ClawdWords::Event::Catch:ClawdWords::Event::Game,ms);
+      wordsGamePlayed=wordsCaught=false;
+    }
     Serial.printf("[rotation] done target %d elapsed %ums frames %u\n",rotation.target,unsigned(millis()-rotation.started),unsigned(rotationFrames));
   }
 }
@@ -292,6 +331,10 @@ const char* connectionCaption(uint32_t ms){
 }
 
 void uiBegin(){
+  soundMeter.reset();
+  light=ClawdLight::Policy();physicalLightPoke=false;lightDemoRequest=0;
+  wordsFont.begin(fonts::Font2.widthtbl,reinterpret_cast<const uint8_t* const*>(fonts::Font2.chartbl));
+  words.begin();
   idlePower.activity(millis());
   stories.begin(millis(),esp_random());storyQuietAt=millis();
   Serial.printf("[idle] sleep %us off %us battery-only\n",unsigned(IdlePowerPolicy::SleepMs/1000),unsigned(IdlePowerPolicy::OffMs/1000));
@@ -316,7 +359,7 @@ void uiPowerActivity(){idlePower.activity(millis());}
 void uiSetOrientation(uint8_t requested,uint32_t ms){
   if(powerCalibrationOwnsUI())requested=0;
   const bool critical=connectionSetupActive()||provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
-  if(critical)games.cancel();
+  if(critical){games.cancel();wordsGamePlayed=wordsCaught=false;}
   else if(games.active())return;
   if(critical)requested=requested==2?2:0;
   if(!rotation.request(requested,ms))return;
@@ -326,11 +369,15 @@ void uiSetOrientation(uint8_t requested,uint32_t ms){
   if(!rotatedCanvas.getBuffer()||critical)rotation.active=false;
 }
 bool uiRotationActive(){return rotation.active;}
+bool uiOrientationLocked(){return games.active()||light.locksOrientation();}
 void uiReportTiming(){
   Serial.printf("[render] frames %u mean %uus max %uus rotation_frames %u rotation_max %uus skipped %u\n",unsigned(frameTiming.count),unsigned(frameTiming.count?frameTiming.totalUs/frameTiming.count:0),unsigned(frameTiming.maxUs),unsigned(frameTiming.rotatingCount),unsigned(frameTiming.rotatingMaxUs),unsigned(frameTiming.skipped));
   frameTiming=FrameTiming{};
   Serial.printf("[idle] age %us standby %d face_down %d screen_off %d bright %u codec_off %d dimmed %d mic_demand %d\n",unsigned(idlePower.elapsed(millis())/1000),standby,faceDownRest.active,screenOff,unsigned(M5.Display.getBrightness()),codecOff,idleDim.dimmed,deviceCaptureRequested());
   Serial.printf("[story] active %s demo %d awake %us next %us budget %u\n",ClawdStory::name(stories.current()),stories.isDemo(),unsigned(stories.awakeMs()/1000),unsigned(stories.opportunityAt()/1000),stories.usedBudget());
+  Serial.printf("[words] mode %s event %s demo %d revision %u\n",!words.visible()?"hidden":words.talking()?"talk":"thought",ClawdWords::name(words.event()),words.isPreview(),words.revision());
+  Serial.printf("[light] stage %s demo %d x %.1f hold %ums ready %d\n",ClawdLight::name(light.stage()),light.isDemo(),light.x(),unsigned(light.progress()*ClawdLight::Policy::HoldMs),light.ready(millis()));
+  Serial.printf("[ambient] enabled %d capture %d ready %d level %.3f attention %.3f flinch %.3f samples %u\n",deviceLocalSound(),uiAmbientCaptureWanted(millis()),audioReady(),soundMeter.level(millis()),soundMeter.attention(millis()),soundMeter.flinch(millis()),soundMeter.samples());
 }
 
 // Local USB-only idle screenshot, for checking the exact pixels sent to the LCD.
@@ -342,6 +389,17 @@ void uiUsbDebug(){
     if(c!='\n'){if(length<sizeof(command)-1)command[length++]=c;continue;}
     command[length]=0;length=0;
     if(!strcmp(command,"power")){powerReportConfig();powerReport(millis());continue;}
+    if(!strcmp(command,"light")||!strcmp(command,"light play")){lightDemoRequest=!strcmp(command,"light")?1:2;continue;}
+    if(!strcmp(command,"light stop")){light.cancel();words.hide();lightDemoRequest=0;Serial.println("[light] stopped");continue;}
+    if(!strncmp(command,"words ",6)){
+      const uint32_t now=millis();const auto gate=wordsGate(now);
+      if(!strcmp(command+6,"stop")){words.stopPreview(now,esp_random());Serial.println("[words] preview stopped");continue;}
+      const bool thinking=!strcmp(command+6,"think");
+      const auto event=thinking||!strcmp(command+6,"talk")?ClawdWords::Event::Poke:ClawdWords::command(command+6);
+      light.cancel();lightDemoRequest=0;
+      const bool accepted=words.preview(event,!thinking,now,gate);
+      Serial.printf("[words] preview %s %s\n",command+6,accepted?"accepted":"unavailable: device busy");continue;
+    }
     if(!strcmp(command,"debug")){if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy())s_debug=!s_debug;continue;}
     const auto requested=!strncmp(command,"story ",6)?ClawdStory::demoCommand(command+6):ClawdStory::Id::None;
     if(ClawdStory::valid(requested)){
@@ -447,7 +505,7 @@ void uiLog(const char* fmt, ...){
   l.k = strstr(buf, "ok") ? 1 : 0;
 }
 
-void uiPoke(){ petPoke();soundRequest(SoundCue::Poke); }
+void uiPoke(){ petPoke();soundRequest(SoundCue::Poke);requestWords(ClawdWords::Event::Poke,millis()); }
 
 namespace {
 uint32_t s_stateAt = 0;          /* 当前状态进入时刻，用于状态自然回落 */
@@ -465,6 +523,7 @@ void setPet(PetState st, const char* why){
   Serial.printf("[pet] -> %s (%s)\n", stateName(st), why);
 }
 void goSleep(const char* why){
+  soundMeter.reset();
   if (petState() == PET_SLEEP) return;
   setPet(PET_SLEEP, why);
   M5.Display.setBrightness(BRIGHT_ASLEEP);
@@ -479,6 +538,7 @@ void goWake(const char* why){
   idlePower.activity(millis());
   M5.Display.setBrightness(deviceBrightness());
   setPet(PET_WAKE, why);
+  requestWords(ClawdWords::Event::Wake,millis());
   snprintf(echo, sizeof(echo), "wake");
   uiLog("wake: %s", why);
 }
@@ -601,6 +661,7 @@ void uiTick(uint32_t ms){
     if(gameAction==LandscapeButton::Action::Enter&&!wakeAConsumed&&!debugHeld&&!s_debug){
       if(petState()==PET_SLEEP)goWake("game A");
       else if(games.begin(deviceDisplayRotation(),tilt,vertical,ms)){
+        wordsGamePlayed=true;wordsCaught=false;
         idlePower.activity(ms);uiLog(catching?"catch start":"explore start");
         if(catching)Serial.printf("[catch] begin rot %u base %.1f round %u duration %ums\n",deviceDisplayRotation(),tilt,catchStars.rounds,unsigned(StarCatch::RoundMs));
         else Serial.printf("[explore] begin rot %u base %.1f,%.1f target %.1f,%.1f\n",deviceDisplayRotation(),tilt,vertical,exploration.targetX(),exploration.targetY());
@@ -613,6 +674,7 @@ void uiTick(uint32_t ms){
       idlePower.activity(ms);petBlinkNow();soundRequest(SoundCue::Discovery);uiLog("discovery %u",exploration.discoveries);
     }
     if(event.catchStars.caught){
+      wordsCaught=true;
       idlePower.activity(ms);petPoke();s_stateAt=ms;soundRequest(SoundCue::Poke);
       Serial.printf("[catch] caught %u combo %u x %.1f\n",catchStars.score,catchStars.combo,catchStars.hitX);
     }
@@ -631,6 +693,7 @@ void uiTick(uint32_t ms){
       uiLog("shaken");
     }
   } else if (ev == MEV_PICKUP && !faceDownRest.active){
+    requestWords(ClawdWords::Event::Pickup,ms);
     if (petState() == PET_SLEEP) goWake("picked up");
     else if (petState() == PET_IDLE) setPet(PET_CURIOUS, "moved");
   }
@@ -641,7 +704,7 @@ void uiTick(uint32_t ms){
   if (M5.BtnA.wasClicked() && !wakeAConsumed && !gestures.suppressA && !gameButton.blocked && !debugHeld && !s_debug && !deviceStreaming() && !deck){
     idlePower.activity(ms);
     if (petState() == PET_SLEEP) goWake("btn.A");
-    else { petPoke();soundRequest(SoundCue::Poke); s_stateAt = ms; storyPoked=true;storyPokeAt=ms;snprintf(echo, sizeof(echo), "poke"); uiLog("poke"); }
+    else { petPoke();soundRequest(SoundCue::Poke);physicalLightPoke=true;requestWords(ClawdWords::Event::Poke,ms); s_stateAt = ms; storyPoked=true;storyPokeAt=ms;snprintf(echo, sizeof(echo), "poke"); uiLog("poke"); }
   }
   if(s_debug&&M5.BtnA.wasClicked()&&!debugHeld&&!gestures.suppressA&&!deviceStreaming()&&!transportBusy()){
     storyDemoRequest=ClawdStory::Id(storyDemoNext);storyDemoRequestedAt=ms;
@@ -666,8 +729,6 @@ void uiTick(uint32_t ms){
   /* BtnA 长按：切到诊断页（IMU 数据与事件计数），再长按回主界面 */
   if (petState()==PET_IDLE && s_chgShown && !deviceStreaming())setPet(PET_CHARGING,"charging");
   if (petState()==PET_CHARGING && !s_chgShown)setPet(PET_IDLE,"charged");
-  static uint32_t lastSound=0;
-  if (deviceLocalSound() && deviceLevel()>.55f && ms-lastSound>3000 && petState()==PET_IDLE){lastSound=ms;setPet(PET_CURIOUS,"sound");}
 
   if (petState() == PET_IDLE && ms - lastBlink > 3200){ petBlinkNow(); lastBlink = ms; }
 }
@@ -685,7 +746,7 @@ void uiStoriesTick(uint32_t ms){
   const bool disconnected=known&&lastConnected&&!connected;
   const bool busy=connectionSetupActive()||provActive()||otaActive()||transportBusy()||devicePairWindow()||games.active()||
     connectionSetupActive()||deviceStreaming()||deviceHeld()||uiRotationActive()||gestures.switchReady||gestures.comboReady||
-    (transportHintUntil&&int32_t(transportHintUntil-ms)>0);
+    (transportHintUntil&&int32_t(transportHintUntil-ms)>0)||light.active();
   const bool takeover=busy||s_debug;
   if(!known||changing||connectionChanged||storyButton||storyMotion||takeover||lastTakeover!=takeover)storyQuietAt=ms;
   ClawdStory::Inputs in;
@@ -722,6 +783,70 @@ void uiStoriesTick(uint32_t ms){
     }
   }
   known=true;lastCharging=s_chgShown;lastConnected=connected;lastState=petState();lastTakeover=takeover;lastPowerSource=powerSource;
+}
+namespace {
+ClawdWords::Gate wordsGate(uint32_t ms){
+  ClawdWords::Gate gate;
+  gate.awake=petState()!=PET_SLEEP&&!screenOff&&!standby&&!faceDownRest.active;
+  gate.portrait=W==135&&displayRotation==0&&rotation.target==0;
+  gate.healthy=motionActivityHealthy(ms);
+  gate.voice=deviceStreaming()||deviceHeld();gate.preparing=deviceVoicePreparing();
+  gate.inverted=deviceInverted()||devicePoseCandidate()==DevicePose::Inverted||
+    devicePose()==DevicePose::FaceDown||devicePoseCandidate()==DevicePose::FaceDown;
+  gate.rotation=rotation.active;gate.game=games.active()||landscapeVisible;
+  gate.setup=connectionSetupActive()||provActive()||devicePairWindow();
+  gate.operation=otaActive()||transportBusy()||powerCalibrationOwnsUI()||s_debug||
+    (transportHintUntil&&int32_t(transportHintUntil-ms)>0);
+  gate.gesture=gestures.switchReady||gestures.comboReady||gestures.suppressA;
+  gate.story=stories.playing();
+  return gate;
+}
+ClawdSound::Gate soundMeterGate(uint32_t ms){
+  ClawdSound::Gate gate;gate.home=wordsGate(ms);
+  gate.enabled=deviceLocalSound();gate.light=light.active()||physicalLightPoke||lightDemoRequest;
+  gate.cue=soundSuppressListening(ms);
+  return gate;
+}
+}
+bool uiAmbientCaptureWanted(uint32_t ms){return soundMeterGate(ms).captureWanted();}
+void uiAmbientSample(uint32_t ms,float rms){
+  if(uiAmbientCaptureWanted(ms))soundMeter.sample(ms,rms);
+}
+void uiWordsTick(uint32_t ms){
+  if(!uiAmbientCaptureWanted(ms))soundMeter.reset();
+  static int previousSource=-1;
+  const int source=powerInputSource(ms);
+  if(previousSource==0&&source==1)requestWords(ClawdWords::Event::Charge,ms);
+  previousSource=source;
+  const auto gate=wordsGate(ms);
+  if(gate.voice||gate.preparing||gate.inverted||gate.setup||gate.operation)wordsGamePlayed=wordsCaught=false;
+  auto event=petStateElapsed(ms,pendingWordsAt)<=750?pendingWords:ClawdWords::Event::None;
+  const auto before=words.revision();
+  auto lightGate=gate;
+  lightGate.gesture=gate.gesture||(M5.BtnA.isPressed()&&M5.BtnA.pressedFor(350));
+  if(lightDemoRequest){
+    const bool accepted=startLight(ms,lightGate,true,lightDemoRequest==2);
+    Serial.printf("[light] preview %s\n",accepted?"accepted":"unavailable: device busy");lightDemoRequest=0;
+  }
+  if(physicalLightPoke&&lightGate.allowed()){
+    if(light.active()){if(light.tease(ms))Serial.println("[light] teased");event=ClawdWords::Event::None;}
+    else if(startLight(ms,lightGate))event=ClawdWords::Event::None;
+  }
+  physicalLightPoke=false;
+  const auto oldStage=light.stage();
+  const auto outcome=light.active()?light.update(ms,lightGate,lightTilt(),motionDiag().dev>.25f):ClawdLight::Event::None;
+  if(light.stage()!=oldStage)Serial.printf("[light] %s -> %s\n",ClawdLight::name(oldStage),ClawdLight::name(light.stage()));
+  if(outcome==ClawdLight::Event::Stored||outcome==ClawdLight::Event::Missed){
+    const bool caught=outcome==ClawdLight::Event::Stored;
+    words.say(caught?ClawdLight::Caught:ClawdLight::Missed,caught?ClawdLight::Trusted:ClawdLight::Later,ms,gate,true);
+    if(caught){petPoke();s_stateAt=ms;}else petBlinkNow();
+    Serial.printf("[light] %s %s\n",caught?"caught":"missed",light.isDemo()?"demo":"physical");event=ClawdWords::Event::None;
+  }else if(outcome==ClawdLight::Event::Cancelled){words.hide();event=ClawdWords::Event::None;Serial.println("[light] cancelled: priority or sensor");}
+  if(light.drawingLight())words.hide();
+  else if(!light.folding())words.update(ms,gate,light.active()?ClawdWords::Event::None:event,esp_random());
+  pendingWords=ClawdWords::Event::None;
+  if(words.visible()&&before!=words.revision())Serial.printf("[words] %s %s: %s / %s\n",
+    words.talking()?"say":"think",ClawdWords::name(words.event()),words.text().line[0],words.text().line[1]);
 }
 void uiPowerTick(uint32_t ms,bool bootVerified){
   if(powerCalibrationOwnsUI()){
@@ -1151,10 +1276,20 @@ void uiDraw(uint32_t ms){
   const bool asleep = (petState() == PET_SLEEP);
   pixelText(live?"VOICE":"CLAWD",PAD,27,C::ink,2);
   pixelText(powerCalibrationOwnsUI()?powerCalibrationLabel():stateName(petState()),PAD,48,asleep?C::dim:petState()==PET_UPSET?C::err:C::dim);
+  if(!live&&!asleep&&!stories.playing()&&!powerCalibrationOwnsUI())ClawdSound::draw(canvas,soundMeter,ms,
+    uiAmbientCaptureWanted(ms)&&audioReady(),C::ink,C::glow,C::dim2);
   if(stories.playing()){
     clawdStoryDraw(canvas,stories.current(),stories.elapsed(ms));
     if(stories.isDemo()){char label[16];snprintf(label,sizeof(label),"DEMO %u/%u",unsigned(stories.current())+1,ClawdStory::Count);pixelText(label,W-PAD-int(strlen(label))*6,48,C::dim);}
-  }else{petSetScale(1.55f);petDraw(&canvas,77,ms);}
+  }else{
+    petSetScale(1.55f);
+    const bool expressive=words.visible()&&!live&&!asleep;
+    const bool watching=light.drawingLight()&&!live&&!asleep;
+    const float attention=watching?(light.x()-67.5f)/40:expressive&&!words.talking()?-.4f:0;
+    petDraw(&canvas,77,ms,-1,attention,
+      expressive&&words.talking()&&!light.folding(),words.entry(ms),watching?light.reach(ms):0,
+      soundMeter.attention(ms),soundMeter.flinch(ms));
+  }
   if(live){
     // The large meter shows microphone level; the small status wave is static.
     const float level=std::max(0.f,std::min(1.f,deviceLevel()));
@@ -1164,13 +1299,26 @@ void uiDraw(uint32_t ms){
       canvas.fillRect(9+i*8,183-h/2,3,h,C::ink);
     }
   }else{
-    const char* s=thought();pixelText(s,(W-int(strlen(s))*6)/2,176,C::ink);
-    pixelText("NOISE",PAD,194,C::ink);segBar(43,197,int(deviceLevel()*10),C::ink);
+    if(light.drawingLight()&&!asleep&&!stories.playing()){
+      ClawdLight::draw(canvas,[](const char* value,int y,uint16_t ink){wordsFont.draw(canvas,value,ClawdWords::Layout::textX(wordsFont.width(value)),y,ink);},
+        light,ms,C::ink,C::glow,C::dim2);
+    }else if(words.visible()&&!asleep&&!stories.playing()){
+      if(light.folding()){
+        const int height=std::max(1,int(lroundf(39*(1-light.fraction(ms)))));
+        canvas.setClipRect(4,166+(39-height)/2,127,height);
+      }
+      ClawdWords::draw(canvas,[](const char* value,int x,int y,uint16_t ink){wordsFont.draw(canvas,value,x,y,ink);},
+        [](const char* value){return wordsFont.width(value);},
+        words,ms,C::ink,rgb565(183,133,48),C::screen);
+      if(light.folding())canvas.clearClipRect();
+    }else{
+      const char* s=thought();pixelText(s,(W-int(strlen(s))*6)/2,176,C::ink);
+    }
   }
   const char* caption=connectionCaption(ms);
   pixelText(caption,PAD,live?201:209,UIStatus::voiceIcon(deviceVoiceStatus(ms))==UIStatus::VoiceIcon::Warning?C::warn:deviceMuted()?C::err:C::ok);
   rule(224);
-  pixelText(live?"A:KEY":asleep?"A:WAKE":"A:PLAY",PAD,230,C::ink);
+  pixelText(live?"A:KEY":asleep?"A:WAKE":light.playing()?"A:TEASE":"A:PLAY",PAD,230,C::ink);
   pixelText("B:MUTE",W-PAD-36,230,C::ink);
   present(ms);
 }

@@ -7,8 +7,9 @@ VoiceState ready(){VoiceState v;v.localSound=false;v.allowed=true;v.setPeer(true
 int main(){
   {
     auto v=ready();assert(!v.captureWanted());
-    v.localSound=true;assert(v.captureWanted()); // Existing sound interaction still listens.
-    v.allowed=false;assert(v.captureWanted());v.localSound=false;assert(!v.captureWanted());
+    v.localSound=true;assert(!v.captureWanted()); // Only the visible ambient meter may request local capture.
+    assert(v.captureWanted(false,true));
+    v.allowed=false;assert(v.captureWanted(false,true));v.localSound=false;assert(!v.captureWanted(false,true));
   }
   {
     auto v=ready();PoseVoiceController c;PoseDetector p;

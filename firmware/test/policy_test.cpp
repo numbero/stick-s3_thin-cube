@@ -23,7 +23,7 @@ int main(){
   }
   {
     auto v=ready();v.setPose(true,false);v.stop();v.setPose(true,false);assert(!v.streaming);
-    v.allowed=false;assert(v.captureWanted()); // local interaction stays available with master off
+    v.allowed=false;assert(!v.captureWanted());assert(v.captureWanted(false,true)); // Local ambient meter is independent of network voice permission.
     v.localSound=false;assert(!v.captureWanted());
   }
   {

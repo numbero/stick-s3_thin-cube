@@ -11,7 +11,7 @@ std::atomic<bool> running{false}, refillFailed{false};
 bool delivered = false;
 QueueHandle_t completed = nullptr;
 std::atomic<uint32_t> dropped{0};
-float level = 0;
+float level = 0,rawRms=0;
 uint32_t retryAt = 0;
 uint32_t frames = 0;
 unsigned sampleCount=480, sampleRate=48000;
@@ -40,7 +40,7 @@ void audioTick(bool capture) {
     const bool wasRunning=running.exchange(false);
     if(wasRunning){M5.Mic.end();if(!capture)retryAt=millis()-1000;} // intentional handoff can restart immediately
     if(completed)xQueueReset(completed);
-    refillFailed.store(false);level = 0;
+    refillFailed.store(false);level = rawRms = 0;
     if(!capture)return;
   }
   if (!running.load()&&completed&&uint32_t(millis()-retryAt)>=1000) {
@@ -67,13 +67,14 @@ bool audioDelivered() { return delivered; }
 uint32_t audioFrameCount() { return frames; }
 uint32_t audioDropCount() { return dropped.load(); }
 float audioLevel() { return level; }
+float audioRms() { return rawRms; }
 bool audioTake(int16_t* out) {
   if(!audioReady()||xQueueReceive(completed,out,0)!=pdTRUE)return false;
   delivered = true;
   frames++;
   double sum = 0;
   for(unsigned i=0;i<sampleCount;i++)sum+=double(out[i])*out[i];
-  const float rms = sqrt(sum/sampleCount)/32768.0;
+  const float rms = sqrt(sum/sampleCount)/32768.0;rawRms=rms;
   level = fminf(1, fmaxf(0, (20*log10f(fmaxf(rms, .00001f))+60)/60));
   return true;
 }

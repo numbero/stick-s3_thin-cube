@@ -15,4 +15,5 @@ void petBlinkNow();                   /* 立刻眨眼一次 */
 void petSetScale(float s);            /* 缩放：单位空间 52 高 → 52*s 逻辑像素 */
 float petHeight();                    /* 当前缩放下的整体高度（含腿） */
 /* 必须画到 sprite 上：整屏推送时直接画屏的内容会被覆盖（会闪） */
-void petDraw(LGFX_Sprite* g, int originY, uint32_t ms, int originX=-1, float attention=0);
+void petDraw(LGFX_Sprite* g, int originY, uint32_t ms, int originX=-1, float attention=0,
+             bool speaking=false,float speechEntry=1,float reach=0,float soundLevel=0,float flinch=0);

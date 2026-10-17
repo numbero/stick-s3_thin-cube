@@ -153,6 +153,7 @@ void loop(){
   uiSetOrientation(deviceDisplayRotation(),ms);
   uiPowerTick(millis(),validMarked);
   uiStoriesTick(millis());
+  uiWordsTick(millis());
   devicePowerLedTick(millis());
 
   /* 心跳：每 5 秒一行，不用接屏幕也能判断固件是否活着、跑在哪个槽 */

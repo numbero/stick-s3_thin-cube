@@ -45,7 +45,7 @@ void petSetState(PetState s){if(state!=s){state=s;entered=millis();}}
 PetState petState(){return state;}
 void petPoke(){petSetState(PET_EXCITED);entered=millis();}
 void petBlinkNow(){blinkAt=millis();}
-void petDraw(LGFX_Sprite* g,int y,uint32_t ms,int originX,float attention){
+void petDraw(LGFX_Sprite* g,int y,uint32_t ms,int originX,float attention,bool speaking,float speechEntry,float reach,float soundLevel,float flinch){
   float t=ms-entered,dx=0,dy=0,eyeX=0,leftEye=6.5f,rightEye=6.5f,perkL=0,perkR=0,leg=0,step=0,brow=0;
   bool asleep=state==PET_SLEEP,live=deviceStreaming(),held=deviceHeld()&&live;
   const float dt=std::min(80u,ms-lastDraw);lastDraw=ms;
@@ -63,7 +63,20 @@ void petDraw(LGFX_Sprite* g,int y,uint32_t ms,int originX,float attention){
   if(live){perkL=perkR=3;eyeX=1.2;dx=-2*lift;dy=-lift*(.6+deviceLevel()*1.5);}
   if(!asleep&&ms-blinkAt<140)leftEye=rightEye=1.6;
   const float k=scale+(std::min(scale,1.24f)-scale)*visible;
-  if(!asleep&&!live)eyeX+=std::max(-1.f,std::min(1.f,attention))*2;
+  if(!asleep&&!live){
+    if(!speaking&&reach==0&&(state==PET_IDLE||state==PET_CHARGING||state==PET_CURIOUS)){
+      perkL+=soundLevel*.9f+flinch*1.5f;perkR+=soundLevel*2.8f+flinch*1.5f;
+      dy-=soundLevel*.5f;dx-=flinch*1.8f;dy+=flinch*1.3f;
+      leftEye+=soundLevel*.9f;rightEye+=soundLevel*.9f;eyeX*=1-soundLevel;
+      if(flinch>.5f)leftEye=rightEye=1.6f;
+    }
+    perkL+=reach*2;perkR+=reach*2;dy-=reach*.8f;
+    eyeX+=std::max(-1.f,std::min(1.f,attention))*2;
+    if(speaking){
+      eyeX=0;leftEye=rightEye=8;
+      perkR+=sinf(clamp(speechEntry)*M_PI)*3;
+    }
+  }
   const float center=originX>=0?originX:(g->width()-66*k)/2;
   const float liveX=originX>=0?originX:16;
   Context c{center+(liveX-center)*visible+dx,float(y)+dy,k,g};

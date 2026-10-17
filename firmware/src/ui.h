@@ -7,9 +7,13 @@ void uiTick(uint32_t ms);          /* 按键 / 电池 / 状态推进 */
 void uiPowerTick(uint32_t ms,bool bootVerified); // after device commands: idle deadlines / display / power-off
 bool uiScreenOff();
 void uiStoriesTick(uint32_t ms); // final admission after device/input/power updates
+void uiWordsTick(uint32_t ms); // text never owns voice, games, gestures or power deadlines
+bool uiAmbientCaptureWanted(uint32_t ms); // Opt-in portrait sound meter; rechecked after device commands.
+void uiAmbientSample(uint32_t ms,float rms); // Current local amplitude only; never network audio.
 void uiDraw(uint32_t ms);          /* 整屏重绘（内部用 sprite，不闪） */
 void uiSetOrientation(uint8_t rotation,uint32_t ms);
 bool uiRotationActive();
+bool uiOrientationLocked(); // Games/light hold display orientation; pose/voice detection continues.
 void uiReportTiming();
 void uiLog(const char* fmt, ...);  /* 往日志区推一行 */
 void uiDumpMetrics();              /* 把实测字体/屏幕度量打到串口 */
