@@ -960,10 +960,13 @@ void renderConnectionSetup(uint32_t ms){
     canvas.drawRect(8,138,W-16,54,C::dim2);line("B  WI-FI",147,C::glow,&fonts::Font2);line("Use device hotspot",173,C::dim);
     line("Then pair on Mac",216,C::dim);
   }else if(page==SetupPage::ResetConfirm){
-    line("RESET NETWORK",18,C::glow,&fonts::Font2);rule(45);
-    line("Clear Wi-Fi and",68,C::ink);line("Mac authorization",84,C::ink);
-    line("Keep calibration",116,C::dim);line("and device settings",132,C::dim);
+    line("FACTORY RESET",18,C::glow,&fonts::Font2);rule(45);
+    line("Erase all settings",64,C::ink);line("Wi-Fi + Bluetooth",84,C::dim);
+    line("Pairing + calibration",104,C::dim);line("Sound + display",124,C::dim);
+    line("Cannot be undone",146,C::err);
     line("A: CONFIRM",174,C::err,&fonts::Font2);line("B: CANCEL",205,C::dim,&fonts::Font2);
+  }else if(page==SetupPage::Resetting){
+    line("RESETTING",70,C::glow,&fonts::Font2);line("Clearing settings...",113,C::dim);
   }else if(page==SetupPage::Error){
     line("SETUP FAILED",35,C::err,&fonts::Font2);line(connectionSetupError(),95,C::ink);line("B: restart",175,C::dim);
   }else{line("RESTARTING",70,C::ok,&fonts::Font2);line("Restarting...",113,C::dim);}

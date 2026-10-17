@@ -1,6 +1,7 @@
 #pragma once
 #include "connection_setup_policy.h"
 void connectionSetupBegin(bool resetHeld);
+bool connectionSetupResetPending();
 bool connectionSetupActive();
 SetupPage connectionSetupPage();
 const char* connectionSetupError();

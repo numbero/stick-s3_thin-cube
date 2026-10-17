@@ -103,10 +103,10 @@ void setup(){
   uiBegin();
   transportBegin();
   M5.update();
-  const bool bootProvisioning=M5.BtnB.isPressed();
-  if(!bootProvisioning)provPrepareChange();
+  const bool bootFactoryReset=M5.BtnB.isPressed();
+  if(!bootFactoryReset&&!connectionSetupResetPending())provPrepareChange();
   deviceBegin();
-  connectionSetupBegin(bootProvisioning);
+  connectionSetupBegin(bootFactoryReset);
   M5.Display.setBrightness(deviceBrightness());
   motionBegin();
   uiLog("boot ok");
@@ -114,7 +114,7 @@ void setup(){
   uiLog("clawd %s up", CLAWD_FW_VER);
   uiDumpMetrics();          /* 排版按实测度量算，串口留一份 */
 
-  /* 网络：NVS 有凭据直接连 STA；没凭据、或开机就按住 B → 进配网（见 docs/wifi-prov-ota.md §2.1） */
+  /* 恢复出厂确认/清理期间不启动无线服务；完成后重新选择连接方式。 */
   M5.update();
   static char ssid[33], pass[65];
   const bool haveCreds = provLoadCreds(ssid, sizeof(ssid), pass, sizeof(pass));

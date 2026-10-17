@@ -2,7 +2,32 @@
 #include "transport_policy.h"
 #include <stddef.h>
 
-enum class SetupPage { None, Choose, ResetConfirm, Saving, Error };
+enum class SetupPage { None, Choose, ResetConfirm, Resetting, Saving, Error };
+enum class SetupAction { None, ConfirmReset, Cancel, ChooseBLE, ChooseWiFi, Restart };
+struct SetupButtons {
+  bool released=false;
+  SetupAction update(SetupPage page,bool a,bool b,bool aClicked,bool bClicked) {
+    // Consume the boot hold and its release before accepting a new click.
+    if(!released){released=!a&&!b;return SetupAction::None;}
+    if(page==SetupPage::ResetConfirm){
+      if(bClicked)return SetupAction::Cancel;
+      if(aClicked&&!b)return SetupAction::ConfirmReset;
+    }else if(page==SetupPage::Choose){
+      if(aClicked&&!b&&!bClicked)return SetupAction::ChooseBLE;
+      if(bClicked&&!a&&!aClicked)return SetupAction::ChooseWiFi;
+    }else if(page==SetupPage::Error&&bClicked)return SetupAction::Restart;
+    return SetupAction::None;
+  }
+};
+template<class Store> bool completeFactoryReset(Store& store) {
+  // Snapshot names before erasing: NVS iterators cannot survive mutation.
+  // Keep the journal until every other namespace has been cleared, including
+  // SDK Wi-Fi/BLE records, legacy settings and future configuration stores.
+  const auto names=store.namespaces();
+  for(const auto& name:names)
+    if(name!="tcsetup"&&!store.clearNamespace(name.c_str()))return false;
+  return store.finishJournal();
+}
 inline bool connectionChoiceSaved(bool valid,const TransportRecord& record) {
   // Older boot-B recovery wrote an empty stable Wi-Fi record before the user
   // had actually selected a connection. Do not mistake that for onboarding.
