@@ -9,7 +9,12 @@ struct PairingPolicy {
   void offer(uint32_t now,bool startTimer) {
     visible=true;timed=startTimer;opened=now;attempts=0;attempted=false;
   }
-  bool active(uint32_t now) const { return visible&&timed&&uint32_t(now-opened)<WindowMs; }
+  bool active(uint32_t now) const {
+    // A same-loop UI action or HTTP request may open/refresh the window after
+    // the caller sampled now. A small backwards step is still inside the
+    // window; signed subtraction also preserves normal millis rollover.
+    return visible&&timed&&int32_t(now-opened)<int32_t(WindowMs);
+  }
   bool begin(uint32_t now) {
     if(!visible)return false;
     if(active(now))return false;

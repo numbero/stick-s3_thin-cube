@@ -1,0 +1,104 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-17",
+  "device": "ThinCube-6046E5",
+  "scope": [
+    "A+B release keeps the re-pairing window open",
+    "Wi-Fi owner revocation closes its old control socket"
+  ],
+  "protocol": 1,
+  "macos_app_rebuilt": false,
+  "releases": [
+    {
+      "version": "v0.4.36",
+      "image": {
+        "file": "thincube-v0.4.36.bin",
+        "ver": "v0.4.36",
+        "device": "ThinCube-StickS3-v1",
+        "protocol": 1,
+        "size": 1748112,
+        "sha256": "dab9f9620acd6a709d60cf9fbcd7dc89191bd35f2aed90d9c65cd7c9429dc9d6"
+      },
+      "automated_checks": {
+        "firmware_cpp_test_programs": 32,
+        "release_build": "passed",
+        "real_image_identity_test": "passed",
+        "regression": "stale-clock regression in C++11 and C++17 passed"
+      },
+      "device_validation": {
+        "slot": "app0",
+        "offset": "0x10000",
+        "flash_write_hash_verified": true,
+        "configuration": {
+          "partition_table_unchanged": true,
+          "otadata_unchanged": true,
+          "all_nvs_values_unchanged": true,
+          "nvs_key_chunk_count": 93,
+          "nvs_bytes_identical": false,
+          "nvs_difference": "28 bytes in one newly written dhcp_state:WIFI_STA_DEF entry; same existing key and value",
+          "flash_hash_verified": true
+        },
+        "usb_health_observed_through_seconds": 75,
+        "all_observed_health_samples_ok": true
+      },
+      "user_acceptance": {
+        "result": "passed",
+        "observation": "松开后保持在配对码页面"
+      },
+      "local_evidence_directory": "artifacts/repair-pairing-v0.4.36"
+    },
+    {
+      "version": "v0.4.37",
+      "image": {
+        "file": "thincube-v0.4.37.bin",
+        "ver": "v0.4.37",
+        "device": "ThinCube-StickS3-v1",
+        "protocol": 1,
+        "size": 1748256,
+        "sha256": "311e2b240c6ef1fc9f9fa39e1ecdcf2aef0255a758da463411ef4f8d13dcaa41"
+      },
+      "automated_checks": {
+        "firmware_cpp_test_programs": 32,
+        "release_build": "passed",
+        "real_image_identity_test": "passed",
+        "regression": "production function socket-close contract passed; removing close call reproduces failure"
+      },
+      "device_validation": {
+        "slot": "app0",
+        "offset": "0x10000",
+        "flash_write_hash_verified": true,
+        "configuration": {
+          "partition_table_unchanged": true,
+          "nvs_unchanged": true,
+          "otadata_unchanged": true,
+          "flash_hash_verified": true
+        },
+        "usb_health_observed_through_seconds": 15,
+        "all_observed_health_samples_ok": true
+      },
+      "user_acceptance": {
+        "result": "passed",
+        "observation": "两端状态一致，恢复后图标变绿"
+      },
+      "local_evidence_directory": "artifacts/control-session-v0.4.37"
+    }
+  ],
+  "final_source_sha256": {
+    "firmware/platformio.ini": "3c3b80f5cb26c70640d08f16cc373d5206df428bc70f50c8a2891648e6cc32e8",
+    "firmware/src/device.cpp": "90e0321b1cf5e5dbb87c947f3105def8923781995d69d39d6ae33d269b8bef78",
+    "firmware/src/ota.cpp": "ded033c362f2b54fc948688f487fd530e61359c44c254a2ea4ef3952fbe35d3b",
+    "firmware/src/ota.h": "26cdb6b71ca644636bdb19b11889555abe726c7a1c213726b1e28ac54a3a6bb4",
+    "firmware/src/pairing_policy.h": "87be066eefe5cea3788f9609fa11df9534d524b6df27e9eef88be93cdb48dbc3",
+    "firmware/test/pairing_policy_test.cpp": "250363224ed61e9164b5e11b181060717f03f7fdbb739640ac641f61a7b62e2c"
+  },
+  "validation_limits": [
+    "No new acceptance claim for full pairing, host replacement or audio transport.",
+    "v0.4.37 USB capture ended at 15 seconds because the monitor Python lacked Pillow; no framebuffer image was captured.",
+    "The socket-close contract uses production function bodies in a host stub; the user separately confirmed the physical cancel/reconnect flow."
+  ],
+  "local_only_artifacts": [
+    "Firmware binaries",
+    "Flash and NVS backups",
+    "Raw device logs"
+  ]
+}

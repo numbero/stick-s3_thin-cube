@@ -149,6 +149,11 @@ bool otaMarkValid(){
   return true;
 }
 void otaStopServer(){if(server){httpd_stop(server);server=nullptr;}started=false;MDNS.end();}
+void otaCloseControlConnection(int fd){
+  if(!server||fd<0)return;
+  const auto result=httpd_sess_trigger_close(server,fd);
+  Serial.printf("[control] close revoked Wi-Fi session fd %d result %d\n",fd,int(result));
+}
 void otaRollbackUnhealthy(){
   esp_ota_img_states_t state;
   if(millis()>90000&&esp_ota_get_state_partition(esp_ota_get_running_partition(),&state)==ESP_OK&&state==ESP_OTA_IMG_PENDING_VERIFY)

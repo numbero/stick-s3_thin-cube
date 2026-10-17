@@ -476,10 +476,14 @@ bool deviceAuthorized(httpd_req_t* req) {
   xSemaphoreGive(publication);return ok;
 }
 void deviceOpenPairing() {
+  const int previousOwner=owner;
   voice.stop();voice.setPeer(false,millis());controlLease.reset();owner=-1;edgeRead=edgeCount=0;
   xSemaphoreTake(publication,portMAX_DELAY);
   pairing.offer(millis(),true);newPairCode();publishPairing();
   xSemaphoreGive(publication);
+  // Revoking the owner must also end its socket: otherwise stale heartbeats
+  // still receive snapshots and the Mac reports online without control.
+  otaCloseControlConnection(previousOwner);
   bleAuthenticated=false;bleDisconnect();
 }
 bool devicePairWindow(){return pairingVisible.load();}
@@ -531,7 +535,8 @@ void deviceMotion(float x,float y,float z,float gyro,uint32_t ms){
 }
 void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   xSemaphoreTake(publication,portMAX_DELAY);
-  const bool expired=pairing.expire(ms,key[0]);if(expired)memset(candidateKey,0,sizeof(candidateKey));publishPairing();
+  // Sample under the lock: uiTick/HTTP can open or refresh after loop's ms.
+  const bool expired=pairing.expire(millis(),key[0]);if(expired)memset(candidateKey,0,sizeof(candidateKey));publishPairing();
   xSemaphoreGive(publication);
   if(expired&&key[0]){bleAuthenticated=false;bleDisconnect();}
   if(transportMode()==TransportMode::BLE){
@@ -546,6 +551,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     if(strcmp(c.op,"heartbeat")&&strcmp(c.op,"sleep_ack"))deepSleepCancel();
     voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
     if(!strcmp(c.op,"connect")){
+      if(owner!=c.fd)otaCloseControlConnection(owner);
       voice.setPeer(false,ms);controlLease.reset();owner=c.fd;outputIP=IPAddress(c.address);epoch=esp_random();edgeRead=edgeCount=0;lastHeld=false;
       Serial.printf("[control] IPv4 audio peer %s\n",outputIP.toString().c_str());
     } else if(!strcmp(c.op,"settings")) {

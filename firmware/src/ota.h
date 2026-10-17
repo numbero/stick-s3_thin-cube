@@ -35,3 +35,4 @@ void      otaRollbackUnhealthy();      /* 90 秒仍未确认的 OTA 试启动回
 /* 电池电平缓存：httpd 在独立 task，不能直接读 I2C，由主循环刷新 */
 void      otaSetBattery(int level);
 void      otaStopServer();             // main loop only, before AP provisioning
+void      otaCloseControlConnection(int fd); // main loop: revoke an existing Wi-Fi session
