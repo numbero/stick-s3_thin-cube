@@ -32,16 +32,17 @@ private struct ThinCubeMenu: View {
         if model.pairingRequired {
             Button("完成配对…") { presentation.showMainWindow(pane: .device) }
         }
-        Button(model.status?.muted == true ? "取消麦克风静音" : "麦克风静音") { Task { await model.apply(["muted": model.status?.muted != true]) } }.disabled(!model.connected)
-        Button(model.status?.soundMuted == true ? "开启 Clawd 音效" : "静音 Clawd 音效") { Task { await model.apply(["soundMuted": model.status?.soundMuted != true]) } }.disabled(!model.connected || model.status?.soundVolume == nil)
-        if model.status?.streaming == true {
-            Button("停止语音输入") { Task { await model.command("stop") } }.disabled(!model.connected)
-        }
-        Divider()
-        Button("按键与快捷键…") { presentation.showMainWindow(pane: .keys) }
-        Button("设置…") { presentation.showMainWindow(pane: .settings) }
-        Button("显示 ThinCube") { presentation.showMainWindow() }
+        Toggle("麦克风静音", isOn: Binding(
+            get: { model.status?.muted ?? false },
+            set: { value in Task { await model.apply(["muted": value]) } }
+        )).disabled(!model.connected)
+        Toggle("扬声器静音", isOn: Binding(
+            get: { model.status?.soundMuted ?? false },
+            set: { value in Task { await model.apply(["soundMuted": value]) } }
+        )).disabled(!model.connected || model.status?.soundVolume == nil)
         Toggle("仅在菜单栏显示", isOn: Binding(get: { presentation.menuBarOnly }, set: { presentation.setMenuBarOnly($0) }))
+        Divider()
+        Button("详细设置…") { presentation.showMainWindow() }
         Divider()
         Button("退出") { model.shutdown(); NSApp.terminate(nil) }
     }
@@ -54,7 +55,7 @@ enum MainPane: String, CaseIterable, Identifiable {
         switch self {
         case .device: return "设备"
         case .keys: return "按键"
-        case .voice: return "语音"
+        case .voice: return "声音"
         case .firmware: return "固件"
         case .settings: return "设置"
         }
@@ -63,7 +64,7 @@ enum MainPane: String, CaseIterable, Identifiable {
         switch self {
         case .device: return "rectangle.portrait"
         case .keys: return "keyboard"
-        case .voice: return "mic"
+        case .voice: return "speaker.wave.2"
         case .firmware: return "arrow.down.circle"
         case .settings: return "gearshape"
         }
@@ -420,31 +421,31 @@ struct MainView: View {
                 HelpSectionHeader("语音输入", helpTitle: "语音帮助") {
                     HelpParagraph("语音与静音", "允许语音输入后，设备可向 Mac 传音。麦克风静音会真正停止采集；开始持续语音会保持传音，直到点击停止。")
                     HelpParagraph("姿态与按键", "完成校准后，屏幕朝上平放，再倒立并稍作停稳可开始传音。对讲机内 A/B 只控制各自快捷键，松开不会停止持续语音。")
-                    HelpParagraph("声音互动", "设备在空闲时可根据环境声音作出反应，此开关与向 Mac 传音、喇叭音效分别控制。")
+                    HelpParagraph("声音互动", "设备在空闲时可根据环境声音作出反应，此开关与向 Mac 传音、扬声器播放分别控制。")
                     HelpParagraph("输入增益", "调整麦克风输入幅度后点击保存。")
                 }
             }
             Section {
                 if model.status?.soundVolume != nil {
                     Group {
-                        Toggle("音效静音", isOn: Binding(get: { model.status?.soundMuted ?? false }, set: { value in Task { await model.apply(["soundMuted": value]) } }))
-                        SettingsSliderRow(title: "音效音量", value: $model.soundVolume, range: 0...100, step: 1,
+                        Toggle("扬声器静音", isOn: Binding(get: { model.status?.soundMuted ?? false }, set: { value in Task { await model.apply(["soundMuted": value]) } }))
+                        SettingsSliderRow(title: "扬声器音量", value: $model.soundVolume, range: 0...100, step: 1,
                                           valueLabel: "\(Int(model.soundVolume))%")
                             .onChange(of: model.soundVolume) { value in model.scheduleSoundVolume(Int(value)) }
-                        Button("试听音效") { Task { await model.command("sound_preview") } }
+                        Button("试听声音") { Task { await model.command("sound_preview") } }
                             .disabled(model.status?.soundMuted == true || model.soundVolume == 0 || model.status?.streaming == true)
                         if model.status?.streaming == true {
-                            Text("正在传音，音效暂停。").font(.callout).foregroundStyle(.secondary)
+                            Text("正在传音，扬声器播放已暂停。").font(.callout).foregroundStyle(.secondary)
                         }
                     }.disabled(!model.connected || model.updating || model.switching)
                 } else {
-                    Text(model.connected ? "此设备固件尚不支持音效设置。" : "连接设备后可调整音效。")
+                    Text(model.connected ? "此设备固件尚不支持声音设置。" : "连接设备后可调整声音设置。")
                         .foregroundStyle(.secondary)
                 }
             } header: {
-                HelpSectionHeader("Clawd 音效", helpTitle: "音效帮助") {
-                    HelpParagraph("设备喇叭", "短电子音配合唤醒、互动、扫描和发现。音效静音只控制喇叭；音量设为 0% 也会停止音效。")
-                    HelpParagraph("保存与传音", "音量自动保存到设备，断开 Mac 后仍生效。传音时暂停音效。")
+                HelpSectionHeader("设备声音", helpTitle: "设备声音帮助") {
+                    HelpParagraph("设备扬声器", "设备扬声器播放唤醒、互动、扫描和发现等声音。扬声器静音控制设备外放；音量设为 0% 也会停止播放。")
+                    HelpParagraph("保存与传音", "扬声器音量自动保存到设备，断开 Mac 后仍生效。传音时暂停扬声器播放。")
                 }
             }
             Section {
