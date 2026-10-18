@@ -28,6 +28,13 @@ public struct BLEStatusSnapshots {
         if !(value["edge"] is NSNull) {
             guard let edge = value["edge"] as? [String: Any], let sequence = edge["seq"], unsigned(sequence) != nil,
                   let down = edge["down"] as? NSNumber, CFGetTypeID(down) == CFBooleanGetTypeID() else { return nil }
+            if let key = edge["key"] {
+                guard let key = key as? String, DeviceButton(rawValue: key) != nil else { return nil }
+            }
+        }
+        if let mode = value["keyMode"], unsigned(mode) != 1 && unsigned(mode) != 2 { return nil }
+        if let held = value["heldB"] {
+            guard let held = held as? NSNumber, CFGetTypeID(held) == CFBooleanGetTypeID() else { return nil }
         }
         for (bit, key) in ["allowed", "muted", "localSound", "streaming", "manual", "held", "micReady", "inverted"].enumerated() {
             snapshot[key] = flags & (1 << bit) != 0
@@ -35,6 +42,8 @@ public struct BLEStatusSnapshots {
         snapshot["session"] = session; snapshot["level"] = level
         snapshot["pose"] = pose; snapshot["voiceBlock"] = block
         snapshot["bleAudioDropped"] = dropped; snapshot["edge"] = value["edge"]
+        if let mode = value["keyMode"] { snapshot["keyMode"] = mode }
+        if let held = value["heldB"] { snapshot["heldB"] = held }
         if let power = value["power"] { snapshot["power"] = power }
         if let sleep = value["sleep"] { snapshot["sleep"] = sleep }
         baseline = snapshot

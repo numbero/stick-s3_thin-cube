@@ -14,6 +14,7 @@ struct VoiceState {
 
   bool voiceEnabled() const { return allowed && !muted && !sleeping && !busy && peer; }
   bool canStream() const { return voiceEnabled() && captureReady; }
+  bool poseExitGuarded() const { return inverted && (streaming || pendingGesture); }
   bool captureWanted(bool preparing=false,bool localVisible=false) const {
     return !muted && !sleeping && !busy &&
       ((localSound&&localVisible) || (allowed && peer && (streaming || pendingGesture || pendingManual || preparing)));

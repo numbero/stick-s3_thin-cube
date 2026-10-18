@@ -622,7 +622,7 @@ void uiTick(uint32_t ms){
   }
   if (otaActive()){ gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),false,false,true);gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);tickOta(); return; }
 
-  const auto gesture=gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),M5.BtnB.wasClicked(),!transportBusy(),!deviceStreaming());
+  const auto gesture=gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),M5.BtnB.wasClicked(),!transportBusy(),!deviceStreaming(),deviceWalkieKeysActive());
   // A alone in idle mode opens diagnostics; B/combo and live shortcuts retain priority.
   static bool debugHeld=false,debugBlocked=false;
   if(!M5.BtnA.isPressed()&&!M5.BtnA.wasClicked()){debugHeld=false;debugBlocked=false;}

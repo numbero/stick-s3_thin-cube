@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import ThinCubeCore
 
 struct KeyTestPanel: View {
     @ObservedObject var model: DeviceModel
@@ -17,7 +18,7 @@ struct KeyTestPanel: View {
                 Spacer()
                 HelpPopover(title: "按键诊断帮助") {
                     HelpParagraph("测试方式", "设备事件会自动记录。测试当前快捷键会向 ThinCube 窗口发送一次按下与松开，无需连接设备。")
-                    HelpParagraph("本窗口测试", "开始后可按设备 A 或 Mac 键盘查看事件；此时键盘操作会被窗口接收，Esc 停止测试。关闭诊断或切换窗口也会停止。")
+                    HelpParagraph("本窗口测试", "开始后可按设备 A/B 或 Mac 键盘查看事件；此时键盘操作会被窗口接收，Esc 停止测试。关闭诊断或切换窗口也会停止。")
                     HelpParagraph("日志", "保留最近 100 条事件，新事件在上方。已提交表示发往系统，系统回读表示本窗口实际收到。")
                     HelpParagraph("权限", "若辅助功能开关已开启而键盘控制仍未生效，请关闭再开启 ThinCube 授权，并退出重启应用。")
                 }
@@ -42,8 +43,10 @@ struct KeyTestPanel: View {
                     if diagnostics.monitoring { model.stopKeyboardTest() }
                     else { diagnostics.start() }
                 }.disabled(model.shortcutRecording || model.updating || model.connecting)
-                Button("测试当前快捷键") { model.testCurrentShortcut() }
+                Button("测试 A 快捷键") { model.testCurrentShortcut() }
                     .disabled(!diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
+                Button("测试 B 快捷键") { model.testCurrentShortcut(button: .b) }
+                    .disabled(model.shortcutB == nil || !diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
                 if diagnostics.monitoring { Text("测试中 · Esc 停止").foregroundStyle(.orange) }
             }
             HStack {
@@ -79,6 +82,7 @@ struct KeyTestPanel: View {
         let audio = status?.streaming == true ? "传音中" : "未传音"
         let held = status?.held == true ? "按住" : "松开"
         let editing = model.shortcutRecording ? " · 快捷键编辑中，暂停注入" : ""
-        return "设备：\(connection) · \(audio) · A 键：\(held)\(editing)\n姿态：\(status?.poseDescription ?? "等待设备状态")"
+        let heldB = status?.heldB == true ? "按住" : "松开"
+        return "设备：\(connection) · \(audio) · A：\(held) · B：\(heldB)\(editing)\n姿态：\(status?.poseDescription ?? "等待设备状态")"
     }
 }

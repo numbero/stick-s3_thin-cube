@@ -28,6 +28,7 @@ struct DeviceStatus: Decodable {
     let micReady: Bool, inverted: Bool, calibrated: Bool, faceCalibrated: Bool, bootVerified: Bool
     let gain: Double, brightness: Int, level: Double, ota: String, session: String
     let soundVolume: Int?, soundMuted: Bool?, soundPlaying: Bool?, soundCount: UInt32?
+    let keyProtocol: Int?, keyMode: Int?, heldB: Bool?
     let edge: Edge?
     let pose: String?, voiceBlock: String?, calibration: Calibration?
     var poseDescription: String {
@@ -42,7 +43,7 @@ struct DeviceStatus: Decodable {
         }
     }
     var voiceHint: String {
-        if streaming { return held ? "正在传音 · 快捷键保持中" : "正在持续传音" }
+        if streaming { return (held || heldB == true) ? "正在传音 · 快捷键保持中" : "正在持续传音" }
         switch voiceBlock {
         case "disabled": return "语音输入已禁用"
         case "muted": return "已静音，麦克风停止采集"
@@ -109,6 +110,14 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published var calibrationBusy = false
     @Published var status: DeviceStatus?
     @Published private(set) var shortcut = Shortcut()
+    @Published private(set) var shortcutB: Shortcut?
+    var supportsBShortcut: Bool { status?.keyProtocol == 2 }
+    func shortcut(for button: DeviceButton) -> Shortcut? {
+        if button == .a { return shortcut }
+        guard var value = shortcutB else { return nil }
+        value.distinguishSides = shortcut.distinguishSides
+        return value.distinguishSides ? (ShortcutSelection(shortcut: value).shortcut ?? value) : value
+    }
     @Published private(set) var shortcutRecording = false
     private var shortcutRecordingCount = 0
     @Published var wifiSSID = ""
@@ -632,7 +641,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         deviceSleeping = false
         if next.sleep?.phase == "preparing" {
             keys.release(); buffer.setSession(nil)
-            if !sleepAckInFlight, !updating, !switching, !next.streaming, !next.held,
+            if !sleepAckInFlight, !updating, !switching, !next.streaming, !next.held, next.heldB != true,
                next.deepSleep == true, next.deepSleepAvailable == true,
                let sleepID = sleepTracker.acknowledgementNeeded {
                 sleepAckInFlight = true
@@ -649,10 +658,11 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             }
         }
         let blocked = shortcutBlock(next)
-        let keyUpdate = keyStream.receive(session: next.epoch, edge: next.edge, canInject: blocked == nil)
+        let keyUpdate = keyStream.receive(session: next.epoch, edge: next.edge, canInject: blocked == nil,
+                                          voiceSession: next.streaming ? next.session : nil, mode: next.keyMode ?? 1)
         if keyUpdate.sessionChanged {
             keys.release(); buffer.setSession(nil); epoch = next.epoch
-            keyDiagnostics.record("连接", "按键会话 epoch=\(next.epoch)，已释放上一会话按键。")
+            keyDiagnostics.record("连接", "按键上下文更新 epoch=\(next.epoch)，已释放上一上下文按键。")
         }
         // Preserve unsaved slider edits while device snapshots arrive ten times a second.
         if status == nil || gain == status?.gain { gain = next.gain }
@@ -676,11 +686,17 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             buffer.setSession(nil)
         } else { buffer.setSession(next.session) }
         if let edge = keyUpdate.edge {
-            let action = edge.down ? (blocked.map { "拦截：" + $0 } ?? "准备注入 \(shortcut.label)") : "释放快捷键"
-            keyDiagnostics.record("设备 A", "\(edge.down ? "按下" : "松开") · seq=\(edge.seq) · held=\(next.held ? 1 : 0) · inverted=\(next.inverted ? 1 : 0) · streaming=\(next.streaming ? 1 : 0) · \(action)")
+            let binding = shortcut(for: edge.key)
+            let reason = blocked ?? (edge.key == .b && next.keyMode != 2 ? "B 键协议尚未协商" : nil)
+                ?? (binding == nil ? "B 键尚未设置快捷键" : nil)
+            let action = edge.down ? (reason.map { "拦截：" + $0 } ?? "准备注入 \(binding!.label)") : "释放快捷键"
+            keyDiagnostics.record("设备 \(edge.key.rawValue.uppercased())", "\(edge.down ? "按下" : "松开") · seq=\(edge.seq) · inverted=\(next.inverted ? 1 : 0) · streaming=\(next.streaming ? 1 : 0) · \(action)")
         }
-        if keyUpdate.release { keys.release() }
-        if keyUpdate.press { _ = keys.press(shortcut) }
+        if keyUpdate.releaseAll { keys.release() }
+        if let edge = keyUpdate.edge {
+            if !edge.down { keys.release(edge.key) }
+            else if keyUpdate.press, let binding = shortcut(for: edge.key) { _ = keys.press(binding, button: edge.key) }
+        }
         ack = keyStream.acknowledgement
         if stopLocally && !next.streaming { stopLocally = false }
         return true
@@ -700,7 +716,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         return nil
     }
 
-    func testCurrentShortcut() {
+    func testCurrentShortcut(button: DeviceButton = .a) {
+        guard let binding = shortcut(for: button) else { return }
         guard !shortcutTestRunning, !shortcutRecording, !updating, !connecting else { return }
         keys.release()
         keyDiagnostics.start()
@@ -709,8 +726,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             keyDiagnostics.record("测试", "请激活 ThinCube 窗口后再测试。")
             return
         }
-        keyDiagnostics.record("测试", "测试当前快捷键 \(shortcut.label)；150 ms 后自动松开。")
-        guard testKeys.press(shortcut) else { return }
+        keyDiagnostics.record("测试", "测试 \(button.rawValue.uppercased()) 键快捷键 \(binding.label)；150 ms 后自动松开。")
+        guard testKeys.press(binding, button: button) else { return }
         shortcutTestRunning = true
         shortcutTestTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 150_000_000) } catch { return }
@@ -757,7 +774,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         guard !sendingHeartbeat, now.timeIntervalSince(lastHeartbeat) >= (activeBLE ? 0.2 : 0.1), activeBLE || websocket != nil else { return }
         sendingHeartbeat = true; lastHeartbeat = now
         let id = generation
-        let payload: [String: Any] = ["op": "heartbeat", "epoch": epoch, "ack": ack, "port": Int(receiver.port), "ready": connected && audioPrepared && !updating && !switching]
+        let payload: [String: Any] = ["op": "heartbeat", "epoch": epoch, "ack": ack, "keyProtocol": supportsBShortcut ? 2 : 1, "port": Int(receiver.port), "ready": connected && audioPrepared && !updating && !switching]
         Task { [weak self] in
             defer { if self?.generation == id { self?.sendingHeartbeat = false } }
             guard let self, self.generation == id else { return }
@@ -773,7 +790,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             // before start, even if the first periodic heartbeat has not run yet.
             if op == "start" {
                 guard audioPrepared, !updating else { return }
-                try await sendControl(["op": "heartbeat", "epoch": epoch, "ack": ack, "port": Int(receiver.port), "ready": true])
+                try await sendControl(["op": "heartbeat", "epoch": epoch, "ack": ack, "keyProtocol": supportsBShortcut ? 2 : 1, "port": Int(receiver.port), "ready": true])
             }
             try await sendControl(["op": op, "epoch": epoch])
         } catch { note = error.localizedDescription }
@@ -855,19 +872,23 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         shortcutRecordingCount = max(0, shortcutRecordingCount + (recording ? 1 : -1))
         shortcutRecording = shortcutRecordingCount > 0
     }
-    @discardableResult func setShortcut(_ value: Shortcut) -> Bool {
-        guard value.isValid, !connecting, !updating else { return false }
+    @discardableResult func setShortcut(_ value: Shortcut, button: DeviceButton = .a) -> Bool {
+        guard value.isValid, !connecting, !updating, button == .a || supportsBShortcut else { return false }
         stopKeyboardTest()
         do {
             let data = try JSONEncoder().encode(value)
             keys.release()
-            UserDefaults.standard.set(data, forKey: "shortcut." + name)
-            shortcut = value
+            UserDefaults.standard.set(data, forKey: (button == .a ? "shortcut." : "shortcut.b.") + name)
+            if button == .a { shortcut = value } else { shortcutB = value }
             return true
         } catch {
             note = "快捷键保存失败：" + error.localizedDescription
             return false
         }
+    }
+    func clearBShortcut() {
+        stopKeyboardTest(); keys.release()
+        UserDefaults.standard.removeObject(forKey: "shortcut.b." + name); shortcutB = nil
     }
     private func loadShortcut() {
         keys.release()
@@ -875,6 +896,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             ?? UserDefaults.standard.data(forKey: "shortcut.ThinCube")
         if let data, let value = try? JSONDecoder().decode(Shortcut.self, from: data) { shortcut = value }
         else { shortcut = Shortcut() }
+        shortcutB = UserDefaults.standard.data(forKey: "shortcut.b." + name)
+            .flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
     }
     @discardableResult func changeWifi() async -> Bool {
         defer { wifiPassword = "" }

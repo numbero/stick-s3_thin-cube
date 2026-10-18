@@ -205,7 +205,7 @@ struct MainView: View {
                     Button("测试与诊断…") { activeSheet = .keyboardDiagnostics }
                         .disabled(model.shortcutRecording || model.connecting || model.updating)
                     HelpPopover(title: "快捷键帮助") {
-                        HelpParagraph("设备 A 键", "倒置语音模式中，正面 A 键会触发这里设置的快捷键。设置完成即生效，并为当前设备保存。")
+                        HelpParagraph("设备 A/B 键", "倒置对讲机模式中，A/B 分别触发设置的快捷键，按下保持、松开释放。B 未设置时不执行操作；其他模式 B 保持静音和系统功能。设置为当前设备保存。")
                         HelpParagraph("录制或选择", "点击录制后按下组合键，松开全部按键即保存，Esc 取消。也可直接选择按键；仅修饰键组合无需主键。")
                         HelpParagraph("测试与诊断", "可在本窗口测试当前快捷键、查看设备事件与权限状态。测试只接收 ThinCube 窗口中的键盘操作。")
                     }
@@ -239,7 +239,7 @@ struct MainView: View {
                 }
             } header: {
                 HelpSectionHeader("权限", helpTitle: "权限帮助") {
-                    HelpParagraph("键盘控制", "ThinCube 需要辅助功能权限，才能把设备 A 键发送到当前应用。语音连接不依赖此权限。")
+                    HelpParagraph("键盘控制", "ThinCube 需要辅助功能权限，才能把设备 A/B 键发送到当前应用。语音连接不依赖此权限。")
                     HelpParagraph("授权未生效", "在系统设置的辅助功能中开启 ThinCube。若开关已开启但仍未生效，请关闭再开启该项，并退出重启 ThinCube。")
                 }
             }
@@ -313,7 +313,7 @@ struct MainView: View {
                         HelpParagraph("设备列表", "已发现表示当前扫描或局域网发现的设备；上次选择但暂未发现属于历史记录。系统忽略蓝牙设备后，仍在广播的设备仍可被发现，ThinCube 的应用授权也会保留。")
                         HelpParagraph("首次连接", "设备首次开机可选 A 蓝牙或 B Wi-Fi 热点。蓝牙无需先配网；选择热点时，按屏幕密码连接 ThinCube-Setup，在 192.168.4.1 配置网络，再在同一局域网配对。")
                         HelpParagraph("恢复出厂设置", "设备固件 v0.4.38 起，按住 B，再单击电源/复位键，松开 B 后进入恢复出厂确认页。A 确认清空全部设备配置，包括 Wi-Fi、蓝牙绑定、应用配对、校准、亮度和声音，重启后重新选择连接方式；B 取消并保留原配置。较早固件的此入口仅重设网络和应用授权。")
-                        HelpParagraph("设备按键", "短按 B 静音；长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
+                        HelpParagraph("设备按键", "对讲机内 B 为自定义快捷键，长按不切换连接。其他模式短按 B 静音，长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
                         HelpParagraph("电量与休眠", "红色 LOW 表示电压持续偏低，请及时充电。插拔电源后短暂显示 --% 是重新采样。默认静置五分钟息屏，电池供电下十分钟关机。开启深睡后，电池供电下五分钟进入深睡，拿起或按机身电源键唤醒后自动重连。")
                     }
                 }
@@ -418,7 +418,7 @@ struct MainView: View {
             } header: {
                 HelpSectionHeader("语音输入", helpTitle: "语音帮助") {
                     HelpParagraph("语音与静音", "允许语音输入后，设备可向 Mac 传音。麦克风静音会真正停止采集；开始持续语音会保持传音，直到点击停止。")
-                    HelpParagraph("姿态与按键", "完成校准后，屏幕朝上平放，再倒立并稍作停稳可开始传音。A 键只控制快捷键，松开 A 不会停止持续语音。")
+                    HelpParagraph("姿态与按键", "完成校准后，屏幕朝上平放，再倒立并稍作停稳可开始传音。对讲机内 A/B 只控制各自快捷键，松开不会停止持续语音。")
                     HelpParagraph("声音互动", "设备在空闲时可根据环境声音作出反应，此开关与向 Mac 传音、喇叭音效分别控制。")
                     HelpParagraph("输入增益", "调整麦克风输入幅度后点击保存。")
                 }

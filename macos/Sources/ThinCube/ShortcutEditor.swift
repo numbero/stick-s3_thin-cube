@@ -76,12 +76,21 @@ struct ShortcutEditor: View {
     @ObservedObject var model: DeviceModel
     @StateObject private var recorder = ShortcutRecorder()
     @State private var choosing = false
+    @State private var editingButton = DeviceButton.a
     @State private var hint = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            buttonRow
+            buttonRow(.a)
                 .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
+            buttonRow(.b)
+                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
+                .disabled(!model.supportsBShortcut)
+            Text(model.supportsBShortcut
+                 ? "对讲机内 A/B 按下保持快捷键，松开释放；B 未设置时不执行操作。其他模式 B 仍为静音和系统功能。"
+                 : "B 键快捷键需要新版设备固件；连接支持此功能的设备后可设置。")
+                .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             if !hint.isEmpty {
                 Text(hint).font(.system(size: 11.5)).foregroundStyle(.secondary)
@@ -119,8 +128,8 @@ struct ShortcutEditor: View {
             .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
         }
         .sheet(isPresented: $choosing) {
-            ShortcutChooser(shortcut: model.shortcut) { shortcut in
-                guard model.setShortcut(shortcut) else { return model.note }
+            ShortcutChooser(shortcut: seed(for: editingButton)) { shortcut in
+                guard model.setShortcut(shortcut, button: editingButton) else { return model.note }
                 hint = "已设置 \(shortcut.label)。"
                 return nil
             }
@@ -136,31 +145,38 @@ struct ShortcutEditor: View {
         }
     }
 
-    private var buttonRow: some View {
-        HStack(spacing: 12) {
-            Text("正面 A 键").font(.system(size: 13))
+    private func seed(for button: DeviceButton) -> Shortcut {
+        model.shortcut(for: button) ?? Shortcut(distinguishSides: model.shortcut.distinguishSides)
+    }
+
+    private func buttonRow(_ button: DeviceButton) -> some View {
+        let recording = recorder.isRecording && editingButton == button
+        return HStack(spacing: 12) {
+            Text(button == .a ? "正面 A 键" : "侧面 B 键").font(.system(size: 13))
             .frame(width: 72, alignment: .leading)
 
-            if recorder.isRecording {
+            if recording {
                 Text("等待按键…")
                     .font(.system(size: 13))
                     .foregroundStyle(ShortcutStyle.amberHi)
             } else {
                 ScrollView(.horizontal, showsIndicators: false) {
-                    KeycapRow(spec: model.shortcut.effectiveSpec)
+                    if let binding = model.shortcut(for: button) { KeycapRow(spec: binding.effectiveSpec) }
+                    else { Text("未设置").font(.system(size: 13)).foregroundStyle(.secondary) }
                 }
                 .frame(minWidth: 30)
             }
             Spacer(minLength: 8)
             Button("选择快捷键…") {
                 recorder.stop()
-                choosing = true
+                editingButton = button; choosing = true
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
-            Button(recorder.isRecording ? "停止录制" : "录制") {
-                if recorder.isRecording { recorder.stop() }
+            Button(recording ? "停止录制" : "录制") {
+                if recording { recorder.stop() }
                 else {
+                    recorder.stop(); editingButton = button
                     hint = "请按下所需组合键，松开全部按键即保存；Esc 取消。"
                     model.setShortcutRecording(true)
                     recorder.start(onStop: { model.setShortcutRecording(false); hint = "" }) { applyRecorded($0) }
@@ -170,6 +186,10 @@ struct ShortcutEditor: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .frame(width: 76)
+            if button == .b, model.shortcutB != nil {
+                Button("清除") { recorder.stop(); model.clearBShortcut(); hint = "B 键快捷键已清除。" }
+                    .buttonStyle(.bordered).controlSize(.small)
+            }
         }
         .padding(.horizontal, 14)
         .frame(minHeight: 54)
@@ -178,7 +198,7 @@ struct ShortcutEditor: View {
     private func applyRecorded(_ candidate: String) {
         // Retain the physical sides even while the shared side setting is off.
         let shortcut = Shortcut(spec: candidate, distinguishSides: model.shortcut.distinguishSides)
-        if model.setShortcut(shortcut) { hint = "已录制 \(shortcut.label)。" }
+        if model.setShortcut(shortcut, button: editingButton) { hint = "已录制 \(shortcut.label)。" }
         else { hint = model.note }
     }
 }

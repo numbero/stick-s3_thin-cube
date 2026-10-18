@@ -15,6 +15,7 @@ bool deviceStreaming();
 bool deviceCaptureRequested(); // includes prewarming and fresh pending starts
 bool deviceVoicePreparing();
 bool deviceHeld();
+bool deviceWalkieKeysActive();
 bool deviceMuted();
 bool deviceLocalSound();
 bool deviceInverted();

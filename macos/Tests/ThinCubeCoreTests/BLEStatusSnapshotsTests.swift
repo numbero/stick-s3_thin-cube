@@ -2,6 +2,28 @@ import XCTest
 @testable import ThinCubeCore
 
 final class BLEStatusSnapshotsTests: XCTestCase {
+    func testDualKeyDeltaPreservesNegotiationAndClearsB() throws {
+        var decoder = BLEStatusSnapshots()
+        _ = decoder.accept(try data(["epoch": 7, "keyProtocol": 2, "keyMode": 1, "heldB": false]))
+        let live: [Any] = [7, 201, String(repeating: "00", count: 16), 0, "inverted", "", 0]
+        var delta: [String: Any] = ["s": live, "edge": ["seq": 1, "down": true, "key": "b"], "keyMode": 2, "heldB": true]
+        let accepted = try XCTUnwrap(decoder.accept(try data(delta)))
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: accepted) as? [String: Any])
+        XCTAssertEqual(status["keyProtocol"] as? Int, 2); XCTAssertEqual(status["keyMode"] as? Int, 2)
+        XCTAssertEqual(status["heldB"] as? Bool, true)
+        for malformed in ["c" as Any, NSNull(), 1] {
+            delta["edge"] = ["seq": 2, "down": false, "key": malformed]
+            XCTAssertNil(decoder.accept(try data(delta)))
+        }
+        delta["edge"] = NSNull(); delta["heldB"] = 1
+        XCTAssertNil(decoder.accept(try data(delta)))
+        delta["heldB"] = false; delta["keyMode"] = 3
+        XCTAssertNil(decoder.accept(try data(delta)))
+        delta["keyMode"] = 2
+        let cleared = try XCTUnwrap(decoder.accept(try data(delta)))
+        XCTAssertEqual((try JSONSerialization.jsonObject(with: cleared) as? [String: Any])?["heldB"] as? Bool, false)
+    }
+
     private func data(_ value: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: value) }
     func testLiveSnapshotsRequireMatchingBaselineAndPreserveSettings() throws {
         var decoder = BLEStatusSnapshots()

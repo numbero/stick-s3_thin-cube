@@ -1,5 +1,6 @@
 #include "device.h"
 #include "voice_state.h"
+#include "walkie_keys.h"
 #include "control_lease.h"
 #include "pose_voice.h"
 #include "display_motion.h"
@@ -38,10 +39,16 @@ struct Command {
   char op[24] = {}, ssid[33] = {}, pass[65] = {}, target[5] = {}, requestId[37] = {};
   int fd = -1, port = 0, flags = 0, brightness = 128, soundVolume = 35;
   uint32_t ack = 0, epoch = 0, address = 0;
+  int keyProtocol = 1;
   float gain = 1;
   bool allowed = false, muted = false, local = true, ready = false, soundMuted = false,deepSleep=false,powerLedDebug=false;
 };
-struct Edge { uint32_t seq; bool down; };
+bool readKeyProtocol(cJSON* j,Command& c){
+  const auto v=cJSON_GetObjectItemCaseSensitive(j,"keyProtocol");
+  if(!v)return true;
+  if(!cJSON_IsNumber(v)||(v->valuedouble!=1&&v->valuedouble!=2))return false;
+  c.keyProtocol=int(v->valuedouble);return true;
+}
 QueueHandle_t commands;
 SemaphoreHandle_t publication;
 VoiceState voice;
@@ -58,14 +65,17 @@ uint32_t powerLedAttemptAt=0;
 PairingPolicy pairing;
 std::atomic<bool> pairingVisible{false},pairingCodeActive{false};
 char candidateKey[33]{};
-uint32_t candidateAt=0, epoch = 0, edgeSeq = 0, seq = 0, clockSample = 0;
+uint32_t candidateAt=0, epoch = 0, seq = 0, clockSample = 0;
 int owner = -1, outputPort = 0;
 IPAddress outputIP;
 float gain = 1;
 uint8_t brightness = 128, nonce[16] = {};
-Edge edges[32];
-unsigned edgeRead = 0, edgeCount = 0;
+WalkieKeyQueue keyEdges;
+WalkieKeys walkieKeys;
+bool dualKeys=false,lastHeldB=false;
 bool lastHeld = false, lastStreaming = false, healthy = false;
+void resetKeyControl(){dualKeys=false;keyEdges.clear();walkieKeys.update(false,false,false);lastHeld=lastHeldB=false;}
+void stopVoice(){voice.stop();walkieKeys.update(false,false,false);}
 bool captureRequested=false,voicePreparing=false;
 PoseVoiceController poseVoice;
 uint32_t calibrationSeq = 0;
@@ -244,6 +254,7 @@ esp_err_t ws(httpd_req_t* r) {
     if(!isfinite(id)||id<1||id>UINT32_MAX||id!=uint32_t(id)){cJSON_Delete(j);return ESP_FAIL;}
     c.ack=uint32_t(id);
   }
+  if(!readKeyProtocol(j,c)){cJSON_Delete(j);return ESP_FAIL;}
   c.ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ready"));
   auto target=cJSON_GetObjectItemCaseSensitive(j,"target"),id=cJSON_GetObjectItemCaseSensitive(j,"requestId");
   if(cJSON_IsString(target)&&strlen(target->valuestring)<sizeof(c.target))strcpy(c.target,target->valuestring);
@@ -254,9 +265,10 @@ esp_err_t ws(httpd_req_t* r) {
   httpd_ws_frame_t out{};out.type=HTTPD_WS_TYPE_TEXT;out.payload=(uint8_t*)response;out.len=strlen(response);
   return httpd_ws_send_frame(r,&out);
 }
-void edge(bool down) {
-  if(edgeCount==32) { voice.stop();edgeRead=edgeCount=0;down=false; }
-  edges[(edgeRead+edgeCount)%32]={++edgeSeq,down};edgeCount++;
+void edge(bool down,char key='a') {
+  if(keyEdges.push(down,key))return;
+  voice.stop();walkieKeys.update(false,false,false);keyEdges.clear();
+  keyEdges.push(false,'a');if(dualKeys)keyEdges.push(false,'b');
 }
 const char* voiceBlock() {
   if(!voice.allowed)return "disabled";
@@ -301,6 +313,8 @@ void publish() {
   cJSON_AddBoolToObject(j,"powerLedReady",powerLedPolicy.ready);cJSON_AddBoolToObject(j,"powerLedOn",powerLedOn);
   auto sleeping=cJSON_AddObjectToObject(j,"sleep");
   cJSON_AddNumberToObject(sleeping,"id",deepSleepSequence());cJSON_AddStringToObject(sleeping,"phase",deepSleepPending()?"preparing":"awake");
+  cJSON_AddNumberToObject(j,"keyProtocol",2);cJSON_AddNumberToObject(j,"keyMode",dualKeys?2:1);
+  cJSON_AddBoolToObject(j,"heldB",walkieKeys.heldB);
   cJSON_AddBoolToObject(j,"manual",voice.manual);cJSON_AddBoolToObject(j,"held",voice.held);
   cJSON_AddBoolToObject(j,"micReady",voice.captureReady);cJSON_AddBoolToObject(j,"inverted",voice.inverted);
   cJSON_AddBoolToObject(j,"micDemand",captureRequested);
@@ -323,7 +337,10 @@ void publish() {
   const bool verified=esp_ota_get_state_partition(esp_ota_get_running_partition(),&bootState)!=ESP_OK||bootState!=ESP_OTA_IMG_PENDING_VERIFY;
   cJSON_AddBoolToObject(j,"bootVerified",verified);
   char cookie[33];for(int i=0;i<16;i++)snprintf(cookie+i*2,3,"%02x",nonce[i]);cJSON_AddStringToObject(j,"session",cookie);
-  if(edgeCount){auto e=cJSON_AddObjectToObject(j,"edge");cJSON_AddNumberToObject(e,"seq",edges[edgeRead].seq);cJSON_AddBoolToObject(e,"down",edges[edgeRead].down);}
+  if(const auto next=keyEdges.front()){
+    auto e=cJSON_AddObjectToObject(j,"edge");cJSON_AddNumberToObject(e,"seq",next->seq);cJSON_AddBoolToObject(e,"down",next->down);
+    if(dualKeys){const char source[]={next->key,0};cJSON_AddStringToObject(e,"key",source);}
+  }
   static char b[sizeof(published)]; if(cJSON_PrintPreallocated(j,b,sizeof(b),false)){
     xSemaphoreTake(publication,portMAX_DELAY);strcpy(published,b);xSemaphoreGive(publication);
   }
@@ -378,6 +395,7 @@ void bleRequest(const char* text){
   else{
     Command c;c.fd=-2;bool valid=true;snprintf(c.op,sizeof(c.op),"%s",operation);
     auto number=[&](const char* n){auto v=cJSON_GetObjectItemCaseSensitive(j,n);return cJSON_IsNumber(v)?v->valuedouble:0;};
+    if(!readKeyProtocol(j,c))valid=false;
     c.epoch=uint32_t(number("epoch"));c.ack=uint32_t(number("ack"));c.ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ready"));
     if(!strcmp(operation,"settings")){
       auto flag=[&](const char* n,int bit,bool& v){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsBool(x))valid=false;else{c.flags|=bit;v=cJSON_IsTrue(x);}}};
@@ -477,7 +495,7 @@ bool deviceAuthorized(httpd_req_t* req) {
 }
 void deviceOpenPairing() {
   const int previousOwner=owner;
-  voice.stop();voice.setPeer(false,millis());controlLease.reset();owner=-1;edgeRead=edgeCount=0;
+  voice.stop();voice.setPeer(false,millis());controlLease.reset();owner=-1;resetKeyControl();
   xSemaphoreTake(publication,portMAX_DELAY);
   pairing.offer(millis(),true);newPairCode();publishPairing();
   xSemaphoreGive(publication);
@@ -503,12 +521,13 @@ bool deviceForgetPairing(){
 }
 const char* devicePairPin(){return pin;}
 const char* deviceName(){return name;}
-void deviceStop(){voice.stop();}
-void deviceToggleMute(){voice.muted=!voice.muted;if(voice.muted)voice.stop();persist();}
+void deviceStop(){stopVoice();}
+void deviceToggleMute(){voice.muted=!voice.muted;if(voice.muted)stopVoice();persist();}
 bool deviceStreaming(){return voice.streaming;}
 bool deviceCaptureRequested(){return captureRequested;}
 bool deviceVoicePreparing(){return voicePreparing||voice.pendingGesture||voice.pendingManual;}
-bool deviceHeld(){return voice.held;}
+bool deviceHeld(){return voice.held||walkieKeys.heldB;}
+bool deviceWalkieKeysActive(){return dualKeys&&voice.streaming&&voice.inverted&&voice.canStream()&&!(displayOrientation.rotation&1)&&!uiLandscapeActive();}
 bool deviceMuted(){return voice.muted;}
 bool deviceLocalSound(){return voice.localSound&&!voice.muted;}
 bool deviceInverted(){return voice.inverted;}
@@ -528,9 +547,14 @@ uint8_t deviceBrightness(){return brightness;}
 DevicePose devicePose(){return pose.stable;}
 DevicePose devicePoseCandidate(){return pose.candidate;}
 void deviceMotion(float x,float y,float z,float gyro,uint32_t ms){
-  pose.update(x,y,z,gyro,ms);
+  // The session keeps this guard through moving/Other, even after the detector
+  // has left Inverted. Explicit stop/mute/disconnect releases it immediately.
+  const bool guarded=voice.poseExitGuarded();
+  pose.update(x,y,z,gyro,ms,guarded);
   const uint8_t previous=displayOrientation.rotation;
-  displayOrientation.update(x,y,z,gyro,pose.uprightSign,ms,uiOrientationLocked());
+  // Wait for the voice pose exit before handing A to a landscape game. The
+  // independent 90ms visual rotation must not bypass voice's confirmation.
+  displayOrientation.update(x,y,z,gyro,pose.uprightSign,ms,uiOrientationLocked()||guarded);
   if(displayOrientation.rotation!=previous)Serial.printf("[orientation] target %u confirmed %ums\n",displayOrientation.rotation,unsigned(displayOrientation.confirmedAfterMs));
 }
 void deviceTick(uint32_t ms,bool sleeping,bool busy) {
@@ -540,7 +564,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   xSemaphoreGive(publication);
   if(expired&&key[0]){bleAuthenticated=false;bleDisconnect();}
   if(transportMode()==TransportMode::BLE){
-    if(bleSeenGeneration!=bleGeneration()){bleSeenGeneration=bleGeneration();bleAuthenticated=false;challenge[0]=0;voice.setPeer(false,ms);controlLease.reset();owner=-1;}
+    if(bleSeenGeneration!=bleGeneration()){bleSeenGeneration=bleGeneration();bleAuthenticated=false;challenge[0]=0;voice.setPeer(false,ms);controlLease.reset();owner=-1;resetKeyControl();}
     static char message[769];for(int i=0;i<4&&bleTake(message,sizeof(message));i++)bleRequest(message);
   }
   voice.sleeping=sleeping;voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
@@ -552,7 +576,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
     if(!strcmp(c.op,"connect")){
       if(owner!=c.fd)otaCloseControlConnection(owner);
-      voice.setPeer(false,ms);controlLease.reset();owner=c.fd;outputIP=IPAddress(c.address);epoch=esp_random();edgeRead=edgeCount=0;lastHeld=false;
+      voice.setPeer(false,ms);controlLease.reset();owner=c.fd;outputIP=IPAddress(c.address);epoch=esp_random();resetKeyControl();
       Serial.printf("[control] IPv4 audio peer %s\n",outputIP.toString().c_str());
     } else if(!strcmp(c.op,"settings")) {
       bleSnapshotDirty=true;
@@ -561,14 +585,17 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       const bool previousDeep=deepSleepEnabled;
       if(c.flags&128)deepSleepEnabled=c.deepSleep&&deepSleepAvailable();
       if(c.flags&(32|64))soundConfigure(c.flags&64?c.soundVolume:soundVolume(),c.flags&32?c.soundMuted:soundMuted());
-      if(!voice.allowed||voice.muted)voice.stop();if(!persist())deepSleepEnabled=previousDeep;
+      if(!voice.allowed||voice.muted)stopVoice();if(!persist())deepSleepEnabled=previousDeep;
       if(c.flags&256)changePowerLedDebug(c.powerLedDebug);
     } else if(c.fd==owner&&c.epoch==epoch) {
       if(!strcmp(c.op,"heartbeat")){
         controlLease.heartbeat(ms);
         if(transportMode()==TransportMode::BLE){voice.setPeer(c.ready&&bleAuthenticated&&bleAudioReady(),ms);}
         else if(c.port>=1024&&c.port<=65535){outputPort=c.port;voice.setPeer(c.ready,ms);}
-        if(edgeCount&&c.ack==edges[edgeRead].seq){edgeRead=(edgeRead+1)%32;edgeCount--;}
+        if(dualKeys!=(c.keyProtocol==2)){
+          dualKeys=c.keyProtocol==2;keyEdges.clear();walkieKeys.update(false,false,false);
+          voice.held=voice.armed=false;lastHeld=lastHeldB=false;bleSnapshotDirty=true;
+        }else keyEdges.acknowledge(c.ack);
       } else if(!strcmp(c.op,"sleep_ack")){
         deepSleepAcknowledge(c.ack);
       } else if(!strcmp(c.op,"battery_cal_arm")){
@@ -595,7 +622,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
           voice.requestManual(M5.BtnA.isPressed(),ms);
         }
       }
-      else if(!strcmp(c.op,"stop"))voice.stop();
+      else if(!strcmp(c.op,"stop"))stopVoice();
       else if(!strcmp(c.op,"sound_preview"))soundRequest(SoundCue::Preview);
       else if(!strcmp(c.op,"calibrate_inverted")||!strcmp(c.op,"calibrate_upright")||!strcmp(c.op,"calibrate_faceup")){
         bleSnapshotDirty=true;
@@ -617,7 +644,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   voice.tick(ms);
   // Prepare capture after waking, before consuming the inverted gesture. If
   // Mic startup needs a retry, VoiceState retains only this fresh gesture.
-  if(powerCalibrationOwnsUI()){voice.busy=true;voice.stop();}
+  if(powerCalibrationOwnsUI()){voice.busy=true;stopVoice();}
   // Reserve audio as soon as an inverted gesture is forming, before pose
   // confirmation. A manual start cancels effects above before starting capture.
   voicePreparing=poseVoice.prepareCapture(voice,pose.candidate,uiLandscapeActive());
@@ -627,17 +654,23 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   audioTick(captureRequested&&!soundPlaying());
   voice.captureReady=audioReady()&&(transportMode()!=TransportMode::BLE||blePerformanceReady());
   poseVoice.update(voice,pose.stable,uiButtonAForVoice(),uiLandscapeActive(),pose.candidate==pose.stable);
-  voice.button(uiButtonAForVoice() && !(displayOrientation.rotation&1));
+  if(dualKeys){
+    walkieKeys.update(deviceWalkieKeysActive(),M5.BtnA.isPressed(),M5.BtnB.isPressed(),uiButtonAForVoice());
+    voice.held=walkieKeys.heldA;
+  }else voice.button(uiButtonAForVoice() && !(displayOrientation.rotation&1));
   voice.tick(ms);
   static DevicePose loggedPose=DevicePose::Other;
   if(pose.stable!=loggedPose){loggedPose=pose.stable;Serial.printf("[pose] %s confirmed %ums live %d block %s\n",poseName(loggedPose),unsigned(ms-pose.since),voice.streaming,voiceBlock());}
   static unsigned bleBlock=0;static uint8_t blePacket[196];static int imaIndex=32;
   if(voice.streaming!=lastStreaming){
-    bleBlock=0;
+    bleBlock=0;keyEdges.clear();
+    if(!voice.streaming)walkieKeys.update(false,false,false);
     Serial.printf("[voice] %s pose %s manual %d ready %d reason %s\n",voice.streaming?"start":"stop",poseName(pose.stable),voice.manual,voice.captureReady,voiceBlock());
     if(voice.streaming){esp_fill_random(nonce,sizeof(nonce));seq=clockSample=0;}
   }
+  if(!deviceWalkieKeysActive())walkieKeys.update(false,false,false);
   if(voice.held!=lastHeld){edge(voice.held);lastHeld=voice.held;}
+  if(walkieKeys.heldB!=lastHeldB){edge(walkieKeys.heldB,'b');lastHeldB=walkieKeys.heldB;}
   lastStreaming=voice.streaming;
   static int16_t pcm[480];
   // A slow network must not keep an independently refilled capture queue
@@ -666,11 +699,12 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     unsigned flags=unsigned(voice.allowed)|(unsigned(voice.muted)<<1)|(unsigned(voice.localSound)<<2)|
       (unsigned(voice.streaming)<<3)|(unsigned(voice.manual)<<4)|(unsigned(voice.held)<<5)|
       (unsigned(voice.captureReady)<<6)|(unsigned(voice.inverted)<<7);
-    const uint32_t currentEdge=edgeCount?edges[edgeRead].seq:0;
+    const auto pending=keyEdges.front();
+    const uint32_t currentEdge=pending?pending->seq:0;
     static unsigned lastFlags=~0u;static uint32_t lastEdge=~0u;
     if(ms-lastBleStatus>=200||flags!=lastFlags||currentEdge!=lastEdge){
     char cookie[33];for(int i=0;i<16;i++)snprintf(cookie+i*2,3,"%02x",nonce[i]);
-    static char live[1024];char edgeJSON[64],powerField[656]={};
+    static char live[1024];char edgeJSON[96],powerField[656]={};
     static uint32_t lastPowerSent=0,lastPowerEpoch=0;
     if(lastPowerSent!=powerSampleAt()||lastPowerEpoch!=epoch){
       char powerJSON[640];
@@ -679,9 +713,12 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
         lastPowerSent=powerSampleAt();lastPowerEpoch=epoch;
       }
     }
-    if(edgeCount)snprintf(edgeJSON,sizeof(edgeJSON),"{\"seq\":%u,\"down\":%s}",unsigned(edges[edgeRead].seq),edges[edgeRead].down?"true":"false");
+    if(pending){
+      if(dualKeys)snprintf(edgeJSON,sizeof(edgeJSON),"{\"seq\":%u,\"down\":%s,\"key\":\"%c\"}",unsigned(pending->seq),pending->down?"true":"false",pending->key);
+      else snprintf(edgeJSON,sizeof(edgeJSON),"{\"seq\":%u,\"down\":%s}",unsigned(pending->seq),pending->down?"true":"false");
+    }
     else strcpy(edgeJSON,"null");
-    snprintf(live,sizeof(live),"{\"s\":[%u,%u,\"%s\",%.4f,\"%s\",\"%s\",%u],\"edge\":%s,\"sleep\":{\"id\":%u,\"phase\":\"%s\"}%s}",unsigned(epoch),flags,cookie,audioLevel(),poseName(pose.stable),voiceBlock(),unsigned(bleAudioDropped()),edgeJSON,unsigned(deepSleepSequence()),deepSleepPending()?"preparing":"awake",powerField);
+    snprintf(live,sizeof(live),"{\"s\":[%u,%u,\"%s\",%.4f,\"%s\",\"%s\",%u],\"edge\":%s,\"keyMode\":%u,\"heldB\":%s,\"sleep\":{\"id\":%u,\"phase\":\"%s\"}%s}",unsigned(epoch),flags,cookie,audioLevel(),poseName(pose.stable),voiceBlock(),unsigned(bleAudioDropped()),edgeJSON,dualKeys?2u:1u,walkieKeys.heldB?"true":"false",unsigned(deepSleepSequence()),deepSleepPending()?"preparing":"awake",powerField);
     bleSendStatus(live);lastBleStatus=ms;lastFlags=flags;lastEdge=currentEdge;
     }
   }

@@ -3,6 +3,49 @@ import XCTest
 @testable import ThinCubeCore
 
 final class KeyEventSequenceTests: XCTestCase {
+    func testTwoButtonsShareModifiersAndReleaseIndependently() throws {
+        var sequence = KeyEventSequence()
+        _ = try XCTUnwrap(sequence.press(combo("right_cmd+a"), button: .a))
+        let b = try XCTUnwrap(sequence.press(combo("right_cmd+b"), physicallyHeld: [54, 0], button: .b))
+        XCTAssertEqual(b.map(\.code), [11])
+        let aUp = sequence.release(physicallyHeld: [54, 0, 11], button: .a)
+        XCTAssertEqual(aUp.map(\.code), [0]); XCTAssertEqual(aUp[0].flags, flags([54]))
+        XCTAssertTrue(sequence.isActive(for: .b)); XCTAssertFalse(sequence.isActive(for: .a))
+        let bUp = sequence.release(physicallyHeld: [54, 11], button: .b)
+        XCTAssertEqual(bUp.map(\.code), [11, 54]); XCTAssertEqual(bUp.last?.flags, [])
+        XCTAssertFalse(sequence.isActive)
+    }
+
+    func testSameChordBelongsToBothUntilLastButtonReleases() throws {
+        var sequence = KeyEventSequence()
+        let chord = try combo("right_cmd+return")
+        _ = try XCTUnwrap(sequence.press(chord, button: .a))
+        XCTAssertTrue(try XCTUnwrap(sequence.press(chord, physicallyHeld: [54, 36], button: .b)).isEmpty)
+        XCTAssertTrue(sequence.release(physicallyHeld: [54, 36], button: .a).isEmpty)
+        XCTAssertEqual(sequence.release(physicallyHeld: [54, 36], button: .b).map(\.code), [36, 54])
+    }
+
+    func testReleaseAllCleansBothButtonsAndOppositeModifierSides() throws {
+        var sequence = KeyEventSequence()
+        _ = try XCTUnwrap(sequence.press(combo("left_cmd+a"), button: .a))
+        _ = try XCTUnwrap(sequence.press(combo("right_cmd+b"), button: .b))
+        let up = sequence.release(physicallyHeld: [55, 0, 54, 11, 56])
+        XCTAssertEqual(Set(up.map(\.code)), [55, 0, 54, 11])
+        XCTAssertEqual(up.last?.flags, flags([56]))
+        XCTAssertFalse(sequence.isActive)
+        XCTAssertTrue(sequence.release(button: .a).isEmpty)
+        XCTAssertTrue(sequence.release(button: .b).isEmpty)
+    }
+
+    func testRejectedPhysicalBDoesNotDisturbHeldA() throws {
+        var sequence = KeyEventSequence()
+        _ = try XCTUnwrap(sequence.press(combo("right_cmd+a"), button: .a))
+        XCTAssertNil(sequence.press(try combo("cmd+b"), physicallyHeld: [54, 0, 11], button: .b))
+        XCTAssertTrue(sequence.isActive(for: .a)); XCTAssertFalse(sequence.isActive(for: .b))
+        XCTAssertTrue(sequence.release(button: .b).isEmpty)
+        XCTAssertEqual(sequence.release(button: .a).map(\.code), [0, 54])
+    }
+
     private func combo(_ spec: String) throws -> KeyCombo {
         try XCTUnwrap(ShortcutCatalog.parse(spec))
     }

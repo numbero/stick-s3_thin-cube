@@ -27,7 +27,9 @@ public struct KeyEventStep: Equatable {
 /// permission and CGEvent posting. Only keys pressed by this sequence are owned.
 public struct KeyEventSequence {
     public private(set) var injectedCodes: [UInt16] = []
-    public private(set) var isActive = false
+    private var owners: [DeviceButton: [UInt16]] = [:]
+    public var isActive: Bool { !owners.isEmpty }
+    public func isActive(for button: DeviceButton) -> Bool { owners[button] != nil }
 
     public init() {}
 
@@ -38,31 +40,34 @@ public struct KeyEventSequence {
     /// nil rejects a duplicate press or an ordinary key already physically held.
     /// An empty plan is valid when all keys of a modifier-only chord are held.
     public mutating func press(_ combo: KeyCombo, physicallyHeld: Set<UInt16> = [],
-                               physicalFlags: CGEventFlags = []) -> [KeyEventStep]? {
-        guard !isActive, !combo.allCodes.isEmpty,
-              combo.keyCode.map({ !physicallyHeld.contains($0) }) ?? true else { return nil }
+                               physicalFlags: CGEventFlags = [], button: DeviceButton = .a) -> [KeyEventStep]? {
+        let physical = physicallyHeld.subtracting(injectedCodes)
+        guard owners[button] == nil, !combo.allCodes.isEmpty,
+              combo.keyCode.map({ !physical.contains($0) }) ?? true else { return nil }
+        owners[button] = combo.allCodes
         var steps: [KeyEventStep] = []
-        for code in combo.allCodes where !physicallyHeld.contains(code) && !injectedCodes.contains(code) {
+        for code in combo.allCodes where !physical.contains(code) && !injectedCodes.contains(code) {
             injectedCodes.append(code)
             steps.append(KeyEventStep(code: code, down: true,
-                                      flags: flags(physicallyHeld: physicallyHeld, physicalFlags: physicalFlags)))
+                                      flags: flags(physicallyHeld: physical, physicalFlags: physicalFlags)))
         }
-        isActive = true
         return steps
     }
 
     public mutating func release(physicallyHeld: Set<UInt16> = [],
-                                 physicalFlags: CGEventFlags = []) -> [KeyEventStep] {
+                                 physicalFlags: CGEventFlags = [], button: DeviceButton? = nil) -> [KeyEventStep] {
         var steps: [KeyEventStep] = []
+        if let button { owners.removeValue(forKey: button) } else { owners.removeAll() }
+        let retained = Set(owners.values.flatMap { $0 })
         // A CGEventSource state snapshot can contain our own posted keys.
         // Treating those as physical keeps their modifier flags stuck on the
         // synthetic up. Preserve other keys, but always clear our owned keys.
         let otherKeys = physicallyHeld.subtracting(injectedCodes)
-        while let code = injectedCodes.popLast() {
+        for code in injectedCodes.reversed() where !retained.contains(code) {
+            injectedCodes.removeAll { $0 == code }
             steps.append(KeyEventStep(code: code, down: false,
                                       flags: flags(physicallyHeld: otherKeys, physicalFlags: physicalFlags)))
         }
-        isActive = false
         return steps
     }
 

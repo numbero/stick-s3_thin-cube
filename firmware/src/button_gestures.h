@@ -5,10 +5,18 @@ struct ButtonGestures {
   enum class Action { None, Mute, Switch, Pair };
   bool previousB=false, combo=false, comboReady=false, comboReleased=false, pairAllowed=false, blocked=false;
   bool suppressA=false, switchReady=false;
+  bool wasWalkie=false, consumedB=false;
   uint32_t bSince=0, bothSince=0;
-  Action update(uint32_t now,bool a,bool b,bool bClicked,bool enabled,bool canPair) {
+  Action update(uint32_t now,bool a,bool b,bool bClicked,bool enabled,bool canPair,bool walkie=false) {
     suppressA=b||combo||blocked||previousB;
-    if(!enabled){blocked=a||b;combo=false;switchReady=false;previousB=b;return Action::None;}
+    if(!enabled){blocked=a||b;combo=comboReady=switchReady=false;previousB=b;wasWalkie=false;consumedB=b;return Action::None;}
+    // The whole press belongs to its context, including the terminal click.
+    // On exit, never reinterpret a held shortcut as mute/mode-switch/pairing.
+    if(walkie||wasWalkie||consumedB){
+      wasWalkie=walkie;consumedB=b;previousB=b;
+      combo=comboReady=comboReleased=switchReady=blocked=false;
+      suppressA=false;return Action::None;
+    }
     if(blocked){blocked=a||b;previousB=b;return Action::None;}
     if(b&&!previousB){bSince=now;switchReady=false;}
     if(a&&b&&!combo){combo=true;bothSince=now;pairAllowed=canPair;comboReady=false;comboReleased=false;switchReady=false;}

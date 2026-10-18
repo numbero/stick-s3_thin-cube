@@ -21,17 +21,17 @@ import ThinCubeCore
         _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    @discardableResult func press(_ shortcut: Shortcut) -> Bool {
+    @discardableResult func press(_ shortcut: Shortcut, button: DeviceButton = .a) -> Bool {
         guard trusted else { onTrace?("拦截：系统键盘控制权限未生效；请在辅助功能中允许当前 ThinCube 应用。"); return false }
         guard let combo = shortcut.combo else { onTrace?("拦截：快捷键配置无效。"); return false }
-        guard !sequence.isActive else { onTrace?("忽略：上一组快捷键仍保持中。"); return false }
+        guard !sequence.isActive(for: button) else { onTrace?("忽略：该设备按键的快捷键仍保持中。"); return false }
         let physical = physicalState(checking: combo.allCodes)
-        if let code = combo.keyCode, physical.keys.contains(code) {
+        if let code = combo.keyCode, physical.keys.contains(code), !sequence.injectedCodes.contains(code) {
             onTrace?("拦截：主键 code=\(code) 已被物理键盘按住；请先松开。"); return false
         }
         var next = sequence
         guard let steps = next.press(combo, physicallyHeld: physical.keys,
-                                     physicalFlags: physical.flags),
+                                     physicalFlags: physical.flags, button: button),
               let events = makeEvents(steps) else { onTrace?("失败：无法构造系统键盘事件。"); return false }
         post(events)
         sequence = next
@@ -40,11 +40,11 @@ import ThinCubeCore
         return true
     }
 
-    func release() {
+    func release(_ button: DeviceButton? = nil) {
         guard sequence.isActive else { return }
         let physical = physicalState(checking: [])
         var next = sequence
-        let steps = next.release(physicallyHeld: physical.keys, physicalFlags: physical.flags)
+        let steps = next.release(physicallyHeld: physical.keys, physicalFlags: physical.flags, button: button)
         guard let events = makeEvents(steps) else { onTrace?("失败：无法构造松键事件，将继续尝试释放。"); return }
         post(events)
         sequence = next
