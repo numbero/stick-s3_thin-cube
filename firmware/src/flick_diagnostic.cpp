@@ -105,8 +105,9 @@ void flickTick(uint32_t now){
 }
 FlickSnapshot flickSnapshot(){return {enabled,detector.starts,detector.hits,detector.rejected,FlickDetector::name(detector.stage)};}
 void flickReport(){
-  Serial.printf("[flick-status] ms=%u enabled=%d context=%d healthy=%d state=%s starts=%u hits=%u rejected=%u required_strokes=2 start_dps=300 peak_dps=500 reverse_dps=150 direction_cos=0.65 grip_filter_ms=350 arm_ms=350 settle_ms=100 first_burst_ms=220 min_separation_ms=180 max_separation_ms=900 pair_ms=1600 cooldown_ms=1200 diagnostic_only=%d\n",
-    unsigned(millis()),enabled,context(millis()),imuHealthy(millis()),FlickDetector::name(detector.stage),unsigned(detector.starts),unsigned(detector.hits),unsigned(detector.rejected),DiagnosticOnly);
+  Serial.printf("[flick-status] ms=%u enabled=%d context=%d healthy=%d state=%s starts=%u hits=%u rejected=%u required_strokes=2 start_dps=%.0f peak_dps=%.0f reverse_dps=%.0f direction_cos=0.65 grip_filter_ms=350 arm_ms=350 settle_ms=100 first_burst_ms=220 min_separation_ms=180 max_separation_ms=900 pair_ms=1600 cooldown_ms=1200 diagnostic_only=%d\n",
+    unsigned(millis()),enabled,context(millis()),imuHealthy(millis()),FlickDetector::name(detector.stage),unsigned(detector.starts),unsigned(detector.hits),unsigned(detector.rejected),
+    double(FlickDetector::StartRate),double(FlickDetector::PeakRate),double(FlickDetector::ReverseRate),DiagnosticOnly);
 }
 bool flickCommand(const char* command){
   if(strncmp(command,"flick",5)||!(command[5]==0||command[5]==' '))return false;

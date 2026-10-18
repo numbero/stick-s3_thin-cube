@@ -14,7 +14,7 @@ class FlickDetector {
   uint32_t starts=0,hits=0,rejected=0,duration=0;
   unsigned axis=0,strokes=0;
   float peakFirst=0,peakSecond=0,peakReverse=0,travel=0,peakAccelDev=0;
-  static constexpr float StartRate=300,PeakRate=500,ReverseRate=150,QuietRate=45,DirectionCos=.65f;
+  static constexpr float StartRate=240,PeakRate=400,ReverseRate=150,QuietRate=45,DirectionCos=.65f;
   static constexpr float GripFilterMs=350;
   static constexpr uint32_t ArmMs=350,SettleMs=100,FirstBurstMs=220,MinSeparationMs=180;
   static constexpr uint32_t PairWindowMs=1600,CooldownMs=1200,MaxGapMs=80,MaxSeparationMs=900;

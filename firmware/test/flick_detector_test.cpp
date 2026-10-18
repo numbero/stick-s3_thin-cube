@@ -11,9 +11,9 @@ struct Rig {
     return detector.update(now,0,0,a,gyro[0],gyro[1],gyro[2],active,button);
   }
   void quiet(unsigned ms=400){for(unsigned i=0;i<ms;i+=10)sample();}
-  void pulse(unsigned axis=0,float sign=1,unsigned dt=10,unsigned settle=160){
+  void pulse(unsigned axis=0,float sign=1,unsigned dt=10,unsigned settle=160,float peak=900,float reverse=600){
     for(unsigned t=0;t<=240+dt;t+=dt){
-      float rate=t<40?900.f*t/40:t<100?900:t<140?900.f*(140-t)/40:t<240?-600:0;
+      float rate=t<40?peak*t/40:t<100?peak:t<140?peak*(140-t)/40:t<240?-reverse:0;
       sample(sign*rate,axis,1,true,false,dt);
     }quiet(settle);
   }
@@ -26,6 +26,19 @@ int main(){
     r.pulse(axis,sign,dt);assert(r.detector.hits==1);
     r.quiet(1600);r.pair(axis,sign,dt);assert(r.detector.hits==2);
   }
+  // Gentler complete pairs stay below the old 500 dps peak requirement.
+  // A single impulse or a sub-threshold second impulse must still fail.
+  for(unsigned axis=0;axis<3;++axis)for(float sign:{-1.f,1.f})for(unsigned dt:{10u,17u,23u,33u}){
+    Rig r;r.quiet();
+    r.pulse(axis,sign,dt,160,450,250);r.pulse(axis,sign,dt,160,450,250);
+    assert(r.detector.hits==1&&r.detector.rejected==0);
+  }
+  {Rig r;r.quiet();r.pulse(0,1,10,160,450,250);r.quiet(1600);
+    assert(r.detector.hits==0&&r.detector.rejected==1);}
+  {Rig r;r.quiet();r.pulse(0,1,10,160,450,250);r.pulse(0,1,10,160,360,250);r.quiet(1600);
+    assert(r.detector.hits==0);}
+  {Rig r;r.quiet();r.pulse(0,1,10,160,360,250);r.pulse(0,1,10,160,360,250);r.quiet(1600);
+    assert(r.detector.hits==0);}
   {Rig r;r.quiet();r.pulse();r.quiet(1600);assert(r.detector.hits==0&&r.detector.rejected==1);}
   {Rig r;r.quiet();r.pulse(0,1,10,0);r.pulse();assert(r.detector.hits==1);}
   {Rig r;r.quiet();r.sample(320,1);r.pair(0);assert(r.detector.hits==1&&r.detector.axis==0);}
@@ -93,5 +106,5 @@ int main(){
       assert(d.hits==1);
     }
   }
-  puts("double impulse: six directions, irregular sampling, single/opposite/cross-axis strokes, continuous pair/shaking, rebound, cooldown, final grip, slow turn/tap, gating, NaN/gap, sustained turn, isolated spike and wrap passed");
+  puts("double impulse: six directions, irregular sampling, gentle pairs/singles/weak second stroke, single/opposite/cross-axis strokes, continuous pair/shaking, rebound, cooldown, final grip, slow turn/tap, gating, NaN/gap, sustained turn, isolated spike and wrap passed");
 }
