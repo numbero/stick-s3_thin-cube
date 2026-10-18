@@ -1,4 +1,5 @@
 #pragma once
+bool deepSleepDiagnostic(); // USB-only prepare/rollback check; never powers off
 #include <stdint.h>
 void deepSleepBegin();
 bool deepSleepAvailable();

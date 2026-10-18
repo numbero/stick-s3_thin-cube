@@ -2,6 +2,25 @@ import XCTest
 @testable import ThinCubeCore
 
 final class BLEStatusSnapshotsTests: XCTestCase {
+    func testGestureDeltaClearsEventAndRejectsMalformedOrMissingFields() throws {
+        var decoder = BLEStatusSnapshots()
+        _ = decoder.accept(try data(["epoch": 7, "gestureProtocol": 1, "gestureMode": 0]))
+        let live: [Any] = [7, 201, String(repeating: "00", count: 16), 0, "inverted", "", 0]
+        var delta: [String: Any] = ["s": live, "edge": NSNull(), "gestureMode": 1,
+                                  "gesture": ["seq": 4, "type": "double_flick", "ageMs": 10]]
+        let received = try XCTUnwrap(decoder.accept(try data(delta)))
+        let status = try XCTUnwrap(JSONSerialization.jsonObject(with: received) as? [String: Any])
+        XCTAssertEqual(status["gestureMode"] as? Int, 1)
+        XCTAssertEqual((status["gesture"] as? [String: Any])?["seq"] as? Int, 4)
+        for malformed in [["seq": true, "type": "double_flick", "ageMs": 1] as [String: Any],
+                          ["seq": 4, "type": 1, "ageMs": 1], ["seq": 4, "type": "double_flick", "ageMs": -1]] {
+            delta["gesture"] = malformed; XCTAssertNil(decoder.accept(try data(delta)))
+        }
+        delta.removeValue(forKey: "gesture"); XCTAssertNil(decoder.accept(try data(delta)))
+        delta["gesture"] = NSNull()
+        let cleared = try XCTUnwrap(decoder.accept(try data(delta)))
+        XCTAssertTrue((try JSONSerialization.jsonObject(with: cleared) as? [String: Any])?["gesture"] is NSNull)
+    }
     func testDualKeyDeltaPreservesNegotiationAndClearsB() throws {
         var decoder = BLEStatusSnapshots()
         _ = decoder.accept(try data(["epoch": 7, "keyProtocol": 2, "keyMode": 1, "heldB": false]))

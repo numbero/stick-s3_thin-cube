@@ -27,9 +27,9 @@ public struct KeyEventStep: Equatable {
 /// permission and CGEvent posting. Only keys pressed by this sequence are owned.
 public struct KeyEventSequence {
     public private(set) var injectedCodes: [UInt16] = []
-    private var owners: [DeviceButton: [UInt16]] = [:]
+    private var owners: [ShortcutTrigger: [UInt16]] = [:]
     public var isActive: Bool { !owners.isEmpty }
-    public func isActive(for button: DeviceButton) -> Bool { owners[button] != nil }
+    public func isActive(for button: ShortcutTrigger) -> Bool { owners[button] != nil }
 
     public init() {}
 
@@ -40,7 +40,7 @@ public struct KeyEventSequence {
     /// nil rejects a duplicate press or an ordinary key already physically held.
     /// An empty plan is valid when all keys of a modifier-only chord are held.
     public mutating func press(_ combo: KeyCombo, physicallyHeld: Set<UInt16> = [],
-                               physicalFlags: CGEventFlags = [], button: DeviceButton = .a) -> [KeyEventStep]? {
+                               physicalFlags: CGEventFlags = [], button: ShortcutTrigger = .a) -> [KeyEventStep]? {
         let physical = physicallyHeld.subtracting(injectedCodes)
         guard owners[button] == nil, !combo.allCodes.isEmpty,
               combo.keyCode.map({ !physical.contains($0) }) ?? true else { return nil }
@@ -55,7 +55,7 @@ public struct KeyEventSequence {
     }
 
     public mutating func release(physicallyHeld: Set<UInt16> = [],
-                                 physicalFlags: CGEventFlags = [], button: DeviceButton? = nil) -> [KeyEventStep] {
+                                 physicalFlags: CGEventFlags = [], button: ShortcutTrigger? = nil) -> [KeyEventStep] {
         var steps: [KeyEventStep] = []
         if let button { owners.removeValue(forKey: button) } else { owners.removeAll() }
         let retained = Set(owners.values.flatMap { $0 })
@@ -69,6 +69,19 @@ public struct KeyEventSequence {
                                       flags: flags(physicallyHeld: otherKeys, physicalFlags: physicalFlags)))
         }
         return steps
+    }
+
+    /// Construct the complete tap before posting. Never release another
+    /// trigger's held keys or an ordinary key already down on the keyboard.
+    public mutating func pulse(_ combo: KeyCombo, physicallyHeld: Set<UInt16> = [],
+                               physicalFlags: CGEventFlags = []) -> [KeyEventStep]? {
+        guard combo.keyCode.map({ !injectedCodes.contains($0) }) ?? true else { return nil }
+        var next = self
+        guard let down = next.press(combo, physicallyHeld: physicallyHeld,
+                                    physicalFlags: physicalFlags, button: .doubleFlick) else { return nil }
+        let up = next.release(physicallyHeld: physicallyHeld, physicalFlags: physicalFlags, button: .doubleFlick)
+        self = next
+        return down + up
     }
 
     private func flags(physicallyHeld: Set<UInt16>, physicalFlags: CGEventFlags) -> CGEventFlags {

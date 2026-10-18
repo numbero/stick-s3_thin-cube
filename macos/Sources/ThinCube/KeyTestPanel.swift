@@ -18,7 +18,7 @@ struct KeyTestPanel: View {
                 Spacer()
                 HelpPopover(title: "按键诊断帮助") {
                     HelpParagraph("测试方式", "设备事件会自动记录。测试当前快捷键会向 ThinCube 窗口发送一次按下与松开，无需连接设备。")
-                    HelpParagraph("本窗口测试", "开始后可按设备 A/B 或 Mac 键盘查看事件；此时键盘操作会被窗口接收，Esc 停止测试。关闭诊断或切换窗口也会停止。")
+                    HelpParagraph("本窗口测试", "开始后可按设备 A/B、连续双甩或按 Mac 键盘查看事件；此时键盘操作会被窗口接收，Esc 停止测试。关闭诊断或切换窗口也会停止。")
                     HelpParagraph("日志", "保留最近 100 条事件，新事件在上方。已提交表示发往系统，系统回读表示本窗口实际收到。")
                     HelpParagraph("权限", "若辅助功能开关已开启而键盘控制仍未生效，请关闭再开启 ThinCube 授权，并退出重启应用。")
                 }
@@ -47,6 +47,8 @@ struct KeyTestPanel: View {
                     .disabled(!diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
                 Button("测试 B 快捷键") { model.testCurrentShortcut(button: .b) }
                     .disabled(model.shortcutB == nil || !diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
+                Button("测试双甩快捷键") { model.testCurrentShortcut(button: .doubleFlick) }
+                    .disabled(model.shortcutDoubleFlick == nil || !diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
                 if diagnostics.monitoring { Text("测试中 · Esc 停止").foregroundStyle(.orange) }
             }
             HStack {

@@ -132,3 +132,11 @@ HTTP `/api/settings` 与 BLE `settings` 增加可选布尔值 `powerLedDebug`：
 仅在 A 原有快捷键可用的倒置对讲机条件下接管 B：按下保持、松开释放，B 未绑定时不执行操作；对讲机内 B 不静音、长按不切换连接、A+B 不重新配对。普通模式和系统页面保持原行为。按住 B 退出模式后消费这次松手；预按 A/B 进入时各自需松开再按。绑定保存在 Mac，B 不默认复制 A，左右修饰键设置沿用共享开关。
 
 新连接重置协商；协商变化清空旧队列并重新武装，语音会话开始/结束清除旧队列。Mac 按来源去重、确认并管理共享合成按键；松开 A 不释放 B 仍持有的键。epoch、语音 session、协商模式变化，以及原有停止/锁屏/编辑/超时等条件释放全部来源，受阻事件不在恢复后重放。详情与实测边界见 [B 键实现记录](walkie-b-shortcut-v0.4.41.md)。
+
+## v0.4.44 连续双甩离散事件
+
+完整状态新增 `gestureProtocol:1`、`gestureMode:0|1`、`gesture:null|{seq,type:"double_flick",ageMs}`。当前 owner/epoch 的鉴权心跳发送 `gestureProtocol:1,gestureAck:UInt32` 后启用，旧客户端不协商则不发送双甩事件。A/B 的 `keyProtocol/ack/edge` 保持独立，不改变保持语义。
+
+双甩事件队列上限 4，序号跳过 0，匹配队首的 `gestureAck` 出队；未确认前重复报告，超过 750 ms 丢弃。离开有效对讲状态、控制超时、按下 A/B、新 owner 或协商改变清空队列。BLE 快速状态增加 `gestureMode/gesture`，即使没有事件也携带 `gesture:null`；原 `s` 数组与 flags 保持不变。
+
+Mac 在同一 epoch 中按序号消费一次；首次进入新语音/协商上下文、编辑/未设置/禁用期间、未知类型与过期事件均确认丢弃，之后不补放。有效事件在 Mac 构造完整按下和松开后一次提交，禁止把手势当作持续 held，禁止等待下一包松键。按设备保存独立映射。实现及验收边界见 [双甩快捷键](double-flick-shortcut-v0.4.44.md)。

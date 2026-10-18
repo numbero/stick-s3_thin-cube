@@ -63,9 +63,8 @@ int main(){
     }
   }
   {
-    // The old 20-degree exit now stays ambiguous, as does 15.5 degrees at the
-    // new boundary. At 14.5 degrees, a full 450ms still exits in both references.
-    for(int upright:{-1,1})for(int face:{-1,1})for(int target=0;target<3;++target){
+    // Sideways/flat exits still require the narrow 15-degree cone and 450ms.
+    for(int upright:{-1,1})for(int face:{-1,1})for(int target=1;target<3;++target){
       Fixture f(upright,face);f.enter();
       uint32_t start=400;
       for(float degrees:{20.f,15.5f}){
@@ -92,15 +91,76 @@ int main(){
       Fixture f;f.enter();
       const float x=target==1?1.f:target==2?-1.f:0;
       const float y=target==0?1.f:0,z=target==3?1.f:0;
+      const uint32_t hold=target==0?180:450;
       f.sample(400,x,y,z,0,true);assert(f.voice.held);
-      f.sample(849,x,y,z,0,true);assert(f.voice.streaming&&f.voice.held&&f.display.rotation==2);
-      f.sample(850,x,y,z,0,true);assert(!f.voice.streaming&&!f.voice.held&&!f.voice.inverted);
+      f.sample(400+hold-1,x,y,z,0,true);assert(f.voice.streaming&&f.voice.held&&f.display.rotation==2);
+      f.sample(400+hold,x,y,z,0,true);assert(!f.voice.streaming&&!f.voice.held&&!f.voice.inverted);
       f.sample(860,x,y,z);f.sample(950,x,y,z);
       assert(f.display.rotation==(target==0?0:target==1?1:target==2?3:2));
       f.sample(1000,0,-1,0,0,true);f.sample(1220,0,-1,0,0,true);
       assert(f.voice.streaming&&!f.voice.held); // A held before entry must be released first.
       f.sample(1230,0,-1,0);f.sample(1240,0,-1,0,0,true);assert(f.voice.held);
     }
+  }
+  {
+    // A natural upright return need not be within the old 15-degree cone.
+    // Check both references and all four directions of hand-held lean.
+    for(int upright:{-1,1})for(int face:{-1,1})for(int direction=0;direction<4;++direction){
+      Fixture f(upright,face);f.enter();
+      const float a=25.f*.01745329252f,c=cosf(a),s=sinf(a);
+      const float x=direction<2?(direction==0?s:-s):0;
+      const float z=direction>=2?(direction==2?s:-s):0;
+      f.sample(400,x,c*upright,z,0,true);
+      f.sample(579,x,c*upright,z,0,true);assert(f.voice.streaming&&f.voice.held&&f.display.rotation==2);
+      f.sample(580,x,c*upright,z,0,true);assert(!f.voice.streaming&&!f.voice.held&&!f.voice.inverted);
+      // The visual direction still waits until voice has exited, then 90ms.
+      f.sample(590,x,c*upright,z);f.sample(679,x,c*upright,z);assert(f.display.rotation==2);
+      f.sample(680,x,c*upright,z);assert(f.display.rotation==0);
+    }
+  }
+  {
+    // Pending-upright hysteresis preserves progress through mild hand tremor,
+    // but does not admit a wide lean on its own or bridge a real tilt away.
+    for(int upright:{-1,1}){
+      Fixture f(upright);f.enter();
+      const auto sampleAngle=[&](uint32_t now,float degrees,float gyro=0.f){
+        const float a=degrees*.01745329252f;
+        f.sample(now,sinf(a),cosf(a)*upright,0,gyro);
+      };
+      sampleAngle(400,27);sampleAngle(1000,27);assert(f.voice.streaming&&f.pose.candidate==DevicePose::Other);
+      sampleAngle(1100,25);sampleAngle(1170,30);sampleAngle(1279,25);assert(f.voice.streaming);
+      sampleAngle(1280,30);assert(!f.voice.streaming);
+
+      Fixture reset(upright);reset.enter();
+      const auto tilt=[&](uint32_t now,float degrees,float gyro=0.f){
+        const float a=degrees*.01745329252f;
+        reset.sample(now,sinf(a),cosf(a)*upright,0,gyro);
+      };
+      tilt(400,25);tilt(550,32);assert(reset.voice.streaming);
+      tilt(560,30);tilt(1000,30);assert(reset.voice.streaming&&reset.pose.candidate==DevicePose::Other);
+      tilt(1100,25);tilt(1279,25);assert(reset.voice.streaming);
+      tilt(1280,25);assert(!reset.voice.streaming);
+    }
+  }
+  {
+    // A brief upright pass during a flip/flick cannot exit voice. Invalid
+    // acceleration or fast rotation also resets the shorter upright hold.
+    for(int invalid=0;invalid<3;++invalid){
+      Fixture f;f.enter();
+      f.sample(400,0,1,0,0,true);f.sample(550,0,1,0,0,true);assert(f.voice.streaming&&f.voice.held);
+      if(invalid==0)f.sample(560,0,-1,0,0,true);
+      else if(invalid==1)f.sample(560,0,1,0,150,true);
+      else f.sample(560,0,1.3f,0,0,true);
+      f.sample(570,0,1,0,0,true);f.sample(749,0,1,0,0,true);assert(f.voice.streaming&&f.voice.held);
+      f.sample(750,0,1,0,0,true);assert(!f.voice.streaming&&!f.voice.held);
+    }
+  }
+  {
+    // The new upright timer is wrap-safe and preserves manual meetings.
+    Fixture f;f.enter(0xfffff000u);
+    assert(f.voice.startManual(false));
+    f.sample(0xfffffff0u,0,1,0,0,true);f.sample(163,0,1,0,0,true);assert(f.voice.inverted&&f.voice.held);
+    f.sample(164,0,1,0,0,true);assert(!f.voice.inverted&&!f.voice.held&&f.voice.manual&&f.voice.streaming);
   }
   {
     // A brief visit, a change of target, or a return to moving resets the hold.
@@ -174,5 +234,5 @@ int main(){
     p.update(0,0,1,0,300);assert(p.update(0,0,1,0,460)==DevicePose::FaceUp);
     p.update(0,1,0,0,500);assert(p.update(0,1,0,0,720)==DevicePose::Upright);
   }
-  puts("11 walkie tilt tolerance, deliberate exits, rotation, rest, re-arm and clock-wrap scenarios passed");
+  puts("15 walkie tilt tolerance, fast upright exits, rotation, rest, re-arm and clock-wrap scenarios passed");
 }

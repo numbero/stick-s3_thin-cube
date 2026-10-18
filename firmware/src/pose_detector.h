@@ -17,6 +17,8 @@ struct PoseDetector {
   static constexpr uint32_t VerticalHoldMs = 220, FaceUpHoldMs = 160, FaceDownHoldMs = 1500;
   static constexpr uint32_t VoiceExitHoldMs = 450;
   static constexpr float VoiceExitAxis = .966f; // Within about 15 degrees of the target axis.
+  static constexpr uint32_t VoiceUprightHoldMs = 180;
+  static constexpr float VoiceUprightEnterAxis = .90f, VoiceUprightRetainAxis = .85f;
   int uprightSign = 0, faceUpSign = 0;
   DevicePose stable = DevicePose::Other, candidate = DevicePose::Other;
   uint32_t since = 0;
@@ -52,7 +54,12 @@ public:
         const float vertical = y*uprightSign/n;
         const DevicePose next = vertical > 0 ? DevicePose::Upright : DevicePose::Inverted;
         const bool retained = next == stable;
-        const float threshold = voiceExitGuarded && next == DevicePose::Upright ? VoiceExitAxis : (retained ? .72f : .82f);
+        // Returning to the opposite vertical hemisphere is deliberate. Admit
+        // it sooner, then tolerate small hand tremor while the hold completes.
+        // Sideways/flat exits keep the stricter speaking-tilt guard below.
+        const bool uprightExit = voiceExitGuarded && next == DevicePose::Upright;
+        const bool uprightPending = candidate == DevicePose::Upright || retained;
+        const float threshold = uprightExit ? (uprightPending ? VoiceUprightRetainAxis : VoiceUprightEnterAxis) : (retained ? .72f : .82f);
         if(fabsf(vertical) > threshold &&
            fabsf(z)/n < (retained ? .60f : .50f) &&
            fabsf(x)/n < (retained ? .65f : .55f)) p = next;
@@ -64,10 +71,10 @@ public:
     }
     if (p != candidate) { candidate = p; since = now; }
     // Moving remains ambiguous and preserves voice in PoseVoiceController.
-    // Only ordinary exits get a longer hold; inversion and face-down rest keep
-    // their existing admission times.
+    // Only sideways/flat exits get the longer speaking-tilt guard. A deliberate
+    // return upright is faster; inversion and face-down rest keep their times.
     const bool ordinaryExit = p == DevicePose::Upright || p == DevicePose::FaceUp || p == DevicePose::Landscape;
-    const uint32_t dwell = voiceExitGuarded && ordinaryExit ? VoiceExitHoldMs :
+    const uint32_t dwell = voiceExitGuarded && p == DevicePose::Upright ? VoiceUprightHoldMs : voiceExitGuarded && ordinaryExit ? VoiceExitHoldMs :
       p == DevicePose::FaceDown ? FaceDownHoldMs : (p == DevicePose::FaceUp || p==DevicePose::Landscape) ? FaceUpHoldMs : p == DevicePose::Other ? 100 : VerticalHoldMs;
     if (uint32_t(now-since) >= dwell) stable = p;
     return stable;

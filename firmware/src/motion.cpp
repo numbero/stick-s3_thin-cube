@@ -1,4 +1,5 @@
 #include "motion.h"
+#include "imu_service.h"
 #include "power_save.h"
 #include "power_save_policy.h"
 #include <M5Unified.h>
@@ -54,9 +55,11 @@ MotionEv motionPoll(uint32_t ms){
   if(powerSaveActive()&&uint32_t(ms-lastPoll)<IdleWorkProfile::IdleMotionMs)return MEV_NONE;
   lastPoll=ms;
   s_reads++;
-  if (!M5.Imu.update()) return MEV_NONE;
+  static uint32_t consumed=0;
+  const auto d=imuSample();
+  if(!imuHealthy(ms)||d.sequence==consumed)return MEV_NONE;
+  consumed=d.sequence;
   s_updates++;
-  const auto d = M5.Imu.getImuData();
   const float x = d.accel.x, y = d.accel.y, z = d.accel.z;
   const float gyro = sqrtf(d.gyro.x*d.gyro.x+d.gyro.y*d.gyro.y+d.gyro.z*d.gyro.z);
   s_activityDetected=s_activity.update(x,y,z,gyro,ms);
@@ -127,7 +130,7 @@ bool motionActivityDetected(){return s_activityDetected;}
 bool motionActivityHealthy(uint32_t ms){return s_activity.healthy(ms);}
 MotionDiag motionDiag(){
   MotionDiag g;
-  g.imuEnabled = M5.Imu.isEnabled();
+  g.imuEnabled = imuEnabled();
   g.reads = s_reads; g.updates = s_updates;
   g.ax = s_lastAcc[0]; g.ay = s_lastAcc[1]; g.az = s_lastAcc[2];
   g.mag = sqrtf(s_lastAcc[0]*s_lastAcc[0] + s_lastAcc[1]*s_lastAcc[1] + s_lastAcc[2]*s_lastAcc[2]);

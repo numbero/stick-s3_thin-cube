@@ -1,7 +1,9 @@
+#include "imu_service.h"
 #include "device.h"
 #include "voice_state.h"
 #include "walkie_keys.h"
 #include "control_lease.h"
+#include "gesture_events.h"
 #include "pose_voice.h"
 #include "display_motion.h"
 #include "audio_input.h"
@@ -38,8 +40,8 @@ namespace {
 struct Command {
   char op[24] = {}, ssid[33] = {}, pass[65] = {}, target[5] = {}, requestId[37] = {};
   int fd = -1, port = 0, flags = 0, brightness = 128, soundVolume = 35;
-  uint32_t ack = 0, epoch = 0, address = 0;
-  int keyProtocol = 1;
+  uint32_t ack = 0, gestureAck = 0, epoch = 0, address = 0;
+  int keyProtocol = 1, gestureProtocol = 0;
   float gain = 1;
   bool allowed = false, muted = false, local = true, ready = false, soundMuted = false,deepSleep=false,powerLedDebug=false;
 };
@@ -48,6 +50,12 @@ bool readKeyProtocol(cJSON* j,Command& c){
   if(!v)return true;
   if(!cJSON_IsNumber(v)||(v->valuedouble!=1&&v->valuedouble!=2))return false;
   c.keyProtocol=int(v->valuedouble);return true;
+}
+bool readGestureProtocol(cJSON* j,Command& c){
+  const auto version=cJSON_GetObjectItemCaseSensitive(j,"gestureProtocol"),ack=cJSON_GetObjectItemCaseSensitive(j,"gestureAck");
+  if(version){if(!cJSON_IsNumber(version)||(version->valuedouble!=0&&version->valuedouble!=1))return false;c.gestureProtocol=int(version->valuedouble);}
+  if(ack){if(!cJSON_IsNumber(ack)||!isfinite(ack->valuedouble)||ack->valuedouble<0||ack->valuedouble>UINT32_MAX||ack->valuedouble!=uint32_t(ack->valuedouble))return false;c.gestureAck=uint32_t(ack->valuedouble);}
+  return true;
 }
 QueueHandle_t commands;
 SemaphoreHandle_t publication;
@@ -72,9 +80,16 @@ float gain = 1;
 uint8_t brightness = 128, nonce[16] = {};
 WalkieKeyQueue keyEdges;
 WalkieKeys walkieKeys;
+GestureEvents gestureEvents;
+bool gesturesNegotiated=false;
+#ifdef THINCUBE_FLICK_SHORTCUT
+constexpr unsigned GestureProtocol=1;
+#else
+constexpr unsigned GestureProtocol=0;
+#endif
 bool dualKeys=false,lastHeldB=false;
 bool lastHeld = false, lastStreaming = false, healthy = false;
-void resetKeyControl(){dualKeys=false;keyEdges.clear();walkieKeys.update(false,false,false);lastHeld=lastHeldB=false;}
+void resetKeyControl(){dualKeys=false;gesturesNegotiated=false;gestureEvents.clear();keyEdges.clear();walkieKeys.update(false,false,false);lastHeld=lastHeldB=false;}
 void stopVoice(){voice.stop();walkieKeys.update(false,false,false);}
 bool captureRequested=false,voicePreparing=false;
 PoseVoiceController poseVoice;
@@ -254,7 +269,7 @@ esp_err_t ws(httpd_req_t* r) {
     if(!isfinite(id)||id<1||id>UINT32_MAX||id!=uint32_t(id)){cJSON_Delete(j);return ESP_FAIL;}
     c.ack=uint32_t(id);
   }
-  if(!readKeyProtocol(j,c)){cJSON_Delete(j);return ESP_FAIL;}
+  if(!readKeyProtocol(j,c)||!readGestureProtocol(j,c)){cJSON_Delete(j);return ESP_FAIL;}
   c.ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ready"));
   auto target=cJSON_GetObjectItemCaseSensitive(j,"target"),id=cJSON_GetObjectItemCaseSensitive(j,"requestId");
   if(cJSON_IsString(target)&&strlen(target->valuestring)<sizeof(c.target))strcpy(c.target,target->valuestring);
@@ -315,6 +330,11 @@ void publish() {
   cJSON_AddNumberToObject(sleeping,"id",deepSleepSequence());cJSON_AddStringToObject(sleeping,"phase",deepSleepPending()?"preparing":"awake");
   cJSON_AddNumberToObject(j,"keyProtocol",2);cJSON_AddNumberToObject(j,"keyMode",dualKeys?2:1);
   cJSON_AddBoolToObject(j,"heldB",walkieKeys.heldB);
+  cJSON_AddNumberToObject(j,"gestureProtocol",GestureProtocol);cJSON_AddNumberToObject(j,"gestureMode",gesturesNegotiated?1:0);
+  if(const auto event=gestureEvents.front(millis())){
+    auto g=cJSON_AddObjectToObject(j,"gesture");cJSON_AddNumberToObject(g,"seq",event->seq);
+    cJSON_AddStringToObject(g,"type","double_flick");cJSON_AddNumberToObject(g,"ageMs",uint32_t(millis()-event->at));
+  }else cJSON_AddNullToObject(j,"gesture");
   cJSON_AddBoolToObject(j,"manual",voice.manual);cJSON_AddBoolToObject(j,"held",voice.held);
   cJSON_AddBoolToObject(j,"micReady",voice.captureReady);cJSON_AddBoolToObject(j,"inverted",voice.inverted);
   cJSON_AddBoolToObject(j,"micDemand",captureRequested);
@@ -395,7 +415,7 @@ void bleRequest(const char* text){
   else{
     Command c;c.fd=-2;bool valid=true;snprintf(c.op,sizeof(c.op),"%s",operation);
     auto number=[&](const char* n){auto v=cJSON_GetObjectItemCaseSensitive(j,n);return cJSON_IsNumber(v)?v->valuedouble:0;};
-    if(!readKeyProtocol(j,c))valid=false;
+    if(!readKeyProtocol(j,c)||!readGestureProtocol(j,c))valid=false;
     c.epoch=uint32_t(number("epoch"));c.ack=uint32_t(number("ack"));c.ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ready"));
     if(!strcmp(operation,"settings")){
       auto flag=[&](const char* n,int bit,bool& v){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsBool(x))valid=false;else{c.flags|=bit;v=cJSON_IsTrue(x);}}};
@@ -538,6 +558,13 @@ bool deviceControlConnected(uint32_t ms){
   const bool link=transportMode()==TransportMode::BLE?(bleConnected()&&bleAuthenticated):WiFi.status()==WL_CONNECTED;
   return link&&!transportBusy()&&controlLease.connected(ms);
 }
+bool deviceDoubleFlick(uint32_t now){
+  if(!GestureProtocol||!gesturesNegotiated||!deviceWalkieKeysActive()||!deviceControlConnected(now)||
+     M5.BtnA.isPressed()||M5.BtnB.isPressed())return false;
+  const bool queued=gestureEvents.push(now);
+  Serial.printf("[gesture] type=double_flick seq=%u queued=%d\n",unsigned(gestureEvents.sequence),queued);
+  return queued;
+}
 UIStatus::VoiceInputs deviceVoiceStatus(uint32_t ms){
   return {voice.muted,voice.streaming,voice.allowed,deviceControlConnected(ms),voice.peer,voice.captureReady,pose.uprightSign!=0,voice.sleeping,captureRequested};
 }
@@ -596,6 +623,9 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
           dualKeys=c.keyProtocol==2;keyEdges.clear();walkieKeys.update(false,false,false);
           voice.held=voice.armed=false;lastHeld=lastHeldB=false;bleSnapshotDirty=true;
         }else keyEdges.acknowledge(c.ack);
+        const bool gestures=GestureProtocol&&c.gestureProtocol==1;
+        if(gesturesNegotiated!=gestures){gestureEvents.clear();gesturesNegotiated=gestures;bleSnapshotDirty=true;}
+        if(gesturesNegotiated)gestureEvents.acknowledge(c.gestureAck);
       } else if(!strcmp(c.op,"sleep_ack")){
         deepSleepAcknowledge(c.ack);
       } else if(!strcmp(c.op,"battery_cal_arm")){
@@ -626,11 +656,13 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       else if(!strcmp(c.op,"sound_preview"))soundRequest(SoundCue::Preview);
       else if(!strcmp(c.op,"calibrate_inverted")||!strcmp(c.op,"calibrate_upright")||!strcmp(c.op,"calibrate_faceup")){
         bleSnapshotDirty=true;
-        auto a=M5.Imu.getImuData().accel;
-        bool calibrated;
-        if(!strcmp(c.op,"calibrate_inverted"))calibrated=pose.calibrateInverted(a.x,a.y,a.z);
-        else if(!strcmp(c.op,"calibrate_upright"))calibrated=pose.calibrateUpright(a.x,a.y,a.z);
-        else calibrated=pose.calibrateFaceUp(a.x,a.y,a.z);
+        auto a=imuSample().accel;
+        bool calibrated=false;
+        if(imuHealthy(ms)){
+          if(!strcmp(c.op,"calibrate_inverted"))calibrated=pose.calibrateInverted(a.x,a.y,a.z);
+          else if(!strcmp(c.op,"calibrate_upright"))calibrated=pose.calibrateUpright(a.x,a.y,a.z);
+          else calibrated=pose.calibrateFaceUp(a.x,a.y,a.z);
+        }
         if(calibrated){
           poseVoice.calibrated(voice,pose.stable);persist();
         }
@@ -663,7 +695,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   if(pose.stable!=loggedPose){loggedPose=pose.stable;Serial.printf("[pose] %s confirmed %ums live %d block %s\n",poseName(loggedPose),unsigned(ms-pose.since),voice.streaming,voiceBlock());}
   static unsigned bleBlock=0;static uint8_t blePacket[196];static int imaIndex=32;
   if(voice.streaming!=lastStreaming){
-    bleBlock=0;keyEdges.clear();
+    bleBlock=0;keyEdges.clear();gestureEvents.clear();
     if(!voice.streaming)walkieKeys.update(false,false,false);
     Serial.printf("[voice] %s pose %s manual %d ready %d reason %s\n",voice.streaming?"start":"stop",poseName(pose.stable),voice.manual,voice.captureReady,voiceBlock());
     if(voice.streaming){esp_fill_random(nonce,sizeof(nonce));seq=clockSample=0;}
@@ -672,6 +704,8 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   if(voice.held!=lastHeld){edge(voice.held);lastHeld=voice.held;}
   if(walkieKeys.heldB!=lastHeldB){edge(walkieKeys.heldB,'b');lastHeldB=walkieKeys.heldB;}
   lastStreaming=voice.streaming;
+  if(!deviceWalkieKeysActive()||!deviceControlConnected(ms)||M5.BtnA.isPressed()||M5.BtnB.isPressed())gestureEvents.clear();
+  gestureEvents.expire(ms);
   static int16_t pcm[480];
   // A slow network must not keep an independently refilled capture queue
   // nonempty forever and starve buttons, control leases, or OTA cancellation.
@@ -701,10 +735,11 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       (unsigned(voice.captureReady)<<6)|(unsigned(voice.inverted)<<7);
     const auto pending=keyEdges.front();
     const uint32_t currentEdge=pending?pending->seq:0;
-    static unsigned lastFlags=~0u;static uint32_t lastEdge=~0u;
-    if(ms-lastBleStatus>=200||flags!=lastFlags||currentEdge!=lastEdge){
+    const auto gesture=gestureEvents.front(ms);const uint32_t currentGesture=gesture?gesture->seq:0;
+    static unsigned lastFlags=~0u;static uint32_t lastEdge=~0u,lastGesture=~0u;
+    if(ms-lastBleStatus>=200||flags!=lastFlags||currentEdge!=lastEdge||currentGesture!=lastGesture){
     char cookie[33];for(int i=0;i<16;i++)snprintf(cookie+i*2,3,"%02x",nonce[i]);
-    static char live[1024];char edgeJSON[96],powerField[656]={};
+    static char live[1280];char edgeJSON[96],gestureJSON[112],powerField[656]={};
     static uint32_t lastPowerSent=0,lastPowerEpoch=0;
     if(lastPowerSent!=powerSampleAt()||lastPowerEpoch!=epoch){
       char powerJSON[640];
@@ -718,8 +753,9 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       else snprintf(edgeJSON,sizeof(edgeJSON),"{\"seq\":%u,\"down\":%s}",unsigned(pending->seq),pending->down?"true":"false");
     }
     else strcpy(edgeJSON,"null");
-    snprintf(live,sizeof(live),"{\"s\":[%u,%u,\"%s\",%.4f,\"%s\",\"%s\",%u],\"edge\":%s,\"keyMode\":%u,\"heldB\":%s,\"sleep\":{\"id\":%u,\"phase\":\"%s\"}%s}",unsigned(epoch),flags,cookie,audioLevel(),poseName(pose.stable),voiceBlock(),unsigned(bleAudioDropped()),edgeJSON,dualKeys?2u:1u,walkieKeys.heldB?"true":"false",unsigned(deepSleepSequence()),deepSleepPending()?"preparing":"awake",powerField);
-    bleSendStatus(live);lastBleStatus=ms;lastFlags=flags;lastEdge=currentEdge;
+    if(gesture)snprintf(gestureJSON,sizeof(gestureJSON),"{\"seq\":%u,\"type\":\"double_flick\",\"ageMs\":%u}",unsigned(gesture->seq),unsigned(ms-gesture->at));else strcpy(gestureJSON,"null");
+    snprintf(live,sizeof(live),"{\"s\":[%u,%u,\"%s\",%.4f,\"%s\",\"%s\",%u],\"edge\":%s,\"keyMode\":%u,\"heldB\":%s,\"gestureMode\":%u,\"gesture\":%s,\"sleep\":{\"id\":%u,\"phase\":\"%s\"}%s}",unsigned(epoch),flags,cookie,audioLevel(),poseName(pose.stable),voiceBlock(),unsigned(bleAudioDropped()),edgeJSON,dualKeys?2u:1u,walkieKeys.heldB?"true":"false",gesturesNegotiated?1u:0u,gestureJSON,unsigned(deepSleepSequence()),deepSleepPending()?"preparing":"awake",powerField);
+    bleSendStatus(live);lastBleStatus=ms;lastFlags=flags;lastEdge=currentEdge;lastGesture=currentGesture;
     }
   }
   static uint32_t lastBleSnapshot=0;

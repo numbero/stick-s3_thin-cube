@@ -206,6 +206,7 @@ struct MainView: View {
                         .disabled(model.shortcutRecording || model.connecting || model.updating)
                     HelpPopover(title: "快捷键帮助") {
                         HelpParagraph("设备 A/B 键", "倒置对讲机模式中，A/B 分别触发设置的快捷键，按下保持、松开释放。B 未设置时不执行操作；其他模式 B 保持静音和系统功能。设置为当前设备保存。")
+                        HelpParagraph("连续双甩", "对讲机状态下连续甩两下并停稳，执行所设置快捷键的一次按下与松开。单甩不触发，A/B 按住时暂停识别。支持录制、选择和清除，未设置时不执行操作。")
                         HelpParagraph("录制或选择", "点击录制后按下组合键，松开全部按键即保存，Esc 取消。也可直接选择按键；仅修饰键组合无需主键。")
                         HelpParagraph("测试与诊断", "可在本窗口测试当前快捷键、查看设备事件与权限状态。测试只接收 ThinCube 窗口中的键盘操作。")
                     }

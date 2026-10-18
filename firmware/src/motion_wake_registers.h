@@ -2,10 +2,11 @@
 #include <stdint.h>
 #include <stddef.h>
 
-// Pinned M5Unified BMI270 blob matches Bosch base config (see research note).
-// Only the base ANY_MOTION four-byte feature is modified. Bus implements checked
+// Base ANY_MOTION starts at 0x3c; Legacy starts at 0x36 (both on page 1).
+// The layout is selected at build time, never inferred from CHIP_ID.
+// Only the selected ANY_MOTION four-byte feature is modified. Bus implements checked
 // read/write + 1ms waits; this transaction never sends a shutdown command.
-template<class Bus> class MotionWakeRegisters {
+template<class Bus,bool Legacy=false> class MotionWakeRegisters {
  public:
   bool prepare(Bus& bus){
     captured_=featureCaptured_=false;
@@ -15,10 +16,11 @@ template<class Bus> class MotionWakeRegisters {
     for(size_t i=0;i<BMICount;++i)if(!bus.bmiRead(BMI[i],&bmi_[i],1))return false;
     captured_=true;
     if(!pmMask(bus,0x18,0x18,0)||!bmiMask(bus,0x7C,1,0)||!bmiMask(bus,0x2F,7,1))return false;
-    if(!bus.bmiRead(0x3C,feature_,4))return false;
+    if(!bus.bmiRead(FeatureRegister,feature_,4))return false;
     featureCaptured_=true;
-    const uint8_t motion[]={0x05,0xE0,0xAA,0xB8}; // xyz,100ms;83mg,out_conf7,enable
-    if(!bmiWrite(bus,0x3C,motion,4)||!bmiMask(bus,0x40,0xff,0x17)||
+    const uint8_t high=Legacy?uint8_t((feature_[3]&0x78)|0x80):uint8_t(0xB8);
+    const uint8_t motion[]={0x05,0xE0,0xAA,high}; // xyz,100ms;83mg,enable; Legacy preserves reserved bits
+    if(!bmiWrite(bus,FeatureRegister,motion,4)||!bmiMask(bus,0x40,0xff,0x17)||
        !bmiMask(bus,0x7D,0x0f,0x04)||!bmiMask(bus,0x53,0x1e,0x08)||
        !bmiMask(bus,0x55,1,0)||!bmiMask(bus,0x56,0xff,0x40)||
        !bmiMask(bus,0x57,0xff,0)||!bmiMask(bus,0x58,0xff,0))return false;
@@ -41,7 +43,7 @@ template<class Bus> class MotionWakeRegisters {
     const bool apsDisabled=bmiWrite(bus,0x7C,&apsOff,1);ok=apsDisabled&&ok;
     if(featureCaptured_&&apsDisabled){
       ok=bmiMask(bus,0x2F,7,1)&&ok;
-      ok=bmiWrite(bus,0x3C,feature_,4)&&ok;
+      ok=bmiWrite(bus,FeatureRegister,feature_,4)&&ok;
     }
     if(featureCaptured_&&!apsDisabled)ok=false;
     for(size_t i=1;i<BMICount;++i)if(BMI[i]!=0x7C)ok=bmiWrite(bus,BMI[i],&bmi_[i],1)&&ok;
@@ -65,6 +67,7 @@ template<class Bus> class MotionWakeRegisters {
   static bool lineHigh(Bus& bus){uint8_t value=0;return bus.pmRead(0x12,&value,1)&&(value&0x10);}
  private:
   static constexpr size_t PMCount=7,BMICount=9;
+  static constexpr uint8_t FeatureRegister=Legacy?0x36:0x3C;
   static constexpr uint8_t PM[PMCount]={0x06,0x07,0x10,0x15,0x17,0x18,0x19};
   static constexpr uint8_t BMI[BMICount]={0x2F,0x40,0x53,0x55,0x56,0x57,0x58,0x7D,0x7C};
   uint8_t pm_[PMCount]{},bmi_[BMICount]{},feature_[4]{};
@@ -90,5 +93,5 @@ template<class Bus> class MotionWakeRegisters {
     const uint8_t updated=(current&~mask)|(value&mask);return bmiWrite(bus,reg,&updated,1);
   }
 };
-template<class Bus> constexpr uint8_t MotionWakeRegisters<Bus>::PM[];
-template<class Bus> constexpr uint8_t MotionWakeRegisters<Bus>::BMI[];
+template<class Bus,bool Legacy> constexpr uint8_t MotionWakeRegisters<Bus,Legacy>::PM[];
+template<class Bus,bool Legacy> constexpr uint8_t MotionWakeRegisters<Bus,Legacy>::BMI[];

@@ -21,7 +21,7 @@ import ThinCubeCore
         _ = AXIsProcessTrustedWithOptions(options)
     }
 
-    @discardableResult func press(_ shortcut: Shortcut, button: DeviceButton = .a) -> Bool {
+    @discardableResult func press(_ shortcut: Shortcut, button: ShortcutTrigger = .a) -> Bool {
         guard trusted else { onTrace?("拦截：系统键盘控制权限未生效；请在辅助功能中允许当前 ThinCube 应用。"); return false }
         guard let combo = shortcut.combo else { onTrace?("拦截：快捷键配置无效。"); return false }
         guard !sequence.isActive(for: button) else { onTrace?("忽略：该设备按键的快捷键仍保持中。"); return false }
@@ -40,7 +40,19 @@ import ThinCubeCore
         return true
     }
 
-    func release(_ button: DeviceButton? = nil) {
+    @discardableResult func pulse(_ shortcut: Shortcut) -> Bool {
+        guard trusted else { onTrace?("拦截：系统键盘控制权限未生效；请在辅助功能中允许当前 ThinCube 应用。"); return false }
+        guard let combo = shortcut.combo else { onTrace?("拦截：快捷键配置无效。"); return false }
+        let physical = physicalState(checking: combo.allCodes)
+        var next = sequence
+        guard let steps = next.pulse(combo, physicallyHeld: physical.keys, physicalFlags: physical.flags),
+              let events = makeEvents(steps) else { onTrace?("拦截：组合键正在被占用或无法构造完整按下、松开事件。"); return false }
+        post(events); sequence = next; trace(steps)
+        if steps.isEmpty { onTrace?("未提交新事件：修饰键已被保持。"); return false }
+        return true
+    }
+
+    func release(_ button: ShortcutTrigger? = nil) {
         guard sequence.isActive else { return }
         let physical = physicalState(checking: [])
         var next = sequence

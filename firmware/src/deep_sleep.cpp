@@ -1,4 +1,5 @@
 #include "deep_sleep.h"
+#include "imu_service.h"
 #include "motion_wake_registers.h"
 #include "power_save_policy.h"
 #include "idle_power.h"
@@ -17,13 +18,17 @@
 
 namespace {
 struct Bus {
-  m5::IMU_Base* imu=M5.Imu.getImuInstancePtr(0);
-  bool bmiRead(uint8_t r,uint8_t* v,size_t n){return imu&&imu->readRegister(r,v,n);}
-  bool bmiWrite(uint8_t r,const uint8_t* v,size_t n){return imu&&imu->writeRegister(r,const_cast<uint8_t*>(v),n);}
+  bool bmiRead(uint8_t r,uint8_t* v,size_t n){return imuRead(r,v,n);}
+  bool bmiWrite(uint8_t r,const uint8_t* v,size_t n){return imuWrite(r,v,n);}
   bool pmRead(uint8_t r,uint8_t* v,size_t n){return M5.Power.M5pm1.readRegister(r,v,n);}
   bool pmWrite(uint8_t r,uint8_t v){return M5.Power.M5pm1.writeRegister(r,&v,1);}
   void pause(unsigned ms){delay(ms);}
 };
+#ifdef THINCUBE_IMU_LEGACY
+using WakeRegisters=MotionWakeRegisters<Bus,true>;
+#else
+using WakeRegisters=MotionWakeRegisters<Bus>;
+#endif
 DeepSleepPolicy policy;
 std::atomic<bool> pending{false};
 bool available=false;
@@ -32,12 +37,12 @@ bool inputSafe(uint32_t now){
     !devicePairWindow()&&!deviceStreaming()&&!soundPlaying()&&powerBatteryLevel(now)>=0&&
     !powerBatteryLow(now)&&powerConfirmAutoOff();
 }
-void failed(Bus& bus,MotionWakeRegisters<Bus>& registers){
+void failed(Bus& bus,WakeRegisters& registers){
   const bool restored=registers.restore(bus);available=available&&restored;
   if(!restored){
-    const bool normal=M5.Imu.begin(nullptr,M5.getBoard());
+    const bool normal=imuBegin();
     Serial.printf("[deep-sleep] normal IMU reinitialize %d\n",normal);
-  }
+  }else imuResumeAfterSleep();
   Serial.printf("[deep-sleep] cancelled restore %d available %d\n",restored,available);
   M5.Display.wakeup();deepSleepCancel();deviceSleepChanged();
 }
@@ -45,12 +50,12 @@ void failed(Bus& bus,MotionWakeRegisters<Bus>& registers){
 void deepSleepBegin(){
   Bus bus;uint8_t wake=0;const bool read=bus.pmRead(0x05,&wake,1);
   bool clean=false;
-  for(unsigned n=0;n<3&&!clean;++n)clean=MotionWakeRegisters<Bus>::disarm(bus);
+  for(unsigned n=0;n<3&&!clean;++n)clean=WakeRegisters::disarm(bus);
   bool cleared=M5.Power.M5pm1.clearWakeSource(0x7f);
   cleared=M5.Power.M5pm1.clearGPIOIRQStatus()&&cleared;
   cleared=M5.Power.M5pm1.clearSystemIRQStatus()&&cleared;
   cleared=M5.Power.M5pm1.clearButtonIRQStatus()&&cleared;
-  available=clean&&cleared&&M5.Imu.getType()==m5::imu_t::imu_bmi270;
+  available=clean&&cleared&&imuEnabled()&&(imuLegacy()||M5.Imu.getType()==m5::imu_t::imu_bmi270);
   Serial.printf("[deep-sleep] wake_src %u read %d cleaned %d available %d\n",unsigned(wake),read,clean,available);
 }
 bool deepSleepAvailable(){return available;}
@@ -61,7 +66,21 @@ void deepSleepCancel(){
   const bool wasPending=policy.pending;policy.cancel();pending=false;
   if(wasPending)uiPowerActivity();
 }
-bool deepSleepDisarm(){Bus bus;const bool ok=MotionWakeRegisters<Bus>::disarm(bus);if(!ok)available=false;return ok;}
+bool deepSleepDisarm(){Bus bus;const bool ok=WakeRegisters::disarm(bus);if(!ok)available=false;return ok;}
+bool deepSleepDiagnostic(){
+  if(!imuLegacy()||!available||deepSleepPending()||otaActive()||provActive()||transportBusy()||
+     devicePairWindow()||deviceStreaming()||deviceVoicePreparing()||M5.BtnA.isPressed()||M5.BtnB.isPressed()){
+    Serial.println("[sleep-check] refused: idle healthy device required");return false;
+  }
+  powerSavePerformance();
+  if(!imuSuspendForSleep()){imuResumeAfterSleep();Serial.println("[sleep-check] suspend failed");return false;}
+  Bus bus;WakeRegisters registers;
+  const bool prepared=registers.prepare(bus);
+  const bool restored=registers.restore(bus);
+  if(restored)imuResumeAfterSleep();else{available=false;imuBegin();}
+  Serial.printf("[sleep-check] prepared=%d restored=%d tap=%d no_poweroff=1\n",prepared,restored,imuTapSnapshot().enabled);
+  return prepared&&restored;
+}
 bool deepSleepTick(uint32_t now,bool safe,bool connected){
   safe=safe&&available&&deviceDeepSleepEnabled()&&powerAutoOffAllowed(now)&&
     powerBatteryLevel(now)>=0&&!powerBatteryLow(now);
@@ -79,11 +98,12 @@ bool deepSleepTick(uint32_t now,bool safe,bool connected){
   if(!inputSafe(millis())){deepSleepCancel();deviceSleepChanged();return true;}
   deviceStop();soundCancel();audioTick(false);M5.Speaker.end();
   if(!audioPowerDown()||!deviceSaveForSleep()){deepSleepCancel();deviceSleepChanged();return true;}
-  Bus bus;MotionWakeRegisters<Bus> registers;
+  if(!imuSuspendForSleep()){imuResumeAfterSleep();deepSleepCancel();deviceSleepChanged();return true;}
+  Bus bus;WakeRegisters registers;
   if(!registers.prepare(bus)){failed(bus,registers);return true;}
   M5.Display.setBrightness(0);M5.Display.sleep();
   Serial.printf("[deep-sleep] entering PM1 L1 id %u\n",unsigned(policy.id));
-  if(!inputSafe(millis())||!MotionWakeRegisters<Bus>::lineHigh(bus)){failed(bus,registers);return true;}
+  if(!inputSafe(millis())||!WakeRegisters::lineHigh(bus)){failed(bus,registers);return true;}
   const bool sent=M5.Power.M5pm1.powerOff();delay(200);
   // A successful physical cut never reaches rollback; no unwakeable ESP sleep.
   Serial.printf("[deep-sleep] power-off returned sent %d; recovering online\n",sent);failed(bus,registers);return true;

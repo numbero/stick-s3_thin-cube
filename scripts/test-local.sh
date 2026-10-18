@@ -10,6 +10,7 @@ for task_test in firmware/test/*_test.cpp; do
     "$task_binary"
 done
 python3 -m unittest discover -s scripts -p 'test_battery_calibration.py'
+bash scripts/test-legacy-imu.sh
 if [[ "$(uname -s)" != Darwin ]]; then
     echo "Firmware checks complete; macOS Swift tests require a Mac and were skipped."
     exit 0

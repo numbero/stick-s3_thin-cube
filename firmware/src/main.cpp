@@ -7,6 +7,8 @@
 #include "ui.h"
 #include "pet.h"
 #include "motion.h"
+#include "imu_service.h"
+#include "flick_diagnostic.h"
 #include "wifi_prov.h"
 #include "ota.h"
 #include "device.h"
@@ -80,6 +82,10 @@ void setup(){
   // No Grove/IR/EXT_5V load: the pinned M5Unified defaults this boost on.
   cfg.output_power=false;
   cfg.fallback_board=m5::board_t::board_M5StickS3;
+#ifdef THINCUBE_IMU_LEGACY
+  cfg.internal_imu=false;
+  cfg.external_imu=false;
+#endif
   M5.begin(cfg);
   devicePowerLedBegin();
   if(!M5.Display.width()){delay(100);M5.Display.init();}
@@ -94,8 +100,8 @@ void setup(){
   M5.Display.setFont(&fonts::FreeSans9pt7b);
 
   /* IMU 显式启用一次，并在串口报告状态（不启用则姿态输入整条链路都不工作） */
-  if (!M5.Imu.isEnabled()) M5.Imu.begin();
-  Serial.printf("imu       : %s\n", M5.Imu.isEnabled() ? "enabled" : "NOT AVAILABLE");
+  const bool imuOK=imuBegin();
+  Serial.printf("imu       : %s\n", imuOK ? "enabled" : "NOT AVAILABLE");
 
   reportBootInfo();
   deepSleepBegin();
@@ -143,6 +149,7 @@ void loop(){
   transportTick(ms);
   provTick();               /* 配网状态机（未进配网时是 no-op） */
   if(!connectionSetupActive())otaTick(ms);
+  imuPoll(ms);
   uiTick(ms);
 
   /* 稳定运行 60 秒才认账，放弃回滚窗口（docs/wifi-prov-ota.md §3.4） */
@@ -150,6 +157,7 @@ void loop(){
   if (!validMarked && ms > 60000 && uiHealthy() && deviceHealthy() && motionDiag().updates>0){ validMarked=otaMarkValid(); }
   if (!validMarked) otaRollbackUnhealthy();
   deviceTick(ms,petState()==PET_SLEEP,connectionSetupActive()||devicePairWindow()||provActive()||otaActive());
+  flickTick(millis());
   uiSetOrientation(deviceDisplayRotation(),ms);
   uiPowerTick(millis(),validMarked);
   uiStoriesTick(millis());
@@ -177,6 +185,8 @@ void loop(){
                   (int)petState(), motionStillSec(ms));
     if (motionHomeKnown() && !homePrinted){ homePrinted = true; motionPrintHome(); }
     const MotionDiag g = motionDiag();
+    imuReport();
+    if(flickSnapshot().enabled)flickReport();
     Serial.printf("[imu] en %d upd %u/%u a %.2f %.2f %.2f mag %.2f gRef %.2f dev %.2f still %d home %d up%u sh%u dn%u\n",
                   g.imuEnabled, (unsigned)g.updates, (unsigned)g.reads,
                   g.ax, g.ay, g.az, g.mag, g.gRef, g.dev, g.still, g.home,

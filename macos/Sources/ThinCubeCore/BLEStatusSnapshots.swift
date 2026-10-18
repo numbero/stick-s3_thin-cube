@@ -36,6 +36,13 @@ public struct BLEStatusSnapshots {
         if let held = value["heldB"] {
             guard let held = held as? NSNumber, CFGetTypeID(held) == CFBooleanGetTypeID() else { return nil }
         }
+        if snapshot["gestureProtocol"] as? Int == 1, value["gesture"] == nil { return nil }
+        if let mode = value["gestureMode"], unsigned(mode) != 0 && unsigned(mode) != 1 { return nil }
+        if let gesture = value["gesture"], !(gesture is NSNull) {
+            guard let event = gesture as? [String: Any], let seq = event["seq"], unsigned(seq) != nil,
+                  let age = event["ageMs"], unsigned(age) != nil,
+                  let type = event["type"] as? String, !type.isEmpty, type.count <= 32 else { return nil }
+        }
         for (bit, key) in ["allowed", "muted", "localSound", "streaming", "manual", "held", "micReady", "inverted"].enumerated() {
             snapshot[key] = flags & (1 << bit) != 0
         }
@@ -44,6 +51,8 @@ public struct BLEStatusSnapshots {
         snapshot["bleAudioDropped"] = dropped; snapshot["edge"] = value["edge"]
         if let mode = value["keyMode"] { snapshot["keyMode"] = mode }
         if let held = value["heldB"] { snapshot["heldB"] = held }
+        if let gesture = value["gesture"] { snapshot["gesture"] = gesture }
+        if let mode = value["gestureMode"] { snapshot["gestureMode"] = mode }
         if let power = value["power"] { snapshot["power"] = power }
         if let sleep = value["sleep"] { snapshot["sleep"] = sleep }
         baseline = snapshot

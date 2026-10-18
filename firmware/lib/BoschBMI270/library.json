@@ -1,0 +1,11 @@
+{
+  "name": "BoschBMI270",
+  "version": "2.86.1",
+  "description": "Pinned Bosch BMI270 Legacy SensorAPI with documented boundary fix",
+  "license": "BSD-3-Clause",
+  "build": {
+    "srcFilter": [
+      "+<*>"
+    ]
+  }
+}

@@ -1,3 +1,5 @@
+#include "imu_service.h"
+#include "flick_diagnostic.h"
 #include "ui.h"
 #include "connection_setup.h"
 #include "power_save.h"
@@ -382,12 +384,13 @@ void uiReportTiming(){
 
 // Local USB-only idle screenshot, for checking the exact pixels sent to the LCD.
 void uiUsbDebug(){
-  static char command[16];static unsigned length=0;
+  static char command[32];static unsigned length=0;
   for(unsigned n=0;n<32&&Serial.available();n++){
     const char c=Serial.read();
     if(c=='\r')continue;
     if(c!='\n'){if(length<sizeof(command)-1)command[length++]=c;continue;}
     command[length]=0;length=0;
+    if(flickCommand(command)||imuDiagnosticCommand(command))continue;
     if(!strcmp(command,"power")){powerReportConfig();powerReport(millis());continue;}
     if(!strcmp(command,"light")||!strcmp(command,"light play")){lightDemoRequest=!strcmp(command,"light")?1:2;continue;}
     if(!strcmp(command,"light stop")){light.cancel();words.hide();lightDemoRequest=0;Serial.println("[light] stopped");continue;}
@@ -936,6 +939,14 @@ void renderDebug(uint32_t ms){
   snprintf(buf,sizeof(buf),"gRef %.2f dev %.2f",g.gRef,g.dev);line(buf);
   snprintf(buf,sizeof(buf),"still %.1fs home %s",motionStillSec(ms),g.home?"set":"wait");line(buf);
   snprintf(buf,sizeof(buf),"up%u sh%u dn%u",unsigned(g.pickups),unsigned(g.shakes),unsigned(g.downs));line(buf);
+  const auto flick=flickSnapshot();const auto tap=imuTapSnapshot();
+  if(flick.enabled){
+    snprintf(buf,sizeof(buf),"flick %s ok%u",flick.stage,unsigned(flick.hits));line(buf);
+    snprintf(buf,sizeof(buf),"try%u reject%u",unsigned(flick.starts),unsigned(flick.rejected));line(buf);
+  }else if(tap.supported){
+    snprintf(buf,sizeof(buf),"tap %s raw%u ok%u",tap.enabled?"on":"off",unsigned(tap.raw),unsigned(tap.accepted));line(buf);
+    snprintf(buf,sizeof(buf),"tap blocked %u",unsigned(tap.blocked));line(buf);
+  }
   line(connectionCaption(ms),C::dim);
   rule(y);y+=6;
   const int from=logCount>3?logCount-3:0;

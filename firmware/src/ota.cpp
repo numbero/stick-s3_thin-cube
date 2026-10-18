@@ -1,3 +1,4 @@
+#include "imu_service.h"
 #include "ota.h"
 #include "device.h"
 #include "transport.h"
@@ -143,7 +144,7 @@ void otaDismiss(){std::lock_guard<std::mutex> lock(guard);if(stage==OTA_FAIL){st
 int otaConfirmLeftSec(){std::lock_guard<std::mutex> lock(guard);return stage==OTA_CONFIRM?std::max(0,30-int((millis()-since)/1000)):0;}
 void otaSetBattery(int level){std::lock_guard<std::mutex> lock(guard);battery=level;batteryAt=millis();}
 bool otaMarkValid(){
-  if(!deviceHealthy()||!M5.Imu.isEnabled()||millis()<60000)return false;
+  if(!deviceHealthy()||!imuHealthy(millis())||millis()<60000)return false;
   esp_ota_img_states_t s;
   if(esp_ota_get_state_partition(esp_ota_get_running_partition(),&s)==ESP_OK&&s==ESP_OTA_IMG_PENDING_VERIFY)return esp_ota_mark_app_valid_cancel_rollback()==ESP_OK;
   return true;

@@ -76,7 +76,7 @@ struct ShortcutEditor: View {
     @ObservedObject var model: DeviceModel
     @StateObject private var recorder = ShortcutRecorder()
     @State private var choosing = false
-    @State private var editingButton = DeviceButton.a
+    @State private var editingButton = ShortcutTrigger.a
     @State private var hint = ""
 
     var body: some View {
@@ -86,11 +86,18 @@ struct ShortcutEditor: View {
             buttonRow(.b)
                 .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
                 .disabled(!model.supportsBShortcut)
+            buttonRow(.doubleFlick)
+                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
+                .disabled(!model.supportsDoubleFlick)
             Text(model.supportsBShortcut
-                 ? "对讲机内 A/B 按下保持快捷键，松开释放；B 未设置时不执行操作。其他模式 B 仍为静音和系统功能。"
+                 ? "对讲机内 A/B 按下保持、松开释放；连续双甩执行一次按下与松开。未设置的输入不执行操作。其他模式 B 仍为静音和系统功能。"
                  : "B 键快捷键需要新版设备固件；连接支持此功能的设备后可设置。")
                 .font(.system(size: 11.5)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+            if !model.supportsDoubleFlick {
+                Text("连续双甩需要支持此功能的设备固件。")
+                    .font(.system(size: 11.5)).foregroundStyle(.secondary)
+            }
 
             if !hint.isEmpty {
                 Text(hint).font(.system(size: 11.5)).foregroundStyle(.secondary)
@@ -145,14 +152,14 @@ struct ShortcutEditor: View {
         }
     }
 
-    private func seed(for button: DeviceButton) -> Shortcut {
+    private func seed(for button: ShortcutTrigger) -> Shortcut {
         model.shortcut(for: button) ?? Shortcut(distinguishSides: model.shortcut.distinguishSides)
     }
 
-    private func buttonRow(_ button: DeviceButton) -> some View {
+    private func buttonRow(_ button: ShortcutTrigger) -> some View {
         let recording = recorder.isRecording && editingButton == button
         return HStack(spacing: 12) {
-            Text(button == .a ? "正面 A 键" : "侧面 B 键").font(.system(size: 13))
+            Text(button == .a ? "正面 A 键" : button == .b ? "侧面 B 键" : "连续双甩").font(.system(size: 13))
             .frame(width: 72, alignment: .leading)
 
             if recording {
@@ -186,8 +193,8 @@ struct ShortcutEditor: View {
             .buttonStyle(.bordered)
             .controlSize(.small)
             .frame(width: 76)
-            if button == .b, model.shortcutB != nil {
-                Button("清除") { recorder.stop(); model.clearBShortcut(); hint = "B 键快捷键已清除。" }
+            if button != .a, model.shortcut(for: button) != nil {
+                Button("清除") { recorder.stop(); model.clearShortcut(button); hint = button.label + "快捷键已清除。" }
                     .buttonStyle(.bordered).controlSize(.small)
             }
         }
