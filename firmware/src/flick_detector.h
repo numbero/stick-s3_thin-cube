@@ -15,6 +15,7 @@ class FlickDetector {
   unsigned axis=0,strokes=0;
   float peakFirst=0,peakSecond=0,peakReverse=0,travel=0,peakAccelDev=0;
   static constexpr float StartRate=300,PeakRate=500,ReverseRate=150,QuietRate=45,DirectionCos=.65f;
+  static constexpr float GripFilterMs=350;
   static constexpr uint32_t ArmMs=350,SettleMs=100,FirstBurstMs=220,MinSeparationMs=180;
   static constexpr uint32_t PairWindowMs=1600,CooldownMs=1200,MaxGapMs=80,MaxSeparationMs=900;
 
@@ -50,7 +51,15 @@ class FlickDetector {
       }
       if(speed>100){if(!ramp_){ramp_=true;rampAt_=now;}else if(uint32_t(now-rampAt_)>150){stage=Stage::Arming;quiet_=false;}}
       else ramp_=false;
-      if(still){base_[0]=ax/mag;base_[1]=ay/mag;base_[2]=az/mag;}return {};
+      if(still){
+        // A preparatory linear impulse can look like a new gravity direction
+        // while its magnitude is still near 1g. Preserve the settled reference
+        // through brief transients; track a genuinely new grip over time.
+        const float weight=float(dt)/(GripFilterMs+float(dt));
+        base_[0]+=(ax/mag-base_[0])*weight;
+        base_[1]+=(ay/mag-base_[1])*weight;
+        base_[2]+=(az/mag-base_[2])*weight;
+      }return {};
     }
     duration=uint32_t(now-startedAt_);travel+=speed*(float(dt)/1000);
     if(fabsf(mag-1)>peakAccelDev)peakAccelDev=fabsf(mag-1);
@@ -86,7 +95,8 @@ class FlickDetector {
     if(!still){quiet_=false;return {};}
     if(!quiet_){quiet_=true;quietAt_=now;}
     if(uint32_t(now-quietAt_)<SettleMs)return {};
-    const float home=(ax*base_[0]+ay*base_[1]+az*base_[2])/mag;
+    const float baseMag=sqrtf(base_[0]*base_[0]+base_[1]*base_[1]+base_[2]*base_[2]);
+    const float home=baseMag>.01f?(ax*base_[0]+ay*base_[1]+az*base_[2])/(mag*baseMag):-1;
     if(!secondReverse_||secondStrong_<2||secondArea_<8||home<.85f)return reject(Reason::Return);
     strokes=2;++hits;hitAt_=now;stage=Stage::Cooldown;quietAt_=now;quiet_=true;
     return {Event::Recognized};

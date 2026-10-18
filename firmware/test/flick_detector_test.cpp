@@ -64,5 +64,34 @@ int main(){
   {Rig r;r.quiet();for(int i=0;i<200;++i)r.sample(900);assert(r.detector.rejected==1&&r.detector.hits==0);}
   {Rig r;r.quiet();r.sample(900);r.quiet(1500);assert(r.detector.rejected==1&&r.detector.hits==0);}
   {Rig r;r.now=UINT32_MAX-600;r.quiet();r.pair();assert(r.detector.hits==1);}
+  {
+    // A near-1g preparatory acceleration must not replace the gravity
+    // reference immediately before an otherwise complete pair.
+    Rig r;r.quiet();r.now+=10;
+    r.detector.update(r.now,.8660254f,0,.5f,0,0,0,true,false);
+    for(unsigned n=0;n<2;++n){
+      for(int i=0;i<8;++i)r.sample(900);
+      for(int i=0;i<8;++i)r.sample(-700);
+      r.quiet(180);
+    }
+    assert(r.detector.hits==1&&r.detector.rejected==0);
+  }
+  {
+    // The filtered reference still follows a sustained new grip, including
+    // the antipodal case where normalizing every filter step would get stuck.
+    for(float z:{.5f,-1.f}){
+      D d;uint32_t now=0;
+      auto sample=[&](float rate,float x,float gravityZ){now+=10;d.update(now,x,0,gravityZ,rate,0,0,true,false);};
+      for(int i=0;i<40;++i)sample(0,0,1);
+      const float x=z>0?.8660254f:0;
+      for(int i=0;i<200;++i)sample(0,x,z);
+      for(int n=0;n<2;++n){
+        for(int i=0;i<8;++i)sample(900,x,z);
+        for(int i=0;i<8;++i)sample(-700,x,z);
+        for(int i=0;i<18;++i)sample(0,x,z);
+      }
+      assert(d.hits==1);
+    }
+  }
   puts("double impulse: six directions, irregular sampling, single/opposite/cross-axis strokes, continuous pair/shaking, rebound, cooldown, final grip, slow turn/tap, gating, NaN/gap, sustained turn, isolated spike and wrap passed");
 }
