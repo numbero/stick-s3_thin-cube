@@ -10,6 +10,7 @@ public enum DeviceBLEOperation {
         case "api/settings": return "settings"
         case "api/wifi": return "wifi"
         case "api/network": return "network_result"
+        case "api/tap": return "tap"
         default: return nil
         }
     }

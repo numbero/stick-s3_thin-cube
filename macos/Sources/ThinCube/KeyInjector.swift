@@ -6,11 +6,8 @@ import ThinCubeCore
     private var sequence = KeyEventSequence()
     // Track our synthetic source independently from other applications.
     private let source = CGEventSource(stateID: .privateState)
-    private let targetPID: pid_t?
     var onTrace: ((String) -> Void)?
     var isActive: Bool { sequence.isActive }
-
-    init(targetPID: pid_t? = nil) { self.targetPID = targetPID }
 
     // Test the capability used by CGEventPost itself. An Accessibility UI
     // checkbox (or a cached AX trust result) is not proof that posting works.
@@ -40,12 +37,12 @@ import ThinCubeCore
         return true
     }
 
-    @discardableResult func pulse(_ shortcut: Shortcut) -> Bool {
+    @discardableResult func pulse(_ shortcut: Shortcut, button: ShortcutTrigger = .doubleTap) -> Bool {
         guard trusted else { onTrace?("拦截：系统键盘控制权限未生效；请在辅助功能中允许当前 ThinCube 应用。"); return false }
         guard let combo = shortcut.combo else { onTrace?("拦截：快捷键配置无效。"); return false }
         let physical = physicalState(checking: combo.allCodes)
         var next = sequence
-        guard let steps = next.pulse(combo, physicallyHeld: physical.keys, physicalFlags: physical.flags),
+        guard let steps = next.pulse(combo, physicallyHeld: physical.keys, physicalFlags: physical.flags, button: button),
               let events = makeEvents(steps) else { onTrace?("拦截：组合键正在被占用或无法构造完整按下、松开事件。"); return false }
         post(events); sequence = next; trace(steps)
         if steps.isEmpty { onTrace?("未提交新事件：修饰键已被保持。"); return false }
@@ -64,7 +61,7 @@ import ThinCubeCore
     }
 
     private func trace(_ steps: [KeyEventStep]) {
-        let target = targetPID == nil ? (NSWorkspace.shared.frontmostApplication?.localizedName ?? "未知应用") : "ThinCube（本窗口测试）"
+        let target = NSWorkspace.shared.frontmostApplication?.localizedName ?? "未知应用"
         for step in steps {
             let key = ShortcutCatalog.label(ShortcutCatalog.modifier(step.code)?.token ?? "keycode_\(step.code)")
             let type = step.isModifier ? "flagsChanged" : (step.down ? "keyDown" : "keyUp")
@@ -74,8 +71,7 @@ import ThinCubeCore
 
     private func post(_ events: [CGEvent]) {
         for event in events {
-            if let targetPID { event.postToPid(targetPID) }
-            else { event.post(tap: .cghidEventTap) }
+            event.post(tap: .cghidEventTap)
         }
     }
 

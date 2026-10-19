@@ -72,7 +72,7 @@ enum MainPane: String, CaseIterable, Identifiable {
 }
 
 private enum MainSheet: Equatable, Identifiable {
-    case pairing(UUID), manualAddress, changingNetwork, keyboardDiagnostics, audioDiagnostics
+    case pairing(UUID), manualAddress, changingNetwork, keyboardDiagnostics, audioDiagnostics, tapDiagnostics
     var id: String {
         switch self {
         case .pairing(let id): return "pairing-" + id.uuidString
@@ -80,6 +80,7 @@ private enum MainSheet: Equatable, Identifiable {
         case .changingNetwork: return "network"
         case .keyboardDiagnostics: return "keyboard"
         case .audioDiagnostics: return "audio"
+        case .tapDiagnostics: return "tap"
         }
     }
 }
@@ -145,6 +146,7 @@ struct MainView: View {
             case .changingNetwork: ChangeWiFiSheet(model: model)
             case .keyboardDiagnostics: KeyboardDiagnosticsSheet(model: model)
             case .audioDiagnostics: AudioDiagnosticsSheet(model: model)
+            case .tapDiagnostics: TapSettingsPanel(model: model)
             }
         }
         .onAppear { presentPairingIfNeeded() }
@@ -203,16 +205,30 @@ struct MainView: View {
                 HStack {
                     Text("按键").font(.system(size: 21, weight: .bold))
                     Spacer()
-                    Button("测试与诊断…") { activeSheet = .keyboardDiagnostics }
+                    Button("按键诊断…") { activeSheet = .keyboardDiagnostics }
                         .disabled(model.shortcutRecording || model.connecting || model.updating)
                     HelpPopover(title: "快捷键帮助") {
                         HelpParagraph("设备 A/B 键", "倒置对讲机模式中，A/B 分别触发设置的快捷键，按下保持、松开释放。B 未设置时不执行操作；其他模式 B 保持静音和系统功能。设置为当前设备保存。")
-                        HelpParagraph("连续双甩", "对讲机状态下连续甩两下并停稳，执行所设置快捷键的一次按下与松开。单甩不触发，A/B 按住时暂停识别。支持录制、选择和清除，未设置时不执行操作。")
+                        HelpParagraph("独立双敲", "倒置对讲时双敲正面面板，执行独立设置的快捷键。绑定按设备独立保存。敲击设置窗口打开或手持实验模式开启时，双敲仅记录，不发送快捷键。")
                         HelpParagraph("录制或选择", "点击录制后按下组合键，松开全部按键即保存，Esc 取消。也可直接选择按键；仅修饰键组合无需主键。")
-                        HelpParagraph("测试与诊断", "可在本窗口测试当前快捷键、查看设备事件与权限状态。测试只接收 ThinCube 窗口中的键盘操作。")
+                        HelpParagraph("按键诊断", "自动记录 A/B 与双敲的设备事件、接受或拦截原因，以及按键提交的时间线。保留权限与设备状态，支持复制、清空日志。")
                     }
                 }
                 ShortcutEditor(model: model).disabled(model.updating || model.connecting)
+                HStack(spacing: 12) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("敲击识别").font(.system(size: 13))
+                        Text("按习惯调整敲击力度、节奏与防误触。")
+                            .font(.system(size: 11.5)).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 12)
+                    Button("敲击设置…") { activeSheet = .tapDiagnostics }
+                        .buttonStyle(.bordered).controlSize(.small)
+                        .disabled(!model.connected || model.updating || model.switching)
+                }
+                .padding(.horizontal, 14).padding(.vertical, 12)
+                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: ShortcutStyle.groupCornerRadius))
             }
             .padding(.horizontal, 28).padding(.top, 24).padding(.bottom, 30)
             .frame(maxWidth: .infinity, alignment: .leading)

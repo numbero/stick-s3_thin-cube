@@ -38,6 +38,7 @@ public struct BLEStatusSnapshots {
         }
         if snapshot["gestureProtocol"] as? Int == 1, value["gesture"] == nil { return nil }
         if let mode = value["gestureMode"], unsigned(mode) != 0 && unsigned(mode) != 1 { return nil }
+        if let mode = value["tapMode"], unsigned(mode) != 0 && unsigned(mode) != 1 { return nil }
         if let gesture = value["gesture"], !(gesture is NSNull) {
             guard let event = gesture as? [String: Any], let seq = event["seq"], unsigned(seq) != nil,
                   let age = event["ageMs"], unsigned(age) != nil,
@@ -53,6 +54,7 @@ public struct BLEStatusSnapshots {
         if let held = value["heldB"] { snapshot["heldB"] = held }
         if let gesture = value["gesture"] { snapshot["gesture"] = gesture }
         if let mode = value["gestureMode"] { snapshot["gestureMode"] = mode }
+        if let mode = value["tapMode"] { snapshot["tapMode"] = mode }
         if let power = value["power"] { snapshot["power"] = power }
         if let sleep = value["sleep"] { snapshot["sleep"] = sleep }
         baseline = snapshot

@@ -66,10 +66,11 @@ import ThinCubeCore
 
 
 /// The shortcut editor uses the same colours and dimensions as Folotoy.
-private enum ShortcutStyle {
+enum ShortcutStyle {
     static let amber = Color(red: 0.973, green: 0.690, blue: 0.000)
     static let amberHi = Color(red: 1.000, green: 0.788, blue: 0.302)
     static let groupFill = Color.white.opacity(0.05)
+    static let groupCornerRadius: CGFloat = 10
 }
 
 struct ShortcutEditor: View {
@@ -82,20 +83,20 @@ struct ShortcutEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             buttonRow(.a)
-                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
+                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: ShortcutStyle.groupCornerRadius))
             buttonRow(.b)
-                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
+                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: ShortcutStyle.groupCornerRadius))
                 .disabled(!model.supportsBShortcut)
-            buttonRow(.doubleFlick)
-                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
-                .disabled(!model.supportsDoubleFlick)
+            buttonRow(.doubleTap)
+                .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: ShortcutStyle.groupCornerRadius))
+                .disabled(!model.supportsDoubleTap)
             Text(model.supportsBShortcut
-                 ? "对讲机内 A/B 按下保持、松开释放；连续双甩执行一次按下与松开。未设置的输入不执行操作。其他模式 B 仍为静音和系统功能。"
+                 ? "对讲机内 A/B 按下保持、松开释放；双敲执行一次按下与松开。未设置的输入不执行操作。其他模式 B 仍为静音和系统功能。"
                  : "B 键快捷键需要新版设备固件；连接支持此功能的设备后可设置。")
                 .font(.system(size: 11.5)).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            if !model.supportsDoubleFlick {
-                Text("连续双甩需要支持此功能的设备固件。")
+            if !model.supportsDoubleTap {
+                Text("独立双敲需要 v0.4.55 或更新的设备固件。")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
             }
 
@@ -132,7 +133,7 @@ struct ShortcutEditor: View {
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
-            .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: 10))
+            .background(ShortcutStyle.groupFill, in: RoundedRectangle(cornerRadius: ShortcutStyle.groupCornerRadius))
         }
         .sheet(isPresented: $choosing) {
             ShortcutChooser(shortcut: seed(for: editingButton)) { shortcut in
@@ -159,7 +160,7 @@ struct ShortcutEditor: View {
     private func buttonRow(_ button: ShortcutTrigger) -> some View {
         let recording = recorder.isRecording && editingButton == button
         return HStack(spacing: 12) {
-            Text(button == .a ? "正面 A 键" : button == .b ? "侧面 B 键" : "连续双甩").font(.system(size: 13))
+            Text(button == .a ? "正面 A 键" : button == .b ? "侧面 B 键" : button.label).font(.system(size: 13))
             .frame(width: 72, alignment: .leading)
 
             if recording {

@@ -36,25 +36,32 @@ int main(void) {
  // preserve all bytes outside the selected tap fields and only enable double.
  unsigned cases=0;
  const uint16_t sensitivities[]={0,3,9,15};
- for(unsigned source=0;source<2;++source)for(unsigned axis=0;axis<3;++axis)for(unsigned s=0;s<4;++s){
+ for(unsigned source=0;source<2;++source)for(unsigned axis=0;axis<3;++axis)for(unsigned s=0;s<4;++s)
+ for(unsigned window=50;window<=200;window+=75)for(unsigned quiet=50;quiet<=100;quiet+=50)for(unsigned wait=0;wait<2;++wait){
   memcpy(expected,pages,sizeof(pages));
   expected[5][0]=(expected[5][0]&~8)|(source<<3);
   expected[5][4]=sensitivities[s];expected[5][5]=0;
   expected[6][4]=(expected[6][4]&~3)|axis;
   tap.data_reg_en=source;tap.axis_sel=axis;tap.tap_sens_thres=sensitivities[s];
+  tap.max_gest_dur=window;tap.quite_time_after_gest=quiet;tap.wait_for_timeout=wait;
+  expected[5][6]=window;expected[5][7]=0;expected[5][14]=quiet;expected[5][15]=0;
+  expected[6][0]=wait;expected[6][1]=0;
   assert(set_tap_config(&tap,&dev)==BMI2_OK);
   assert(memcmp(expected,pages,sizeof(pages))==0);
   struct bmi2_tap_config back={0};assert(get_tap_config(&back,&dev)==BMI2_OK);
   assert(back.data_reg_en==source&&back.axis_sel==axis&&back.tap_sens_thres==sensitivities[s]);
-  assert(back.max_gest_dur==80&&back.quite_time_after_gest==80&&back.wait_for_timeout==1);
+  assert(back.max_gest_dur==window&&back.quite_time_after_gest==quiet&&back.wait_for_timeout==wait);
   uint8_t all[]={BMI2_SINGLE_TAP,BMI2_DOUBLE_TAP,BMI2_TRIPLE_TAP};
   assert(bmi270_legacy_sensor_disable(all,3,&dev)==BMI2_OK);
   assert((pages[5][0]&7)==0);
-  assert(bmi270_legacy_sensor_enable(&all[1],1,&dev)==BMI2_OK);
-  assert((pages[5][0]&7)==2);
+  for(unsigned mask=1;mask<8;++mask){
+    assert(bmi270_legacy_sensor_disable(all,3,&dev)==BMI2_OK);
+    for(unsigned bit=0;bit<3;++bit)if(mask&(1u<<bit))assert(bmi270_legacy_sensor_enable(&all[bit],1,&dev)==BMI2_OK);
+    assert((pages[5][0]&7)==mask);
+  }
   ++cases;
  }
- printf("%u SDK sensitivity/source/axis combinations, readback and double-only enable passed\n",cases);
+ printf("%u SDK source/axis/sensitivity/timing/wait combinations and all seven type masks passed\n",cases);
  // Real SDK headerless FIFO parsing must preserve signed raw sensor axes.
  uint8_t bytes[]={0x00,0x10,0x00,0xe0,0x00,0x08,0xff,0x7f,0x00,0x80,0xff,0xff};
  struct bmi2_fifo_frame fifo={0};fifo.data=bytes;fifo.length=sizeof(bytes);fifo.data_enable=BMI2_FIFO_ACC_EN;

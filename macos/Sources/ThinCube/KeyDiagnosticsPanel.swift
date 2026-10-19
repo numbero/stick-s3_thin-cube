@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 import ThinCubeCore
 
-struct KeyTestPanel: View {
+struct KeyDiagnosticsPanel: View {
     @ObservedObject var model: DeviceModel
     @ObservedObject private var diagnostics: KeyDiagnostics
 
@@ -17,9 +17,9 @@ struct KeyTestPanel: View {
                 Text("按键诊断").font(.system(size: 18, weight: .semibold))
                 Spacer()
                 HelpPopover(title: "按键诊断帮助") {
-                    HelpParagraph("测试方式", "设备事件会自动记录。测试当前快捷键会向 ThinCube 窗口发送一次按下与松开，无需连接设备。")
-                    HelpParagraph("本窗口测试", "开始后可按设备 A/B、连续双甩或按 Mac 键盘查看事件；此时键盘操作会被窗口接收，Esc 停止测试。关闭诊断或切换窗口也会停止。")
-                    HelpParagraph("日志", "保留最近 100 条事件，新事件在上方。已提交表示发往系统，系统回读表示本窗口实际收到。")
+                    HelpParagraph("实时日志", "设备事件自动记录，无需开始测试。日志展示收到的 A/B、双敲事件、接受或拦截原因，以及向系统提交的按下与松开。")
+                    HelpParagraph("时间线", "保留最近 100 条事件，新事件在上方。复制日志按时间先后排列，方便排查接收、处理和发键的顺序。")
+                    HelpParagraph("已提交", "表示按键事件已提交给系统，不能据此确认目标应用是否响应。此页只观察日志，不模拟发键或捕获键盘输入。")
                     HelpParagraph("权限", "若辅助功能开关已开启而键盘控制仍未生效，请关闭再开启 ThinCube 授权，并退出重启应用。")
                 }
             }
@@ -38,19 +38,8 @@ struct KeyTestPanel: View {
                 .font(.callout).foregroundStyle(.secondary)
             Text(context).font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: 10) {
-                Button(diagnostics.monitoring ? "停止本窗口测试" : "开始本窗口测试") {
-                    if diagnostics.monitoring { model.stopKeyboardTest() }
-                    else { diagnostics.start() }
-                }.disabled(model.shortcutRecording || model.updating || model.connecting)
-                Button("测试 A 快捷键") { model.testCurrentShortcut() }
-                    .disabled(!diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
-                Button("测试 B 快捷键") { model.testCurrentShortcut(button: .b) }
-                    .disabled(model.shortcutB == nil || !diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
-                Button("测试双甩快捷键") { model.testCurrentShortcut(button: .doubleFlick) }
-                    .disabled(model.shortcutDoubleFlick == nil || !diagnostics.postingAllowed || model.shortcutTestRunning || model.shortcutRecording || model.updating || model.connecting)
-                if diagnostics.monitoring { Text("测试中 · Esc 停止").foregroundStyle(.orange) }
-            }
+            Text(doubleTapContext).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Text("最近 \(diagnostics.entries.count) 条事件").font(.caption).foregroundStyle(.secondary)
                 Spacer()
@@ -59,23 +48,20 @@ struct KeyTestPanel: View {
             }
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 6) {
-                    if diagnostics.entries.isEmpty { Text("暂无事件").foregroundStyle(.secondary) }
+                    if diagnostics.entries.isEmpty { Text("暂无事件，设备事件将自动显示在此处。").foregroundStyle(.secondary) }
                     ForEach(diagnostics.entries) { entry in
-                        Text(entry.line)
-                            .foregroundStyle(entry.source == "系统回读" ? Color.green : Color.primary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text(entry.line).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
                 .font(.system(size: 10.5, design: .monospaced)).textSelection(.enabled)
                 .padding(10).frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(height: 180)
+            .frame(height: 240)
             .background(.black.opacity(0.12), in: RoundedRectangle(cornerRadius: 6))
         }
         .buttonStyle(.bordered).controlSize(.small)
         .onAppear { diagnostics.refreshPermission() }
         .onReceive(Timer.publish(every: 1, on: .main, in: .common).autoconnect()) { _ in diagnostics.refreshPermission() }
-        .onDisappear { model.stopKeyboardTest() }
     }
 
     private var context: String {
@@ -86,5 +72,13 @@ struct KeyTestPanel: View {
         let editing = model.shortcutRecording ? " · 快捷键编辑中，暂停注入" : ""
         let heldB = status?.heldB == true ? "按住" : "松开"
         return "设备：\(connection) · \(audio) · A：\(held) · B：\(heldB)\(editing)\n姿态：\(status?.poseDescription ?? "等待设备状态")"
+    }
+    private var doubleTapContext: String {
+        let binding = model.shortcut(for: .doubleTap)?.label ?? "未设置"
+        let state: String
+        if !model.connected { state = "设备未连接" }
+        else if !model.supportsDoubleTap { state = "当前固件不支持双敲" }
+        else { state = model.status?.tapMode == 1 ? "设备协议已协商" : "等待设备协议协商" }
+        return "双敲：\(binding) · \(state)"
     }
 }

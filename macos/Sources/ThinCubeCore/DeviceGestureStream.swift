@@ -1,14 +1,27 @@
 public enum ShortcutTrigger: String, CaseIterable {
-    case a, b, doubleFlick = "double_flick"
+    case a, b, doubleTap = "double_tap"
     public init(_ button: DeviceButton) { self = button == .a ? .a : .b }
-    public var label: String { switch self { case .a: return "A 键"; case .b: return "B 键"; case .doubleFlick: return "连续双甩" } }
+    public var label: String { switch self { case .a: return "A 键"; case .b: return "B 键"; case .doubleTap: return "独立双敲" } }
+    public var isGesture: Bool { self == .doubleTap }
+    public init?(gestureType: String) {
+        guard let value = Self(rawValue: gestureType), value.isGesture else { return nil }
+        self = value
+    }
+    public func storageKey(for device: String) -> String {
+        switch self {
+        case .a: return "shortcut." + device
+        case .b: return "shortcut.b." + device
+        case .doubleTap: return "shortcut." + rawValue + "." + device
+        }
+    }
 }
 
 public struct DeviceGestureEvent: Decodable, Equatable {
     public let seq: UInt32
     public let type: String
     public let ageMs: UInt32
-    public init(seq: UInt32, type: String = "double_flick", ageMs: UInt32 = 0) { self.seq = seq; self.type = type; self.ageMs = ageMs }
+    public var trigger: ShortcutTrigger? { ShortcutTrigger(gestureType: type) }
+    public init(seq: UInt32, type: String = "double_tap", ageMs: UInt32 = 0) { self.seq = seq; self.type = type; self.ageMs = ageMs }
 }
 
 /// Consume each event once, including events discarded while editing, blocked
@@ -30,6 +43,6 @@ public struct DeviceGestureStream {
         }
         sequence = event.seq; acknowledgement = event.seq
         return Update(event: event, fire: canInject && !changed && voiceSession != nil && mode == 1 &&
-                      event.type == "double_flick" && event.ageMs <= 750)
+                      event.trigger != nil && event.ageMs <= 750)
     }
 }

@@ -3,6 +3,14 @@ import XCTest
 @testable import ThinCubeCore
 
 final class KeyEventSequenceTests: XCTestCase {
+    func testTapPulsePreservesAnExistingHeldButton() throws {
+        var sequence = KeyEventSequence()
+        _ = try XCTUnwrap(sequence.press(combo("right_cmd+a"), button: .b))
+        let steps = try XCTUnwrap(sequence.pulse(combo("right_cmd+z"), physicallyHeld: [54, 0], button: .doubleTap))
+        XCTAssertEqual(steps.map(\.code), [6, 6]); XCTAssertEqual(steps.map(\.down), [true, false])
+        XCTAssertTrue(sequence.isActive(for: .b)); XCTAssertFalse(sequence.isActive(for: .doubleTap))
+        XCTAssertEqual(sequence.release(button: .b).map(\.code), [0, 54])
+    }
     func testPulseContainsBothEdgesAndLeavesNoHeldOwner() throws {
         var sequence = KeyEventSequence()
         for _ in 0..<3 {
@@ -18,7 +26,7 @@ final class KeyEventSequenceTests: XCTestCase {
         _ = try XCTUnwrap(sequence.press(combo("right_cmd+a"), button: .a))
         let steps = try XCTUnwrap(sequence.pulse(combo("right_cmd+z"), physicallyHeld: [54, 0, 56]))
         XCTAssertEqual(steps.map(\.code), [6, 6]); XCTAssertEqual(steps.last?.flags, flags([54, 56]))
-        XCTAssertTrue(sequence.isActive(for: .a)); XCTAssertFalse(sequence.isActive(for: .doubleFlick))
+        XCTAssertTrue(sequence.isActive(for: .a)); XCTAssertFalse(sequence.isActive(for: .doubleTap))
         XCTAssertNil(sequence.pulse(try combo("right_cmd+a")))
         XCTAssertNil(sequence.pulse(try combo("cmd+b"), physicallyHeld: [11]))
         XCTAssertEqual(sequence.release(button: .a).map(\.code), [0, 54])

@@ -4,16 +4,19 @@ import XCTest
 final class BLEStatusSnapshotsTests: XCTestCase {
     func testGestureDeltaClearsEventAndRejectsMalformedOrMissingFields() throws {
         var decoder = BLEStatusSnapshots()
-        _ = decoder.accept(try data(["epoch": 7, "gestureProtocol": 1, "gestureMode": 0]))
+        _ = decoder.accept(try data(["epoch": 7, "gestureProtocol": 1, "gestureMode": 0, "tapProtocol": 1, "tapMode": 0]))
         let live: [Any] = [7, 201, String(repeating: "00", count: 16), 0, "inverted", "", 0]
-        var delta: [String: Any] = ["s": live, "edge": NSNull(), "gestureMode": 1,
-                                  "gesture": ["seq": 4, "type": "double_flick", "ageMs": 10]]
+        var delta: [String: Any] = ["s": live, "edge": NSNull(), "gestureMode": 1, "tapMode": 1,
+                                  "gesture": ["seq": 4, "type": "double_tap", "ageMs": 10]]
         let received = try XCTUnwrap(decoder.accept(try data(delta)))
         let status = try XCTUnwrap(JSONSerialization.jsonObject(with: received) as? [String: Any])
         XCTAssertEqual(status["gestureMode"] as? Int, 1)
+        XCTAssertEqual(status["tapProtocol"] as? Int, 1); XCTAssertEqual(status["tapMode"] as? Int, 1)
+        XCTAssertEqual((status["gesture"] as? [String: Any])?["type"] as? String, "double_tap")
+        delta["tapMode"] = 2; XCTAssertNil(decoder.accept(try data(delta))); delta["tapMode"] = 1
         XCTAssertEqual((status["gesture"] as? [String: Any])?["seq"] as? Int, 4)
-        for malformed in [["seq": true, "type": "double_flick", "ageMs": 1] as [String: Any],
-                          ["seq": 4, "type": 1, "ageMs": 1], ["seq": 4, "type": "double_flick", "ageMs": -1]] {
+        for malformed in [["seq": true, "type": "double_tap", "ageMs": 1] as [String: Any],
+                          ["seq": 4, "type": 1, "ageMs": 1], ["seq": 4, "type": "double_tap", "ageMs": -1]] {
             delta["gesture"] = malformed; XCTAssertNil(decoder.accept(try data(delta)))
         }
         delta.removeValue(forKey: "gesture"); XCTAssertNil(decoder.accept(try data(delta)))

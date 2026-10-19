@@ -6,7 +6,7 @@ struct KeyboardDiagnosticsSheet: View {
     @Environment(\.dismiss) private var dismiss
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            KeyTestPanel(model: model)
+            KeyDiagnosticsPanel(model: model)
             HStack {
                 Spacer()
                 Button("完成") { dismiss() }.keyboardShortcut(.cancelAction)

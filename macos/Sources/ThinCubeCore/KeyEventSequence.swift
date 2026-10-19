@@ -74,12 +74,12 @@ public struct KeyEventSequence {
     /// Construct the complete tap before posting. Never release another
     /// trigger's held keys or an ordinary key already down on the keyboard.
     public mutating func pulse(_ combo: KeyCombo, physicallyHeld: Set<UInt16> = [],
-                               physicalFlags: CGEventFlags = []) -> [KeyEventStep]? {
-        guard combo.keyCode.map({ !injectedCodes.contains($0) }) ?? true else { return nil }
+                               physicalFlags: CGEventFlags = [], button: ShortcutTrigger = .doubleTap) -> [KeyEventStep]? {
+        guard button.isGesture, combo.keyCode.map({ !injectedCodes.contains($0) }) ?? true else { return nil }
         var next = self
         guard let down = next.press(combo, physicallyHeld: physicallyHeld,
-                                    physicalFlags: physicalFlags, button: .doubleFlick) else { return nil }
-        let up = next.release(physicallyHeld: physicallyHeld, physicalFlags: physicalFlags, button: .doubleFlick)
+                                    physicalFlags: physicalFlags, button: button) else { return nil }
+        let up = next.release(physicallyHeld: physicallyHeld, physicalFlags: physicalFlags, button: button)
         self = next
         return down + up
     }

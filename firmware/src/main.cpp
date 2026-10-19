@@ -8,7 +8,6 @@
 #include "pet.h"
 #include "motion.h"
 #include "imu_service.h"
-#include "flick_diagnostic.h"
 #include "wifi_prov.h"
 #include "ota.h"
 #include "device.h"
@@ -157,7 +156,6 @@ void loop(){
   if (!validMarked && ms > 60000 && uiHealthy() && deviceHealthy() && motionDiag().updates>0){ validMarked=otaMarkValid(); }
   if (!validMarked) otaRollbackUnhealthy();
   deviceTick(ms,petState()==PET_SLEEP,connectionSetupActive()||devicePairWindow()||provActive()||otaActive());
-  flickTick(millis());
   uiSetOrientation(deviceDisplayRotation(),ms);
   uiPowerTick(millis(),validMarked);
   uiStoriesTick(millis());
@@ -186,7 +184,6 @@ void loop(){
     if (motionHomeKnown() && !homePrinted){ homePrinted = true; motionPrintHome(); }
     const MotionDiag g = motionDiag();
     imuReport();
-    if(flickSnapshot().enabled)flickReport();
     Serial.printf("[imu] en %d upd %u/%u a %.2f %.2f %.2f mag %.2f gRef %.2f dev %.2f still %d home %d up%u sh%u dn%u\n",
                   g.imuEnabled, (unsigned)g.updates, (unsigned)g.reads,
                   g.ax, g.ay, g.az, g.mag, g.gRef, g.dev, g.still, g.home,

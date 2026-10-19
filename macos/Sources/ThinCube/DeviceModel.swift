@@ -29,7 +29,7 @@ struct DeviceStatus: Decodable {
     let gain: Double, brightness: Int, level: Double, ota: String, session: String
     let soundVolume: Int?, soundMuted: Bool?, soundPlaying: Bool?, soundCount: UInt32?
     let keyProtocol: Int?, keyMode: Int?, heldB: Bool?
-    let gestureProtocol: Int?, gestureMode: Int?
+    let gestureProtocol: Int?, gestureMode: Int?, tapProtocol: Int?, tapMode: Int?
     let gesture: DeviceGestureEvent?
     let edge: Edge?
     let pose: String?, voiceBlock: String?, calibration: Calibration?
@@ -113,15 +113,19 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published var status: DeviceStatus?
     @Published private(set) var shortcut = Shortcut()
     @Published private(set) var shortcutB: Shortcut?
-    @Published private(set) var shortcutDoubleFlick: Shortcut?
+    @Published private(set) var shortcutDoubleTap: Shortcut?
+    private var tapTuning = false
+    private var tapBlockedUntil: TimeInterval = 0
+    var supportsDoubleTap: Bool { status?.gestureProtocol == 1 && status?.tapProtocol == 1 }
     var supportsBShortcut: Bool { status?.keyProtocol == 2 }
-    var supportsDoubleFlick: Bool { status?.gestureProtocol == 1 }
     func supportsShortcut(_ trigger: ShortcutTrigger) -> Bool {
-        switch trigger { case .a: return true; case .b: return supportsBShortcut; case .doubleFlick: return supportsDoubleFlick }
+        switch trigger { case .a: return true; case .b: return supportsBShortcut; case .doubleTap: return supportsDoubleTap }
     }
     func shortcut(for button: ShortcutTrigger) -> Shortcut? {
         if button == .a { return shortcut }
-        guard var value = button == .b ? shortcutB : shortcutDoubleFlick else { return nil }
+        let stored: Shortcut?
+        switch button { case .a: stored = shortcut; case .b: stored = shortcutB; case .doubleTap: stored = shortcutDoubleTap }
+        guard var value = stored else { return nil }
         value.distinguishSides = shortcut.distinguishSides
         return value.distinguishSides ? (ShortcutSelection(shortcut: value).shortcut ?? value) : value
     }
@@ -141,9 +145,6 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     let keyDiagnostics = KeyDiagnostics()
     private let powerDiagnostics = PowerDiagnostics()
     let discovery = Discovery()
-    @Published private(set) var shortcutTestRunning = false
-    private let testKeys = KeyInjector(targetPID: ProcessInfo.processInfo.processIdentifier)
-    private var shortcutTestTask: Task<Void, Never>?
     private var keyStream = DeviceKeyStream()
     private var gestureStream = DeviceGestureStream()
     private var gestureBlockedUntil: TimeInterval = 0
@@ -180,13 +181,15 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         let config = URLSessionConfiguration.ephemeral
         config.timeoutIntervalForRequest = 5; config.timeoutIntervalForResource = 140
         session = URLSession(configuration: config)
+        // The removed gesture must not retain bindings or migrate into tap.
+        for key in UserDefaults.standard.dictionaryRepresentation().keys where key.hasPrefix("shortcut.double_flick.") {
+            UserDefaults.standard.removeObject(forKey: key)
+        }
         loadShortcut()
         keys.onTrace = { [weak self] detail in
             self?.keyDiagnostics.record("快捷键", detail)
             if detail.hasPrefix("拦截：") || detail.hasPrefix("失败：") { self?.note = detail }
         }
-        testKeys.onTrace = { [weak self] in self?.keyDiagnostics.record("本地注入", $0) }
-        keyDiagnostics.onStop = { [weak self] in self?.cancelShortcutTest() }
         target = ConnectionTarget(host: host, deviceID: UserDefaults.standard.string(forKey: "lastDeviceName"))
         recovery = ConnectionRecovery(enabled: !host.isEmpty && (UserDefaults.standard.object(forKey: "autoReconnect") as? Bool ?? true))
         let center = NSWorkspace.shared.notificationCenter
@@ -287,6 +290,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private func request(_ path: String, body: [String: Any]? = nil, authenticated: Bool = true) throws -> URLRequest {
         guard let base else { throw ClientError.message("请先选择设备") }
         var request = URLRequest(url: base.appendingPathComponent(path))
+        if path == "api/tap" { request.timeoutInterval = 3 }
         if authenticated { request.setValue(key, forHTTPHeaderField: "X-ThinCube-Key") }
         if let body { request.httpMethod = "POST"; request.setValue("application/json", forHTTPHeaderField: "Content-Type"); request.httpBody = try JSONSerialization.data(withJSONObject: body) }
         return request
@@ -707,18 +711,26 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             else if keyUpdate.press, let binding = shortcut(for: ShortcutTrigger(edge.key)) { _ = keys.press(binding, button: ShortcutTrigger(edge.key)) }
         }
         ack = keyStream.acknowledgement
-        let gestureBinding = shortcut(for: .doubleFlick)
+        let gestureTrigger = next.gesture?.trigger
+        let gestureBinding = gestureTrigger.flatMap { shortcut(for: $0) }
+        let tapBlock: String? = gestureTrigger == .doubleTap
+            ? (next.tapProtocol != 1 || next.tapMode != 1 ? "双敲协议尚未协商"
+               : tapTuning || ProcessInfo.processInfo.systemUptime < tapBlockedUntil ? "正在调节双敲参数" : nil) : nil
         let gestureBlock = blocked ?? (next.held || next.heldB == true ? "A/B 快捷键正在保持" : nil)
             ?? (ProcessInfo.processInfo.systemUptime < gestureBlockedUntil ? "快捷键刚编辑完成" : nil)
-            ?? (gestureBinding == nil ? "连续双甩尚未设置快捷键" : nil)
+            ?? tapBlock
+            ?? (gestureBinding == nil ? (gestureTrigger?.label ?? "未知手势") + "尚未设置快捷键" : nil)
         let gestureUpdate = gestureStream.receive(epoch: next.epoch, voiceSession: next.streaming ? next.session : nil,
             mode: next.gestureProtocol == 1 ? (next.gestureMode ?? 0) : 0, event: next.gesture, canInject: gestureBlock == nil)
         if let event = gestureUpdate.event {
-            let action: String
-            if gestureUpdate.fire, let gestureBinding {
-                action = keys.pulse(gestureBinding) ? "已执行一次按下、松开 \(gestureBinding.label)" : "未提交键盘事件，详见注入日志"
-            } else { action = "已丢弃：" + (gestureBlock ?? "事件过期、未协商或上下文已改变") }
-            keyDiagnostics.record("设备双甩", "seq=\(event.seq) · age=\(event.ageMs) ms · \(action)")
+            let source = "设备" + (gestureTrigger?.label ?? "手势")
+            let detail = "seq=\(event.seq) · age=\(event.ageMs) ms"
+            if gestureUpdate.fire, let gestureBinding, let gestureTrigger {
+                keyDiagnostics.record(source, detail + " · 已接受，准备注入 \(gestureBinding.label)")
+                _ = keys.pulse(gestureBinding, button: gestureTrigger)
+            } else {
+                keyDiagnostics.record(source, detail + " · 已丢弃：" + (gestureBlock ?? "事件过期、未协商或上下文已改变"))
+            }
         }
         if stopLocally && !next.streaming { stopLocally = false }
         return true
@@ -734,41 +746,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if !status.streaming { return "设备未处于传音状态" }
         if !status.inverted { return "设备未处于倒置语音姿态" }
         if shortcutRecording { return "正在编辑快捷键" }
-        if shortcutTestRunning { return "本地注入测试进行中" }
         return nil
     }
-
-    func testCurrentShortcut(button: ShortcutTrigger = .a) {
-        guard let binding = shortcut(for: button) else { return }
-        guard !shortcutTestRunning, !shortcutRecording, !updating, !connecting else { return }
-        keys.release()
-        keyDiagnostics.start()
-        keyDiagnostics.refreshPermission()
-        guard keyDiagnostics.monitoring else {
-            keyDiagnostics.record("测试", "请激活 ThinCube 窗口后再测试。")
-            return
-        }
-        if button == .doubleFlick {
-            keyDiagnostics.record("测试", "测试连续双甩快捷键 \(binding.label)；执行一次按下与松开。")
-            _ = testKeys.pulse(binding); return
-        }
-        keyDiagnostics.record("测试", "测试 \(button.label)快捷键 \(binding.label)；150 ms 后自动松开。")
-        guard testKeys.press(binding, button: button) else { return }
-        shortcutTestRunning = true
-        shortcutTestTask = Task { [weak self] in
-            do { try await Task.sleep(nanoseconds: 150_000_000) } catch { return }
-            guard let self, !Task.isCancelled else { return }
-            self.testKeys.release()
-            self.shortcutTestRunning = false; self.shortcutTestTask = nil
-        }
-    }
-
-    private func cancelShortcutTest() {
-        shortcutTestTask?.cancel(); shortcutTestTask = nil
-        testKeys.release(); shortcutTestRunning = false
-    }
-
-    func stopKeyboardTest() { keyDiagnostics.stop(); cancelShortcutTest() }
 
     private func tick() {
         let now = Date()
@@ -800,7 +779,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         guard !sendingHeartbeat, now.timeIntervalSince(lastHeartbeat) >= (activeBLE ? 0.2 : 0.1), activeBLE || websocket != nil else { return }
         sendingHeartbeat = true; lastHeartbeat = now
         let id = generation
-        let payload: [String: Any] = ["op": "heartbeat", "epoch": epoch, "ack": ack, "keyProtocol": supportsBShortcut ? 2 : 1, "gestureProtocol": supportsDoubleFlick ? 1 : 0, "gestureAck": gestureStream.acknowledgement, "port": Int(receiver.port), "ready": connected && audioPrepared && !updating && !switching]
+        let payload: [String: Any] = ["op": "heartbeat", "epoch": epoch, "ack": ack, "keyProtocol": supportsBShortcut ? 2 : 1, "gestureProtocol": supportsDoubleTap ? 1 : 0, "tapProtocol": supportsDoubleTap ? 1 : 0, "gestureAck": gestureStream.acknowledgement, "port": Int(receiver.port), "ready": connected && audioPrepared && !updating && !switching]
         Task { [weak self] in
             defer { if self?.generation == id { self?.sendingHeartbeat = false } }
             guard let self, self.generation == id else { return }
@@ -816,7 +795,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             // before start, even if the first periodic heartbeat has not run yet.
             if op == "start" {
                 guard audioPrepared, !updating else { return }
-                try await sendControl(["op": "heartbeat", "epoch": epoch, "ack": ack, "keyProtocol": supportsBShortcut ? 2 : 1, "gestureProtocol": supportsDoubleFlick ? 1 : 0, "gestureAck": gestureStream.acknowledgement, "port": Int(receiver.port), "ready": true])
+                try await sendControl(["op": "heartbeat", "epoch": epoch, "ack": ack, "keyProtocol": supportsBShortcut ? 2 : 1, "gestureProtocol": supportsDoubleTap ? 1 : 0, "tapProtocol": supportsDoubleTap ? 1 : 0, "gestureAck": gestureStream.acknowledgement, "port": Int(receiver.port), "ready": true])
             }
             try await sendControl(["op": op, "epoch": epoch])
         } catch { note = error.localizedDescription }
@@ -841,6 +820,13 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     func apply(_ settings: [String: Any]) async {
         if settings["muted"] as? Bool == true || settings["allowed"] as? Bool == false { stopLocally = true; keys.release(); buffer.setSession(nil) }
         do { _ = try await json("api/settings", body: settings) } catch { note = error.localizedDescription }
+    }
+    func tapRequest(_ body: [String: Any]? = nil) async throws -> [String: Any] {
+        guard connected, !connecting, !switching, !updating, !deviceSleeping else { throw ClientError.message("请先连接并唤醒设备，等待升级或连接切换完成。") }
+        let connectionID = generation
+        let value = try await json("api/tap", body: body)
+        guard generation == connectionID, connected else { throw ClientError.message("连接已变化，请重新读取敲击设置。") }
+        return value
     }
     func setDeepSleep(_ enabled: Bool) {
         guard connected, !updating, !switching, status?.deepSleepAvailable == true else { return }
@@ -892,24 +878,26 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     func prepareAudio() { do { try prepareAudioNow(); note = "BlackHole 2ch 已准备，采样率 48 kHz。" } catch { audioPrepared = false; note = error.localizedDescription } }
     func selectSystemInput() { do { try bridge.selectSystemInput(); note = "系统输入已设为 BlackHole 2ch。也可在目标应用中单独选择它。" } catch { note = error.localizedDescription } }
+    func setTapTuning(_ tuning: Bool) {
+        tapTuning = tuning
+        tapBlockedUntil = ProcessInfo.processInfo.systemUptime + 0.75
+    }
     func setShortcutRecording(_ recording: Bool) {
-        if recording { stopKeyboardTest() }
         keys.release()
         shortcutRecordingCount = max(0, shortcutRecordingCount + (recording ? 1 : -1))
         shortcutRecording = shortcutRecordingCount > 0
         gestureBlockedUntil = ProcessInfo.processInfo.systemUptime + 0.75
     }
     private func shortcutStorageKey(_ trigger: ShortcutTrigger) -> String {
-        switch trigger { case .a: return "shortcut." + name; case .b: return "shortcut.b." + name; case .doubleFlick: return "shortcut.double_flick." + name }
+        trigger.storageKey(for: name)
     }
     @discardableResult func setShortcut(_ value: Shortcut, button: ShortcutTrigger = .a) -> Bool {
         guard value.isValid, !connecting, !updating, supportsShortcut(button) else { return false }
-        stopKeyboardTest()
         do {
             let data = try JSONEncoder().encode(value)
             keys.release()
             UserDefaults.standard.set(data, forKey: shortcutStorageKey(button))
-            switch button { case .a: shortcut = value; case .b: shortcutB = value; case .doubleFlick: shortcutDoubleFlick = value }
+            switch button { case .a: shortcut = value; case .b: shortcutB = value; case .doubleTap: shortcutDoubleTap = value }
             gestureBlockedUntil = ProcessInfo.processInfo.systemUptime + 0.75
             return true
         } catch {
@@ -919,9 +907,9 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     func clearShortcut(_ trigger: ShortcutTrigger) {
         guard trigger != .a else { return }
-        stopKeyboardTest(); keys.release()
+        keys.release()
         UserDefaults.standard.removeObject(forKey: shortcutStorageKey(trigger))
-        if trigger == .b { shortcutB = nil } else { shortcutDoubleFlick = nil }
+        switch trigger { case .a: break; case .b: shortcutB = nil; case .doubleTap: shortcutDoubleTap = nil }
         gestureBlockedUntil = ProcessInfo.processInfo.systemUptime + 0.75
     }
     private func loadShortcut() {
@@ -932,7 +920,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         else { shortcut = Shortcut() }
         shortcutB = UserDefaults.standard.data(forKey: "shortcut.b." + name)
             .flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
-        shortcutDoubleFlick = UserDefaults.standard.data(forKey: shortcutStorageKey(.doubleFlick))
+        shortcutDoubleTap = UserDefaults.standard.data(forKey: shortcutStorageKey(.doubleTap))
             .flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }
     }
     @discardableResult func changeWifi() async -> Bool {
@@ -1111,7 +1099,6 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         pairingSession = nil; pairingError = ""; pin = ""; connectionProgress.reset()
         let authorization = pairingContinuation; pairingContinuation = nil
         authorization?.resume(throwing: CancellationError())
-        stopKeyboardTest()
         if connected {
             keyDiagnostics.record("连接", "断开：" + message + "；已释放快捷键。")
             powerDiagnostics.disconnected(device: name)

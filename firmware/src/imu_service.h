@@ -1,6 +1,7 @@
 #pragma once
 #include <stdint.h>
 #include <stddef.h>
+#include "tap_parameters.h"
 
 struct ImuVector {
   float x,y,z;
@@ -29,3 +30,8 @@ struct TapSnapshot {
   TapSnapshot(bool s=false,bool e=false,uint32_t r=0,uint32_t a=0,uint32_t b=0):supported(s),enabled(e),raw(r),accepted(a),blocked(b){}
 };
 TapSnapshot imuTapSnapshot();
+// Main-loop only. Network handlers use the separately published JSON cache.
+bool imuTapFormatJSON(char* out,size_t length);
+void imuTapConfigure(const TapParameters& parameters,const char* requestId);
+void imuTapReset(const char* requestId);
+void imuTapRestore(const char* requestId);

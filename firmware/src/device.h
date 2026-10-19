@@ -22,7 +22,7 @@ bool deviceInverted();
 uint8_t deviceDisplayRotation();
 bool deviceHealthy();
 bool deviceControlConnected(uint32_t ms);
-bool deviceDoubleFlick(uint32_t now);
+bool deviceDoubleTap(uint32_t now);
 UIStatus::VoiceInputs deviceVoiceStatus(uint32_t ms);
 const char* deviceVoiceBlock();
 float deviceLevel();
