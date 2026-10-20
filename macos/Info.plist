@@ -7,8 +7,8 @@
   <key>CFBundleDisplayName</key><string>ThinCube</string>
   <key>CFBundleIconFile</key><string>AppIcon</string>
   <key>CFBundlePackageType</key><string>APPL</string>
-  <key>CFBundleShortVersionString</key><string>0.4.34</string>
-  <key>CFBundleVersion</key><string>55</string>
+  <key>CFBundleShortVersionString</key><string>0.4.35</string>
+  <key>CFBundleVersion</key><string>56</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHighResolutionCapable</key><true/>

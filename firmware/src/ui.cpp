@@ -535,6 +535,12 @@ void goSleep(const char* why){
   snprintf(echo, sizeof(echo), "sleep");
   uiLog("sleep: %s", why);
 }
+void goRest(const char* why){
+  goSleep(why);
+  // Face-down rest and the idle deadline enter the same silent online standby.
+  // Stop capture/playback immediately without restarting the activity clock.
+  soundCancel();audioTick(false);M5.Speaker.end();codecOff=false;
+}
 void goWake(const char* why){
   faceDownRest.cancel();
   powerSavePerformance();
@@ -603,9 +609,7 @@ void uiTick(uint32_t ms){
   const auto restAction=faceDownRest.update(ms,devicePose(),devicePoseCandidate(),motionActivityHealthy(ms),
     special||games.active()||deviceStreaming()||uiRotationActive(),motionActivityDetected(),button);
   if(restAction==FaceDownRestPolicy::Action::Sleep){
-    goSleep("face down standby");
-    // Rest is silent and shuts down capture before deviceTick sees PET_SLEEP.
-    soundCancel();audioTick(false);M5.Speaker.end();codecOff=false;
+    goRest("face down standby");
   }else if(restAction==FaceDownRestPolicy::Action::Wake){
     deepSleepCancel();goWake("face down lifted or interrupted");
   }
@@ -882,8 +886,8 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
   const auto action=idlePower.update(ms,blocked,standby,powerAutoOffAllowed(ms));
   if(blocked)standby=false;
   if(deepSleepTick(ms,bootVerified&&!blocked&&!soundPlaying(),deviceControlConnected(ms)))return;
-  if(bootVerified&&!soundPlaying()&&action==IdlePowerPolicy::Action::Sleep){
-    goSleep("idle standby 5m");standby=true;
+  if(bootVerified&&action==IdlePowerPolicy::Action::Sleep){
+    goRest("idle standby 5m");standby=true;
     Serial.printf("[idle] standby after %us inactive\n",unsigned(idlePower.elapsed(ms)/1000));
   }
   if(bootVerified&&!soundPlaying()&&action==IdlePowerPolicy::Action::PowerOff){
@@ -904,8 +908,9 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
       Serial.println("[idle] power-off returned; remaining in standby");
     }
   }
-  const bool settled=petState()==PET_SLEEP&&!busy&&(faceDownRest.active||petStateElapsed(ms,s_stateAt)>=1200);
-  const bool blank=(standby||faceDownRest.active)&&settled;
+  const bool resting=standby||faceDownRest.active;
+  const bool settled=petState()==PET_SLEEP&&!busy&&(resting||petStateElapsed(ms,s_stateAt)>=1200);
+  const bool blank=resting&&settled;
   const bool dimEligible=!blocked&&petState()!=PET_SLEEP&&!deviceInverted()&&
     devicePoseCandidate()!=DevicePose::Inverted&&!deviceVoicePreparing()&&!soundPlaying()&&!stories.playing()&&
     !(transportHintUntil&&int32_t(transportHintUntil-ms)>0);
