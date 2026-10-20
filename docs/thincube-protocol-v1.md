@@ -9,7 +9,7 @@
 | GET `/api/info` | name、version、protocol=1、paired |
 | POST `/api/pair` | `{pin:"六位数字"}`；两分钟物理开启窗口、每秒限速、最多十次；成功返回 key/name |
 | GET `/api/status` | 当前发布的状态快照 |
-| POST `/api/settings` | 可选 allowed/muted/localSound/deepSleep 布尔值，brightness 8…255 整数，gain 0.1…4，soundVolume 0…100 整数、soundMuted 布尔值 |
+| POST `/api/settings` | 可选 allowed/muted/localSound 布尔值，brightness 8…255 整数，gain 0.1…4，soundVolume 0…100 整数、soundMuted 布尔值；v0.4.60 起旧 deepSleep 设置忽略 |
 | POST `/api/wifi` | `{ssid,password}`；SSID 1…32 字节，密码为空或 8…63 字节，进入热点验证新网络 |
 | GET→WebSocket `/control` | 鉴权握手；控制与状态快照 |
 | POST `/ota/begin` | `{ver,size,sha256}`；返回单次 token，设备等待 A 确认 |
@@ -94,9 +94,19 @@ Mac 0.4.8 在 `~/Library/Application Support/ThinCube/power.jsonl` 记录新样�
 
 v0.4.16 起另有可选 `chip/model/actualBrightness/idleMs/cal` 字段；`chip` 为12位十六进制设备标识，`model` 为显示换算表标识，亮度字段记录实际背光，`cal` 为标定状态诊断。v0.4.17 正常使用 `model=lipo-ref-an4189` 的通用 LiPo 分段参考表，屏幕直接显示百分比；该版本禁用标定启动入口，正常 `cal.state=0`。这些新增字段不改变 `percent=-1` 表示未知的语义。
 
-## v0.4.18 在线省电与可选深睡
+## 自动休眠（固件 v0.4.60 起）
 
-HTTP `/api/settings` 与BLE `settings` 增加可选布尔值 `deepSleep`，默认false，保存至设备NVS。完整状态增加可选 `deepSleep`（保存的开关）、`deepSleepAvailable`（启动清理及BMI270检查通过）及 `sleep:{id,phase}`；`phase` 为 `preparing` 或 `awake`，`id` 为当前睡眠尝试的UInt32标识。BLE快速状态携带 `sleep`，Mac仅在同一epoch的完整状态基线中合并。旧固件缺少这些字段时，客户端禁用深睡控件。
+固件统一执行从最后一次真实活动起五分钟在线息屏、十分钟纯电池深睡、二十分钟纯电池关机，不再提供开关。提前活动或唤醒后重新计时；USB、受保护任务及传感器/供电检查沿用原有保护。旧 NVS `deep` 不再读取或写入，HTTP / BLE `settings` 中旧 `deepSleep` 字段忽略，不能改变策略。
+
+完整状态增加可选 `deepSleepUnified:true`，表示自动执行统一策略。为兼容旧客户端，继续提供 `deepSleep:true`、`deepSleepStaged:true`；`deepSleepAvailable` 仍表示当前启动的硬件准备是否通过，而非开关。新 Mac 移除设置入口，根据这些字段只读说明实际固件行为；没有统一策略字段的旧固件提示升级，不假装已启用新策略。BLE 快速状态仅在同 epoch 的完整基线中保留这些能力字段。通知与确认流程保持兼容，见下文和[统一休眠策略](unified-sleep-v0.4.60.md)。
+
+### v0.4.18–v0.4.59 兼容记录
+
+v0.4.58 扩展：完整状态增加可选 `deepSleepStaged:true`，表示深睡开关开启时，从最后一次真实活动起五分钟在线息屏、十分钟纯电池深睡、二十分钟纯电池完全关机。提前唤醒会取消旧关机计时并重新起算；开关关闭时仍采用五分钟息屏、十分钟纯电池关机。Mac 根据此能力显示相应说明，旧固件缺少字段时保留原策略说明；睡眠通知、确认和设置格式兼容。见 [5/10/20 分钟深睡策略](idle-stages-v0.4.58.md)。
+
+旧版 HTTP `/api/settings` 与BLE `settings` 支持可选布尔值 `deepSleep`，默认false，保存至设备NVS。完整状态增加可选 `deepSleep`（保存的开关）、`deepSleepAvailable`（启动清理及BMI270检查通过）及 `sleep:{id,phase}`；`phase` 为 `preparing` 或 `awake`，`id` 为当前睡眠尝试的UInt32标识。BLE快速状态携带 `sleep`，Mac仅在同一epoch的完整状态基线中合并。新版 Mac 不再提供深睡开关。
+
+### 睡眠通知与确认（继续适用）
 
 设备准备深睡时通过当前控制通道发布 `sleep`。Mac先释放快捷键及音频缓冲，再发送 `{op:"sleep_ack",epoch,sleepId}`；`sleepId` 必须为1…2³²−1的整数，并匹配当前尝试，设备只接受当前控制所有者及epoch的确认。BLE无 `rid` 的确认与心跳一样不附加应用回执。已连接时，设备等待最多2秒；新活动、普通控制命令、失联或供电/忙碌条件变化取消睡眠。原本离线时可在350ms准备窗口后进入，新连接出现后则必须收到确认。等待期间 `/ota/begin` 返回409及 `error=sleep_pending`。
 

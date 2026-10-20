@@ -20,8 +20,7 @@ struct DeviceStatus: Decodable {
     let wifiProvisioning: Bool?
     let bleMtu: Int?, bleAudioDropped: UInt32?
     let power: PowerTelemetry?
-    let deepSleep, deepSleepAvailable, deepSleepStaged: Bool?
-    let powerLedDebug, powerLedAvailable: Bool?
+    let deepSleep, deepSleepAvailable, deepSleepStaged, deepSleepUnified: Bool?
     let sleep: DeviceSleepNotice?
     struct Calibration: Decodable { let seq: UInt32; let op: String; let ok: Bool }
     let epoch: UInt32, allowed: Bool, muted: Bool, localSound: Bool, streaming: Bool, manual: Bool, held: Bool
@@ -86,17 +85,25 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published var connecting = false
     @Published private(set) var reconnecting = false
     @Published private(set) var deviceSleeping = false
-    @Published private(set) var deepSleepSettingBusy = false
-    @Published private(set) var powerLedSettingBusy = false
-    @Published private(set) var deepSleepEnabled = false
     @Published private(set) var stagedDeepSleep = false
-    var deepSleepDescription: String {
+    @Published private(set) var unifiedDeepSleep = false
+    var sleepPolicyDescription: String {
+        if unifiedDeepSleep {
+            let schedule = "从最后一次活动起五分钟息屏并保持连接；电池供电下十分钟进入深睡，二十分钟关机。提前活动或唤醒后重新计时。USB供电时保持在线；语音、配对或升级期间暂停自动休眠。"
+            if status?.deepSleepAvailable == false {
+                return schedule + "当前运动唤醒暂不可用，将保持在线息屏，并在静置满二十分钟后关机。"
+            }
+            return schedule + "深睡时可拿起或按电源键唤醒并自动重连；关机后需按电源键开机。深睡期间A/B键和Mac指令不能唤醒。"
+        }
         if status == nil && !deviceSleeping && !stagedDeepSleep {
-            return "连接设备后可查看当前固件的深睡策略。"
+            return "连接设备后可查看当前休眠策略。"
+        }
+        if status?.deepSleep != true && !deviceSleeping {
+            return "此设备使用较早固件：静置五分钟息屏，电池供电下十分钟关机。升级固件后将统一为五分钟息屏、十分钟深睡、二十分钟关机。"
         }
         return stagedDeepSleep
-          ? "开启后，从最后一次活动起五分钟息屏并保持连接；电池供电下十分钟进入深睡，二十分钟彻底关机。深睡时可拿起或按电源键唤醒并自动重连；关机后需按电源键开机。提前唤醒后重新计时。USB供电时保持在线；深睡期间A/B键和Mac指令不能唤醒。"
-          : "开启后，使用电池静置五分钟会断开连接并进入深睡；拿起或按机身电源键唤醒后自动重连。USB供电时保持在线。深睡期间A/B键和Mac指令不能唤醒。此固件的深睡模式不会自动关机。"
+          ? "此设备已启用较早固件的分阶段休眠：五分钟息屏，电池供电下十分钟深睡、二十分钟关机。深睡时可拿起或按电源键唤醒；关机后需按电源键开机。升级固件后无需设置，自动执行统一策略。"
+          : "此设备已启用较早固件的深睡：电池供电下静置五分钟进入深睡，拿起或按电源键唤醒，不会自动关机。升级固件后将统一为五分钟息屏、十分钟深睡、二十分钟关机。"
     }
     var deviceSleepHint: String {
         stagedDeepSleep
@@ -105,8 +112,6 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     private var sleepTracker = DeviceSleepTracker()
     private var sleepAckInFlight = false
-    private var deepSleepSettingTask: Task<Void, Never>?
-    private var powerLedSettingTask: Task<Void, Never>?
     @Published var audioPrepared = false
     @Published private(set) var switching = false
     @Published private(set) var transportPhase = ""
@@ -285,8 +290,9 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 "bleMtu": status?.bleMtu ?? 0, "bleAudioDropped": status?.bleAudioDropped ?? 0,
                 "brightness": status?.brightness ?? 0, "calibrated": status?.calibrated ?? false,
                 "faceCalibrated": status?.faceCalibrated ?? false, "keysActive": keys.isActive,
-                "power": status?.power?.dictionary ?? [:], "deepSleep": deepSleepEnabled,
+                "power": status?.power?.dictionary ?? [:], "deepSleep": status?.deepSleep ?? unifiedDeepSleep,
                 "deepSleepStaged": stagedDeepSleep,
+                "deepSleepUnified": unifiedDeepSleep,
                 "deepSleepAvailable": status?.deepSleepAvailable ?? false, "deviceSleeping": deviceSleeping, "note": note]
     }
     private func makeBase(_ selectedHost: String) throws -> URL {
@@ -342,7 +348,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     func selectDevice(_ id: String) {
         guard !connected, !connecting, !switching, !updating else { return }
         target = ConnectionTarget(host: "", deviceID: id.isEmpty ? nil : id)
-        sleepTracker.reset(); deviceSleeping = false; deepSleepEnabled = false; stagedDeepSleep = false
+        sleepTracker.reset(); deviceSleeping = false; stagedDeepSleep = false; unifiedDeepSleep = false
         host = ""; pin = ""; transportPhase = ""
         refreshRecoveryAddress()
     }
@@ -726,8 +732,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if status == nil || brightness == Double(status!.brightness) { brightness = Double(next.brightness) }
         if status == nil || soundVolume == Double(status?.soundVolume ?? 35) { soundVolume = Double(next.soundVolume ?? 35) }
         status = next
-        deepSleepEnabled = next.deepSleep ?? false
         stagedDeepSleep = next.deepSleepStaged ?? false
+        unifiedDeepSleep = next.deepSleepUnified ?? false
         if let power = next.power {
             powerDiagnostics.sample(power, device: name, transport: currentTransport,
                                     brightness: next.brightness, streaming: next.streaming,
@@ -872,52 +878,6 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         let value = try await json("api/tap", body: body)
         guard generation == connectionID, connected else { throw ClientError.message("连接已变化，请重新读取敲击设置。") }
         return value
-    }
-    func setDeepSleep(_ enabled: Bool) {
-        guard connected, !updating, !switching, status?.deepSleepAvailable == true else { return }
-        deepSleepSettingTask?.cancel(); deepSleepSettingBusy = true
-        let connectionID = generation
-        deepSleepSettingTask = Task { [weak self] in
-            guard let self else { return }
-            defer { if self.generation == connectionID { self.deepSleepSettingBusy = false } }
-            await self.apply(["deepSleep": enabled])
-            let deadline = Date().addingTimeInterval(3)
-            while !Task.isCancelled, self.generation == connectionID, Date() < deadline {
-                if self.status?.deepSleep == enabled {
-                    self.note = enabled ? (self.stagedDeepSleep
-                        ? "深睡待机已开启；从最后活动起五分钟息屏、十分钟深睡、二十分钟电池关机。"
-                        : "深睡待机已开启；使用电池静置五分钟后进入，拿起或按机身电源键唤醒。")
-                        : "深睡待机已关闭；恢复五分钟息屏、十分钟电池关机。"
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            if !Task.isCancelled, self.generation == connectionID { self.note = "设备未确认深睡设置，请稍后重试。" }
-        }
-    }
-    func setPowerLedDebug(_ enabled: Bool) {
-        guard connected, !updating, !switching, !powerLedSettingBusy,
-              status?.powerLedAvailable == true, status?.powerLedDebug != nil, status?.powerLedDebug != enabled else { return }
-        powerLedSettingBusy = true
-        let connectionID = generation
-        powerLedSettingTask = Task { [weak self] in
-            guard let self else { return }
-            defer { if self.generation == connectionID { self.powerLedSettingBusy = false } }
-            do { _ = try await self.json("api/settings", body: ["powerLedDebug": enabled]) }
-            catch {
-                if !Task.isCancelled, self.generation == connectionID { self.note = error.localizedDescription }
-                return
-            }
-            let deadline = Date().addingTimeInterval(3)
-            while !Task.isCancelled, self.generation == connectionID, Date() < deadline {
-                if self.status?.powerLedDebug == enabled, self.status?.powerLedAvailable == true {
-                    self.note = enabled ? "运行时常亮已开启，设备已保存设置。" : "已恢复自动：启动就绪后熄灭电源指示灯。"
-                    return
-                }
-                try? await Task.sleep(nanoseconds: 100_000_000)
-            }
-            if !Task.isCancelled, self.generation == connectionID { self.note = "设备未确认指示灯调试设置，请稍后重试。" }
-        }
     }
     private func prepareAudioInBackground(attempt: UUID) {
         guard !audioPreparation.busy else { return }
@@ -1212,8 +1172,6 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private func teardown(note message: String) {
         connectionDiagnostics.mark(.cancelled, attempt: generation)
         audioPreparation.cancel()
-        deepSleepSettingTask?.cancel(); deepSleepSettingTask = nil; deepSleepSettingBusy = false
-        powerLedSettingTask?.cancel(); powerLedSettingTask = nil; powerLedSettingBusy = false
         sleepAckInFlight = false
         pairingSession = nil; pairingError = ""; pin = ""; connectionProgress.reset()
         let authorization = pairingContinuation; pairingContinuation = nil

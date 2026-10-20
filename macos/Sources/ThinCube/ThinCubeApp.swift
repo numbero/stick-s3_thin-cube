@@ -332,7 +332,7 @@ struct MainView: View {
                         HelpParagraph("首次连接", "设备首次开机可选 A 蓝牙或 B Wi-Fi 热点。蓝牙无需先配网；选择热点时，按屏幕密码连接 ThinCube-Setup，在 192.168.4.1 配置网络，再在同一局域网配对。")
                         HelpParagraph("恢复出厂设置", "设备固件 v0.4.38 起，按住 B，再单击电源/复位键，松开 B 后进入恢复出厂确认页。A 确认清空全部设备配置，包括 Wi-Fi、蓝牙绑定、应用配对、校准、亮度和声音，重启后重新选择连接方式；B 取消并保留原配置。较早固件的此入口仅重设网络和应用授权。")
                         HelpParagraph("设备按键", "对讲机内 B 为自定义快捷键，长按不切换连接。其他模式短按 B 静音，长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
-                        HelpParagraph("电量与休眠", "红色 LOW 表示电压持续偏低，请及时充电。插拔电源后短暂显示 --% 是重新采样。关闭深睡时，静置五分钟息屏、电池供电下十分钟关机。" + model.deepSleepDescription)
+                        HelpParagraph("电量与休眠", "红色 LOW 表示电压持续偏低，请及时充电。插拔电源后短暂显示 --% 是重新采样。" + model.sleepPolicyDescription)
                     }
                 }
             }
@@ -362,17 +362,6 @@ struct MainView: View {
                 SettingsSliderRow(title: "亮度", value: $model.brightness, range: 8...255, step: 1,
                                   valueLabel: "\(Int(model.brightness))") {
                     Task { await model.apply(["brightness": Int(model.brightness)]) }
-                }
-                Toggle("运行时常亮（调试）", isOn: Binding(get: { model.status?.powerLedDebug ?? false }, set: { model.setPowerLedDebug($0) }))
-                    .disabled(model.powerLedSettingBusy || model.status?.powerLedDebug == nil || model.status?.powerLedAvailable != true)
-                Text(model.status?.powerLedDebug == nil ? "此设置需要升级设备固件。" : "默认自动：启动期间亮灯，本机就绪并稳定运行约 2 秒后熄灭，无需等待联网或连接 Mac。开启此项会在运行期间保持亮灯，设备会记住选择。")
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                Toggle("深睡待机", isOn: Binding(get: { model.deepSleepEnabled }, set: { model.setDeepSleep($0) }))
-                    .disabled(model.deepSleepSettingBusy || model.status?.deepSleepAvailable != true)
-                Text(model.deepSleepDescription)
-                    .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if model.deviceSleeping {
-                    Label(model.deviceSleepHint, systemImage: "moon.zzz.fill")
                 }
             }.disabled(!model.connected || model.updating || model.switching)
             if model.connected || !model.networkConfigurationNote.isEmpty {

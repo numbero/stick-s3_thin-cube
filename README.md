@@ -6,7 +6,7 @@ ThinCube 是基于 M5Stack StickS3 的 Clawd 电子伙伴，搭配 macOS 上位�
 
 *屏幕复用项目已有的固件画布，外壳为设计示意。Clawd 会回应声音、陪你探索；倒置设备后，还能把声音送到 Mac。*
 
-当前源码版本：Mac **v0.4.29**，设备固件 **v0.4.57**，通信协议 **v1**。
+当前源码版本：Mac **v0.4.34**，设备固件 **v0.4.60**，通信协议 **v1**。
 
 [功能预览](#功能预览) · [快速开始](#快速开始) · [设备怎么用](#设备怎么用) · [开发](#开发) · [目录与文档](#目录与文档)
 
@@ -17,6 +17,7 @@ ThinCube 是基于 M5Stack StickS3 的 Clawd 电子伙伴，搭配 macOS 上位�
 - **语音输入**：校准后倒置进入对讲模式，经 Mac 和 BlackHole 2ch 提供音频输入，也可手动开始或停止。
 - **快捷键**：对讲模式下 A/B 按住保持、松开释放；双敲执行独立快捷键的一次按下与松开。
 - **设备管理**：亮度、输入增益、音效、静音、校准、恢复出厂设置与 Wi-Fi OTA。
+- **自动休眠**：从最后一次活动起五分钟息屏，电池供电下十分钟深睡、二十分钟关机，无需设置。USB 供电时保持在线。
 
 ## 功能预览
 
@@ -113,7 +114,7 @@ Mac 首次构建前需配置固定 Apple 签名身份，见[签名配置脚本](
 | 通信、音频与升级 | [v1 协议](docs/thincube-protocol-v1.md)、[Wi-Fi / BLE 实现](docs/wifi-ble-implementation.md)、[配网与 OTA](docs/wifi-prov-ota.md) |
 | 角色与玩法 | [Clawd 设计](docs/clawd-character-v2.md)、[横屏玩法](docs/landscape-exploration.md) |
 | 快捷键与手势 | [A/B 快捷键](docs/walkie-b-shortcut-v0.4.41.md)、[双敲设置](docs/tap-settings-v0.4.28.md)、[设备保存](docs/tap-persistence-v0.4.57.md)、[按键诊断](docs/key-diagnostics-v0.4.26.md) |
-| 省电与开发环境 | [在线待机](docs/idle-power-v0.4.9.md)、[朝下息屏](docs/face-down-rest-v0.4.19.md)、[云端研发](docs/cloud-development.md) |
+| 省电与开发环境 | [统一休眠策略](docs/unified-sleep-v0.4.60.md)、[在线待机](docs/idle-power-v0.4.9.md)、[朝下息屏](docs/face-down-rest-v0.4.19.md)、[云端研发](docs/cloud-development.md) |
 
 各版本的实现细节、测试数据和调研记录保存在 `docs/`。Wi-Fi 控制与音频目前使用局域网明文协议，应在可信网络使用；端到端时延、长时间稳定性及 OTA 异常回滚仍待完整实机验收。
 

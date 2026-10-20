@@ -40,6 +40,5 @@ void deviceToggleMute();
 void deviceMotion(float x, float y, float z, float gyro, uint32_t ms);
 DevicePose devicePose();
 DevicePose devicePoseCandidate();
-bool deviceDeepSleepEnabled();
 bool deviceSaveForSleep();
 void deviceSleepChanged();

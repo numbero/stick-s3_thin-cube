@@ -48,7 +48,7 @@ struct Command {
   uint32_t ack = 0, gestureAck = 0, epoch = 0, address = 0;
   int keyProtocol = 1, gestureProtocol = 0, tapProtocol = 0;
   float gain = 1;
-  bool allowed = false, muted = false, local = true, ready = false, soundMuted = false,deepSleep=false,powerLedDebug=false;
+  bool allowed = false, muted = false, local = true, ready = false, soundMuted = false,powerLedDebug=false;
 };
 bool readKeyProtocol(cJSON* j,Command& c){
   const auto v=cJSON_GetObjectItemCaseSensitive(j,"keyProtocol");
@@ -74,7 +74,6 @@ WiFiUDP udp;
 char name[24], pin[7], key[33] = {}, published[2048] = "{}";
 char tapPublished[2048]="{\"supported\":false}";
 bool bleSnapshotDirty=true;
-bool deepSleepEnabled=false;
 PowerLedPolicy powerLedPolicy;
 bool powerLedDebug=false,powerLedOn=true,powerLedAvailable=false;
 uint32_t powerLedAttemptAt=0;
@@ -150,8 +149,8 @@ bool persist() {
   p.putBool("allowed",voice.allowed); p.putBool("muted",voice.muted);
   p.putBool("local",voice.localSound); p.putFloat("gain",gain); p.putUChar("bright",brightness);
   p.putUChar("sndVol",soundVolume());p.putBool("sndMute",soundMuted());
-  p.putInt("upright",pose.uprightSign); p.putInt("faceup",pose.faceUpSign);
-  const bool saved=p.putBool("deep",deepSleepEnabled)==1;p.end();return saved;
+  p.putInt("upright",pose.uprightSign);
+  const bool saved=p.putInt("faceup",pose.faceUpSign)==sizeof(int32_t);p.end();return saved;
 }
 bool applyPowerLed(bool enabled) {
   // PM1 PWR_CFG bit4 controls only LED_EN; preserve charging and power rails.
@@ -243,7 +242,8 @@ esp_err_t settings(httpd_req_t* r) {
   cJSON* j=body(r); if(!cJSON_IsObject(j)){cJSON_Delete(j);return json(r,"{\"error\":\"bad_json\"}","400 Bad Request");}
   Command c; strcpy(c.op,"settings"); bool valid=true;
   auto flag=[&](const char* n,int bit,bool& v){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsBool(x))valid=false;else{c.flags|=bit;v=cJSON_IsTrue(x);}}};
-  flag("allowed",1,c.allowed); flag("muted",2,c.muted); flag("localSound",4,c.local); flag("soundMuted",32,c.soundMuted);flag("deepSleep",128,c.deepSleep);flag("powerLedDebug",256,c.powerLedDebug);
+  // The retired deepSleep setting is ignored, like other unknown settings.
+  flag("allowed",1,c.allowed); flag("muted",2,c.muted); flag("localSound",4,c.local); flag("soundMuted",32,c.soundMuted);flag("powerLedDebug",256,c.powerLedDebug);
   auto b=cJSON_GetObjectItemCaseSensitive(j,"brightness");
   if(b){if(!cJSON_IsNumber(b)||b->valuedouble<8||b->valuedouble>255)valid=false;else{c.flags|=8;c.brightness=b->valueint;}}
   auto g=cJSON_GetObjectItemCaseSensitive(j,"gain");
@@ -348,8 +348,10 @@ void publish() {
   cJSON_AddStringToObject(j,"transportError",switchError);cJSON_AddStringToObject(j,"rejectedRequest",rejectedRequest);
   cJSON_AddBoolToObject(j,"allowed",voice.allowed);cJSON_AddBoolToObject(j,"muted",voice.muted);
   cJSON_AddBoolToObject(j,"localSound",voice.localSound);cJSON_AddBoolToObject(j,"streaming",voice.streaming);
-  cJSON_AddBoolToObject(j,"deepSleep",deepSleepEnabled);cJSON_AddBoolToObject(j,"deepSleepAvailable",deepSleepAvailable());
+  // Keep legacy status fields readable by older clients; sleep is automatic.
+  cJSON_AddBoolToObject(j,"deepSleep",true);cJSON_AddBoolToObject(j,"deepSleepAvailable",deepSleepAvailable());
   cJSON_AddBoolToObject(j,"deepSleepStaged",true);
+  cJSON_AddBoolToObject(j,"deepSleepUnified",true);
   cJSON_AddBoolToObject(j,"powerLedDebug",powerLedDebug);cJSON_AddBoolToObject(j,"powerLedAvailable",powerLedAvailable);
   cJSON_AddBoolToObject(j,"powerLedReady",powerLedPolicy.ready);cJSON_AddBoolToObject(j,"powerLedOn",powerLedOn);
   auto sleeping=cJSON_AddObjectToObject(j,"sleep");
@@ -458,7 +460,7 @@ void bleRequest(const char* text){
     c.epoch=uint32_t(number("epoch"));c.ack=uint32_t(number("ack"));c.ready=cJSON_IsTrue(cJSON_GetObjectItemCaseSensitive(j,"ready"));
     if(!strcmp(operation,"settings")){
       auto flag=[&](const char* n,int bit,bool& v){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsBool(x))valid=false;else{c.flags|=bit;v=cJSON_IsTrue(x);}}};
-      flag("allowed",1,c.allowed);flag("muted",2,c.muted);flag("localSound",4,c.local);flag("soundMuted",32,c.soundMuted);flag("deepSleep",128,c.deepSleep);flag("powerLedDebug",256,c.powerLedDebug);
+      flag("allowed",1,c.allowed);flag("muted",2,c.muted);flag("localSound",4,c.local);flag("soundMuted",32,c.soundMuted);flag("powerLedDebug",256,c.powerLedDebug);
       auto numeric=[&](const char* n,int bit,double low,double high,double& value){auto x=cJSON_GetObjectItemCaseSensitive(j,n);if(x){if(!cJSON_IsNumber(x)||!isfinite(x->valuedouble)||x->valuedouble<low||x->valuedouble>high)valid=false;else{c.flags|=bit;value=x->valuedouble;}}};
       double bright=c.brightness,volume=c.soundVolume,g=c.gain;numeric("brightness",8,8,255,bright);numeric("gain",16,.1,4,g);numeric("soundVolume",64,0,100,volume);
       if(bright!=int(bright)||volume!=int(volume))valid=false;c.brightness=bright;c.gain=g;c.soundVolume=volume;
@@ -518,7 +520,7 @@ void deviceBegin() {
     voice.allowed=p.getBool("allowed",false);voice.muted=p.getBool("muted",false);voice.localSound=p.getBool("local",true);
     soundConfigure(p.getUChar("sndVol",35),p.getBool("sndMute",false));
     gain=p.getFloat("gain",1);brightness=p.getUChar("bright",128);pose.uprightSign=p.getInt("upright",0);pose.faceUpSign=p.getInt("faceup",0);
-    deepSleepEnabled=p.getBool("deep",false);
+    // Legacy NVS "deep" is deliberately ignored: all devices use 5/10/20m.
     powerLedDebug=p.getBool("ledDebug",p.getBool("pwrLed",false));
     snprintf(key,sizeof(key),"%s",p.getString("key","").c_str());p.end();
   }
@@ -657,10 +659,8 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
       bleSnapshotDirty=true;
       if(c.flags&1)voice.allowed=c.allowed;if(c.flags&2)voice.muted=c.muted;if(c.flags&4)voice.localSound=c.local;
       if(c.flags&8)brightness=c.brightness;if(c.flags&16)gain=c.gain;
-      const bool previousDeep=deepSleepEnabled;
-      if(c.flags&128)deepSleepEnabled=c.deepSleep&&deepSleepAvailable();
       if(c.flags&(32|64))soundConfigure(c.flags&64?c.soundVolume:soundVolume(),c.flags&32?c.soundMuted:soundMuted());
-      if(!voice.allowed||voice.muted)stopVoice();if(!persist())deepSleepEnabled=previousDeep;
+      if(!voice.allowed||voice.muted)stopVoice();persist();
       if(c.flags&256)changePowerLedDebug(c.powerLedDebug);
     } else if(c.fd==owner&&c.epoch==epoch) {
       if(!strcmp(c.op,"heartbeat")){
@@ -820,6 +820,5 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   if(bleAuthenticated&&(bleSnapshotDirty||(!voice.streaming&&ms-lastBleSnapshot>=5000))){bleSendSnapshot(published);connectionTimingMark(ConnectionStage::SnapshotQueued);lastBleSnapshot=ms;bleSnapshotDirty=false;}
   if(!voice.streaming&&transportMode()==TransportMode::BLE)bleClearAudio();
 }
-bool deviceDeepSleepEnabled(){return deepSleepEnabled;}
 bool deviceSaveForSleep(){return persist();}
 void deviceSleepChanged(){bleSnapshotDirty=true;publish();if(bleAuthenticated)bleSendSnapshot(published);}

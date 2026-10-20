@@ -34,8 +34,10 @@ int main(){
     assert(!voice.captureWanted()); // Connected rest never starts the microphone.
     IdlePowerPolicy idle;idle.activity(100);
     assert(idle.update(1600,false,true,true)==IdlePowerPolicy::Action::None);
-    assert(idle.update(600100,false,true,true)==IdlePowerPolicy::Action::PowerOff);
-    assert(idle.update(600100,false,true,false)==IdlePowerPolicy::Action::None);
+    assert(idle.update(600100,false,true,true)==IdlePowerPolicy::Action::None);
+    assert(idle.deepSleepDue(idle.elapsed(600100)));
+    assert(idle.update(1200100,false,true,true)==IdlePowerPolicy::Action::PowerOff);
+    assert(idle.update(1200100,false,true,false)==IdlePowerPolicy::Action::None);
   }
   {
     // Briefly turning down does not sleep; a second placement gets a full hold.

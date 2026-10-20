@@ -28,11 +28,11 @@ import Foundation
                       let audio = job["audioSeconds"] as? Int, (0...3600).contains(audio),
                       let count = job["switchCount"] as? Int, (0...200).contains(count) else { continue }
                 try? FileManager.default.removeItem(atPath: request)
-                await run(model: model, path: log, seconds: audio, switches: count, accessCheck: job["bleAccessCheck"] as? Bool ?? false, offlineSwitch: job["offlineSwitch"] as? Bool ?? false, batteryCalibration: job["batteryCalibration"] as? String ?? "", deepSleepSetting: job["deepSleep"] as? Bool)
+                await run(model: model, path: log, seconds: audio, switches: count, accessCheck: job["bleAccessCheck"] as? Bool ?? false, offlineSwitch: job["offlineSwitch"] as? Bool ?? false, batteryCalibration: job["batteryCalibration"] as? String ?? "", checkSleepPolicy: job["checkSleepPolicy"] as? Bool ?? false)
             }
         }
     }
-    private static func run(model: DeviceModel, path: String, seconds: Int, switches: Int, accessCheck: Bool, offlineSwitch: Bool, batteryCalibration: String = "", deepSleepSetting: Bool? = nil) async {
+    private static func run(model: DeviceModel, path: String, seconds: Int, switches: Int, accessCheck: Bool, offlineSwitch: Bool, batteryCalibration: String = "", checkSleepPolicy: Bool = false) async {
         guard FileManager.default.createFile(atPath: path, contents: nil),
               let output = FileHandle(forWritingAtPath: path) else { return }
         defer { try? output.close() }
@@ -54,16 +54,13 @@ import Foundation
         }
         record("begin", ["audioSeconds": seconds, "switchCount": switches, "bleAccessCheck": accessCheck])
         guard await wait({ model.connected && !model.connecting && !model.switching }, timeout: 70) else { record("failed", ["reason": "initial_connection"]); return }
-        if let enabled = deepSleepSetting {
+        if checkSleepPolicy {
             guard seconds == 0, switches == 0, batteryCalibration.isEmpty,
-                  model.status?.deepSleepAvailable == true, model.status?.power?.source == 1 else {
-                record("failed", ["reason": "settings_check_requires_usb"]); return
+                  model.status?.deepSleepUnified == true, model.status?.deepSleepStaged == true,
+                  model.status?.deepSleep == true, model.status?.deepSleepAvailable == true else {
+                record("failed", ["reason": "unified_sleep_policy_unavailable"]); return
             }
-            model.setDeepSleep(enabled)
-            guard await wait({ !model.deepSleepSettingBusy && model.status?.deepSleep == enabled }, timeout: 5) else {
-                record("failed", ["reason": "sleep_setting_not_confirmed"]); return
-            }
-            record("sleep_setting_confirmed", ["enabled": enabled]); record("complete"); return
+            record("sleep_policy_confirmed", ["screenMinutes": 5, "deepSleepMinutes": 10, "powerOffMinutes": 20]); record("complete"); return
         }
         if !batteryCalibration.isEmpty {
             guard batteryCalibration == "arm" || batteryCalibration == "cancel", seconds == 0, switches == 0 else {

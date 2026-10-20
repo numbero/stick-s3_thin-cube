@@ -40,7 +40,7 @@ bool cancelTimer(Bus& bus){
   return ok;
 }
 bool inputSafe(uint32_t now){
-  return deviceDeepSleepEnabled()&&!otaActive()&&!provActive()&&!transportBusy()&&
+  return !otaActive()&&!provActive()&&!transportBusy()&&
     !devicePairWindow()&&!deviceStreaming()&&!soundPlaying()&&powerBatteryLevel(now)>=0&&
     !powerBatteryLow(now)&&powerConfirmAutoOff();
 }
@@ -117,13 +117,13 @@ bool deepSleepTick(uint32_t now,bool safe,bool connected){
     static uint32_t retriedAt=0;
     if(uint32_t(now-retriedAt)>=1000){Bus bus;timerReady=cancelTimer(bus);retriedAt=now;}
   }
-  if(uiIdleAgeMs(now)>=IdlePowerPolicy::DeepOffMs){
+  if(uiIdleAgeMs(now)>=IdlePowerPolicy::OffMs){
     // Give an overdue attempt back to the online off path without resetting
     // activity. In particular, do not start a fresh ten-minute timer at 20m.
     const bool wasPending=policy.pending;policy.cancel();pending=false;
     if(wasPending)deviceSleepChanged();return false;
   }
-  safe=safe&&available&&deviceDeepSleepEnabled()&&powerAutoOffAllowed(now)&&
+  safe=safe&&available&&powerAutoOffAllowed(now)&&
     powerBatteryLevel(now)>=0&&!powerBatteryLow(now);
   if(!policy.pending){
     if(!safe||!policy.ready(now)||!IdlePowerPolicy::deepSleepDue(uiIdleAgeMs(now)))return false;

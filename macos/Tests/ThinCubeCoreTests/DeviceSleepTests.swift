@@ -33,7 +33,7 @@ final class DeviceSleepTests: XCTestCase {
     }
     func testFastDeltaCarriesSleepAndCancellationWithinEpoch() throws {
         var snapshots = BLEStatusSnapshots()
-        _ = snapshots.accept(try JSONSerialization.data(withJSONObject: ["epoch": 8, "deepSleep": true, "deepSleepAvailable": true, "deepSleepStaged": true]))
+        _ = snapshots.accept(try JSONSerialization.data(withJSONObject: ["epoch": 8, "deepSleep": true, "deepSleepAvailable": true, "deepSleepStaged": true, "deepSleepUnified": true]))
         let live: [Any] = [8, 0, String(repeating: "00", count: 16), 0.0, "face_up", "sleeping", 0]
         for phase in ["preparing", "awake"] {
             let result = try XCTUnwrap(snapshots.accept(try JSONSerialization.data(withJSONObject: ["s": live, "edge": NSNull(), "sleep": ["id": 9, "phase": phase]])))
@@ -41,8 +41,24 @@ final class DeviceSleepTests: XCTestCase {
             XCTAssertEqual((value["sleep"] as? [String: Any])?["phase"] as? String, phase)
             XCTAssertEqual(value["deepSleep"] as? Bool, true)
             XCTAssertEqual(value["deepSleepStaged"] as? Bool, true)
+            XCTAssertEqual(value["deepSleepUnified"] as? Bool, true)
         }
         snapshots.reset()
         XCTAssertNil(snapshots.accept(try JSONSerialization.data(withJSONObject: ["s": live, "edge": NSNull(), "sleep": ["id": 9, "phase": "preparing"]])))
+    }
+    func testLegacySnapshotDoesNotInheritUnifiedPolicyFromPreviousBoot() throws {
+        var snapshots = BLEStatusSnapshots()
+        _ = snapshots.accept(try JSONSerialization.data(withJSONObject: ["epoch": 8, "deepSleep": true, "deepSleepStaged": true, "deepSleepUnified": true]))
+        // After changing firmware/epoch, the old optional policy must not be
+        // presented as automatic or enabled by a stale full snapshot.
+        let baseline = try XCTUnwrap(snapshots.accept(try JSONSerialization.data(withJSONObject: ["epoch": 9, "deepSleep": false, "deepSleepStaged": true])))
+        let legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: baseline) as? [String: Any])
+        XCTAssertNil(legacy["deepSleepUnified"])
+        XCTAssertEqual(legacy["deepSleep"] as? Bool, false)
+        let live: [Any] = [9, 0, String(repeating: "00", count: 16), 0.0, "face_up", "sleeping", 0]
+        let merged = try XCTUnwrap(snapshots.accept(try JSONSerialization.data(withJSONObject: ["s": live, "edge": NSNull(), "sleep": ["id": 10, "phase": "awake"]])))
+        let value = try XCTUnwrap(JSONSerialization.jsonObject(with: merged) as? [String: Any])
+        XCTAssertNil(value["deepSleepUnified"])
+        XCTAssertEqual(value["deepSleep"] as? Bool, false)
     }
 }

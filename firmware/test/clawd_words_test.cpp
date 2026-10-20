@@ -103,7 +103,9 @@ int main(){
     for(uint32_t now=0;now<30001;now+=100)p.update(now,g,Event::None,now);
     assert(petIdleSleepDue(30001,power.lastActivity,31,false,false,false));
     assert(power.update(300000,false,false,true)==IdlePowerPolicy::Action::Sleep);
-    assert(power.update(600000,false,true,true)==IdlePowerPolicy::Action::PowerOff);
+    assert(power.update(600000,false,true,true)==IdlePowerPolicy::Action::None);
+    assert(power.deepSleepDue(power.elapsed(600000)));
+    assert(power.update(1200000,false,true,true)==IdlePowerPolicy::Action::PowerOff);
   }
   {
     // Both complete lines retain sentence case, one amber ink and centered

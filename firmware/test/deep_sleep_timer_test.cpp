@@ -40,7 +40,7 @@ int main(){
     assert(idle.lastActivity==1000&&Timer::remainingSeconds(idle.elapsed(633000))==568);
     sleep.retryLater(1200999);
     assert(!sleep.ready(1201000));
-    assert(idle.update(1201000,false,true,true,true)==IdlePowerPolicy::Action::PowerOff);
+    assert(idle.update(1201000,false,true,true)==IdlePowerPolicy::Action::PowerOff);
     sleep.retryLater(0xfffffff0u);assert(!sleep.ready(24));assert(sleep.ready(29984));
   }
   assert(Timer::remainingSeconds(600000)==600);
@@ -105,8 +105,8 @@ int main(){
     Bus b;assert(Timer::arm(b,600000));b.pm[5]=0x20;
     const auto boot=Timer::consumeBoot(b);assert(!boot.expired&&boot.clean);
     IdlePowerPolicy idle;idle.activity(1000);
-    assert(idle.update(300999,false,false,true,true)==IdlePowerPolicy::Action::None);
-    assert(idle.update(301000,false,false,true,true)==IdlePowerPolicy::Action::Sleep);
+    assert(idle.update(300999,false,false,true)==IdlePowerPolicy::Action::None);
+    assert(idle.update(301000,false,false,true)==IdlePowerPolicy::Action::Sleep);
     assert(!idle.deepSleepDue(idle.elapsed(301000)));
     assert(Timer::arm(b,idle.elapsed(601350))&&b.seconds()==600);
   }

@@ -14,7 +14,7 @@ template<class Bus> struct DeepSleepTimer {
   struct Boot { bool expired=false,clean=false;uint8_t wake=0; };
 
   static uint32_t remainingSeconds(uint32_t idleMs){
-    return idleMs>=IdlePowerPolicy::DeepOffMs?0:(IdlePowerPolicy::DeepOffMs-idleMs+999)/1000;
+    return idleMs>=IdlePowerPolicy::OffMs?0:(IdlePowerPolicy::OffMs-idleMs+999)/1000;
   }
   static bool writeChecked(Bus& bus,uint8_t reg,uint8_t value){
     uint8_t read=0;
