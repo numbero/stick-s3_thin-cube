@@ -15,6 +15,12 @@ struct BLEPowerPolicy {
   uint16_t actual=0;
   uint32_t requestedAt=0,retryAt=0;
   void reset(){*this=BLEPowerPolicy{};}
+  void connected(uint16_t interval){
+    reset();
+    // Bluetooth LE interval is 6..3200 units of 1.25 ms. Never infer readiness
+    // from an unknown value, a prior link, or an unconfirmed fast request.
+    if(interval>=6&&interval<=3200)observed(interval,true);
+  }
   bool requestDue(uint32_t now,bool wantIdle){
     idle=wantIdle&&!idleDisabled;
     if(pending){

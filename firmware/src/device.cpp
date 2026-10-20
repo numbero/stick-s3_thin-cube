@@ -13,6 +13,7 @@
 #include "ui.h"
 #include "transport.h"
 #include "ble_link.h"
+#include "connection_timing.h"
 #include "power_status.h"
 #include "power_save.h"
 #include "power_save_policy.h"
@@ -401,6 +402,7 @@ void bleRequest(const char* text){
   const char* operation=op->valuestring;cJSON* result=cJSON_CreateObject();
   const char* error=nullptr;
   if(!strcmp(operation,"info")){
+    connectionTimingMark(ConnectionStage::Info);
     cJSON_AddStringToObject(result,"name",name);cJSON_AddStringToObject(result,"version",firmwareVersion());
     cJSON_AddNumberToObject(result,"protocol",1);cJSON_AddBoolToObject(result,"paired",key[0]);
     cJSON_AddStringToObject(result,"transport","ble");cJSON_AddBoolToObject(result,"transportSwitch",true);
@@ -408,6 +410,7 @@ void bleRequest(const char* text){
   }else if(!strcmp(operation,"pair_begin")){
     if(!beginPairing())error="pairing_not_open";else cJSON_AddNumberToObject(result,"expiresIn",120);
   }else if(!strcmp(operation,"challenge")){
+    connectionTimingMark(ConnectionStage::Challenge);
     hexRandom(challenge,16);challengeUntil=millis()+10000;cJSON_AddStringToObject(result,"nonce",challenge);
   }else if(!strcmp(operation,"pair")){
     auto p=cJSON_GetObjectItemCaseSensitive(j,"pin");char issued[33]{};
@@ -426,7 +429,7 @@ void bleRequest(const char* text){
     if(valid&&pairing.visible){xSemaphoreTake(publication,portMAX_DELAY);valid=commitCandidate();xSemaphoreGive(publication);}
     challenge[0]=0;memset(binaryKey,0,sizeof(binaryKey));memset(digest,0,sizeof(digest));
     if(!valid)error="pairing_required";
-    else{bleAuthenticated=true;Command c;strcpy(c.op,"connect");c.fd=-2;if(!enqueue(c)){bleAuthenticated=false;error="busy";}else cJSON_AddBoolToObject(result,"authenticated",true);}
+    else{bleAuthenticated=true;Command c;strcpy(c.op,"connect");c.fd=-2;if(!enqueue(c)){bleAuthenticated=false;error="busy";}else{connectionTimingMark(ConnectionStage::Authenticated);cJSON_AddBoolToObject(result,"authenticated",true);}}
   }else if(!bleAuthenticated)error="pairing_required";
   else if(!strcmp(operation,"status")){cJSON_Delete(result);result=cJSON_Parse(published);if(!result)result=cJSON_CreateObject();}
   else if(!strcmp(operation,"network_result")){networkResult(result);}
@@ -538,9 +541,10 @@ void deviceRegister(httpd_handle_t server) {
   };
   for(auto& route:routes)if(httpd_register_uri_handler(server,&route)!=ESP_OK)healthy=false;
   String host=String(name);host.toLowerCase();
-  if(MDNS.begin(host.c_str())){MDNS.setInstanceName(name);MDNS.addService("thincube","tcp",80);MDNS.addServiceTxt("thincube","tcp","protocol","1");}
+  if(MDNS.begin(host.c_str())){MDNS.setInstanceName(name);MDNS.addService("thincube","tcp",80);MDNS.addServiceTxt("thincube","tcp","protocol","1");connectionTimingMark(ConnectionStage::Bonjour);}
   else healthy=false;
   runtimeRegistered=healthy;
+  if(healthy)connectionTimingMark(ConnectionStage::Services);
 }
 bool deviceAuthorized(httpd_req_t* req) {
   char supplied[33]{};
@@ -640,6 +644,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     if(!strcmp(c.op,"connect")){
       if(owner!=c.fd)otaCloseControlConnection(owner);
       voice.setPeer(false,ms);controlLease.reset();owner=c.fd;outputIP=IPAddress(c.address);epoch=esp_random();resetKeyControl();
+      connectionTimingMark(ConnectionStage::Session);
       Serial.printf("[control] IPv4 audio peer %s\n",outputIP.toString().c_str());
     } else if(!strcmp(c.op,"tap")) {
       if(c.tapAction==TapAction::ResetCounters)imuTapReset(c.requestId);
@@ -657,6 +662,8 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     } else if(c.fd==owner&&c.epoch==epoch) {
       if(!strcmp(c.op,"heartbeat")){
         controlLease.heartbeat(ms);
+        connectionTimingMark(ConnectionStage::ControlReady);
+        if(c.ready&&(transportMode()!=TransportMode::BLE||(bleAudioReady()&&blePerformanceReady())))connectionTimingMark(ConnectionStage::AudioReady);
         if(transportMode()==TransportMode::BLE){voice.setPeer(c.ready&&bleAuthenticated&&bleAudioReady(),ms);}
         else if(c.port>=1024&&c.port<=65535){outputPort=c.port;voice.setPeer(c.ready,ms);}
         if(dualKeys!=(c.keyProtocol==2)){
@@ -762,9 +769,9 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     if(count==160){
       if(!bleBlock){memcpy(blePacket,"TCB3",4);memcpy(blePacket+4,packet+4,24);}
       ThinCubeIMA::encode160(pcm,blePacket+28+bleBlock*84,imaIndex);
-      if(++bleBlock==2){bleSendAudio(blePacket,sizeof(blePacket));bleBlock=0;}
+      if(++bleBlock==2){if(bleSendAudio(blePacket,sizeof(blePacket)))connectionTimingMark(ConnectionStage::FirstAudioQueued);bleBlock=0;}
     }
-    else{udp.beginPacket(outputIP,outputPort);udp.write(packet,sizeof(packet));udp.endPacket();}
+    else{udp.beginPacket(outputIP,outputPort);udp.write(packet,sizeof(packet));if(udp.endPacket())connectionTimingMark(ConnectionStage::FirstAudioQueued);}
   }
   static uint32_t lastPublish=0;
   static uint32_t lastTapPublish=0;
@@ -807,7 +814,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     }
   }
   static uint32_t lastBleSnapshot=0;
-  if(bleAuthenticated&&(bleSnapshotDirty||(!voice.streaming&&ms-lastBleSnapshot>=5000))){bleSendSnapshot(published);lastBleSnapshot=ms;bleSnapshotDirty=false;}
+  if(bleAuthenticated&&(bleSnapshotDirty||(!voice.streaming&&ms-lastBleSnapshot>=5000))){bleSendSnapshot(published);connectionTimingMark(ConnectionStage::SnapshotQueued);lastBleSnapshot=ms;bleSnapshotDirty=false;}
   if(!voice.streaming&&transportMode()==TransportMode::BLE)bleClearAudio();
 }
 bool deviceDeepSleepEnabled(){return deepSleepEnabled;}

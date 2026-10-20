@@ -10,6 +10,7 @@ import ThinCubeCore
     var onStatus: ((Data) -> Void)?, onAudio: ((Data) -> Void)?, onDisconnect: ((Error) -> Void)?
     var onOpeningProgress: ((String) -> Void)?
     var onAvailable: ((FoundDevice) -> Void)?
+    var onStage: ((ConnectionTimeline.Stage) -> Void)?
     private var manager: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var lastSeen: [String: Date] = [:]
@@ -87,7 +88,7 @@ import ThinCubeCore
               let found = peripherals[uuid] ?? manager.retrievePeripherals(withIdentifiers: [uuid]).first else { throw ClientError.transient("尚未发现 BLE 设备，请稍候或长按设备 B 切到 BLE。") }
         peripheral = found; found.delegate = self
         try await withCheckedThrowingContinuation { continuation in
-            opening = continuation; manager.connect(found, options: nil)
+            opening = continuation; onStage?(.connectRequested); manager.connect(found, options: nil)
             openTimeout = Task { [weak self] in
                 do { try await Task.sleep(nanoseconds: 12_000_000_000) } catch { return }
                 self?.fail(ClientError.transient("设备蓝牙暂不可达，正在等待设备。"), notify: false)
@@ -97,6 +98,7 @@ import ThinCubeCore
     func centralManager(_ central: CBCentralManager, didConnect peripheral: CBPeripheral) {
         trace("connected")
         guard peripheral == self.peripheral else { return }
+        onStage?(.channel)
         openTimeout?.cancel()
         onOpeningProgress?("正在建立加密蓝牙信道；若 macOS 弹出配对请求，请点击“配对”。已有配对通常自动完成。")
         openTimeout = Task { [weak self] in
@@ -116,6 +118,7 @@ import ThinCubeCore
         guard peripheral == self.peripheral else { return }
         if let error { fail(error, notify: false); return }
         guard let service = peripheral.services?.first(where: { $0.uuid == Self.service }) else { fail(ClientError.message("BLE 服务不兼容"), notify: false); return }
+        onStage?(.services)
         peripheral.discoverCharacteristics([controlID, audioID], for: service)
     }
     func peripheral(_ peripheral: CBPeripheral, didDiscoverCharacteristicsFor service: CBService, error: Error?) {
@@ -123,6 +126,7 @@ import ThinCubeCore
         if let error { fail(error, notify: false); return }
         control = service.characteristics?.first { $0.uuid == controlID }; audio = service.characteristics?.first { $0.uuid == audioID }
         guard let control, let audio else { fail(ClientError.message("BLE 特征不完整"), notify: false); return }
+        onStage?(.characteristics)
         peripheral.setNotifyValue(true, for: control); peripheral.setNotifyValue(true, for: audio)
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
@@ -145,6 +149,7 @@ import ThinCubeCore
             fail(error, notify: false); return
         }
         subscriptionRetries.removeValue(forKey: characteristic.uuid)?.cancel()
+        if characteristic.isNotifying { onStage?(characteristic.uuid == controlID ? .controlSubscribed : .audioSubscribed) }
         trace("subscribe \(characteristic.uuid == controlID ? "control" : "audio") enabled=\(characteristic.isNotifying)")
         if control?.isNotifying == true && audio?.isNotifying == true {
             openTimeout?.cancel(); openTimeout = nil; opening?.resume(); opening = nil

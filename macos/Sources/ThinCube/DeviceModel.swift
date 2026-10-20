@@ -144,6 +144,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     let keys = KeyInjector()
     let keyDiagnostics = KeyDiagnostics()
     private let powerDiagnostics = PowerDiagnostics()
+    private let connectionDiagnostics = ConnectionDiagnostics()
+    private let audioPreparation = AudioPreparation()
     let discovery = Discovery()
     private var keyStream = DeviceKeyStream()
     private var gestureStream = DeviceGestureStream()
@@ -165,6 +167,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private var soundUpdateTask: Task<Void, Never>?
     private var pendingCalibration: (op: String, seq: UInt32, deadline: Date)?
     private var recovery = ConnectionRecovery(enabled: false)
+    private var automaticFallback = AutomaticConnectionFallback()
+    private var attemptIsAutomatic = true
     private var target = ConnectionTarget(host: "", deviceID: nil)
     private var reconnectTask: Task<Void, Never>?, connectionTask: Task<Void, Never>?
     private var discoveryObserver: AnyCancellable?
@@ -218,16 +222,20 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         })
         preferredTransport = host.hasPrefix("ble://") ? "ble" : "wifi"
         discovery.ble.onStatus = { [weak self] data in
-            guard let self, self.activeBLE else { return }; _ = self.receive(data)
+            guard let self, self.activeBLE, self.connected else { return }; _ = self.receive(data)
         }
         discovery.ble.onAudio = { [weak self] data in
             guard let self, self.activeBLE, self.connected, !self.stopLocally, !self.switching,
                   let status = self.status, status.streaming, !status.muted, status.allowed,
                   let cookie = Data(hex: status.session) else { return }
-            for frame in self.bleAudio.decodeFrames(data, session: cookie) { self.buffer.accept(frame) }
+            for frame in self.bleAudio.decodeFrames(data, session: cookie) { self.buffer.accept(frame); self.connectionDiagnostics.mark(.firstAudio, attempt: self.generation) }
         }
         discovery.ble.onDisconnect = { [weak self] reason in
             guard let self, self.activeBLE else { return }; self.connectionFailed(reason)
+        }
+        discovery.ble.onStage = { [weak self] stage in
+            guard let self, self.activeBLE, self.connecting else { return }
+            self.connectionDiagnostics.mark(stage, attempt: self.generation)
         }
         discovery.ble.onOpeningProgress = { [weak self] hint in
             guard let self, self.activeBLE, self.connecting else { return }; self.note = hint
@@ -253,6 +261,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         let stats = buffer.statistics()
         return ["connected": connected, "connecting": connecting, "switching": switching,
                 "connectionStage": connectionProgress.stage.rawValue, "pairingRequired": pairingRequired,
+                "connectionTiming": connectionDiagnostics.snapshot, "connectionLog": connectionDiagnostics.fileURL.path,
                 "transport": currentTransport, "phase": status?.transportTransaction?.phase ?? "",
                 "requestId": status?.transportTransaction?.requestId ?? "", "audioPrepared": audioPrepared,
                 "streaming": status?.streaming ?? false, "muted": status?.muted ?? false,
@@ -303,7 +312,11 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             value["op"] = operation
             return try await discovery.ble.exchange(value)
         }
-        let (data, response) = try await session.data(for: request(path, body: body, authenticated: authenticated))
+        let attempt = generation
+        let metrics = ConnectionRequestMetrics(attempt: attempt, endpoint: path) { [weak self] record in
+            Task { @MainActor in self?.connectionDiagnostics.http(record) }
+        }
+        let (data, response) = try await session.data(for: request(path, body: body, authenticated: authenticated), delegate: metrics)
         let value = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] ?? [:]
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
             throw ClientError.http((response as? HTTPURLResponse)?.statusCode ?? 0,
@@ -359,7 +372,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             note = "尚未发现此设备的" + connectionMode.label + "连接。请在设备上选择对应模式，或使用自动模式。"; return
         }
         if connectionMode != .wifi || pathSatisfied { recovery.resume(.network) }
-        recovery.request(); UserDefaults.standard.set(true, forKey: "autoReconnect")
+        recovery.request(); automaticFallback.reset(); UserDefaults.standard.set(true, forKey: "autoReconnect")
         guard recovery.canAttempt else { note = "等待网络或 Mac 会话恢复后自动连接。"; return }
         await beginConnection(automatic: false)?.value
     }
@@ -368,9 +381,11 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         refreshRecoveryAddress()
         guard !target.host.isEmpty, transportIntent != nil || connectionMode.accepts(host: target.host) else { return nil }
         teardown(note: automatic ? "正在自动恢复连接…" : "正在连接…")
-        host = target.host; connecting = true; stopLocally = true
+        host = target.host; connecting = true; stopLocally = true; attemptIsAutomatic = automatic
         let attempt = generation, selected = target
         connectionProgress.begin(attempt)
+        connectionDiagnostics.begin(attempt: attempt, transport: selected.host.hasPrefix("ble://") ? "ble" : "wifi")
+        if discovery.devices.contains(where: { $0.host == selected.host }) { connectionDiagnostics.mark(.discovered, attempt: attempt) }
         let task = Task<Void, Never> { [weak self] in
             guard let self else { return }
             await self.performConnection(automatic: automatic, target: selected, attempt: attempt)
@@ -386,9 +401,13 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         do {
             activeBLE = selected.host.hasPrefix("ble://")
+            stopLocally = true; epoch = 0; ack = 0; keyStream = DeviceKeyStream(); gestureStream = DeviceGestureStream()
+            lastStatus = Date(); lastHeartbeat = .distantPast
+            prepareAudioInBackground(attempt: attempt)
             if activeBLE { base = nil; note = "正在连接蓝牙…"; try await discovery.ble.open(selected.host) }
             else { base = try makeBase(selected.host) }
             let info = try await json("api/info", authenticated: false)
+            connectionDiagnostics.mark(.info, attempt: attempt)
             guard generation == attempt, !Task.isCancelled else { return }
             guard info["protocol"] as? Int == 1, let found = info["name"] as? String, found.hasPrefix("ThinCube-") else { throw ClientError.message("设备协议不兼容，请先安装 ThinCube v0.3 固件。") }
             guard selected.accepts(found) else { throw ClientError.message("此地址上的设备与所选设备不同，请重新选择设备并点击连接。") }
@@ -397,6 +416,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             target.deviceID = found
             connectionProgress.advance(.authorization, attempt: attempt)
             loadShortcut()
+            connectionDiagnostics.mark(.credentialStarted, attempt: attempt)
             var secret: String
             do {
                 if info["paired"] as? Bool == false { throw CredentialError.missing }
@@ -409,31 +429,27 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 secret = try await authorizeDevice(found: found, attempt: attempt)
             }
             guard generation == attempt, !Task.isCancelled else { return }
-            // Every BLE connection uses a fresh nonce; the key is never sent as the authentication proof.
-            do { try await authenticate(secret: secret, found: found) }
+            connectionDiagnostics.mark(.credential, attempt: attempt)
+            // The handshake returns the first valid baseline; it is not thrown away and fetched again.
+            var initialStatus: [String: Any]?
+            do { initialStatus = try await authenticate(secret: secret, found: found, attempt: attempt) }
             catch ClientError.http(let code, _) where code == 401 || code == 403 {
+                guard generation == attempt, !Task.isCancelled else { return }
                 cachedCredential = nil
                 if PairingRecovery.pauseAutomaticConnection(automatic: automatic, paired: info["paired"] as? Bool == true, windowOpen: info["pairingOpen"] as? Bool == true) {
                     throw ClientError.message("设备正在重新配对，已暂停自动连接以便其他上位机连接。需要继续使用本机时，请在设备上取消重新配对，再点击连接。")
                 }
                 secret = try await authorizeDevice(found: found, attempt: attempt)
-                try await authenticate(secret: secret, found: found)
+                initialStatus = try await authenticate(secret: secret, found: found, attempt: attempt)
             }
             guard generation == attempt, !Task.isCancelled else { return }
             cachedCredential = (found, secret)
             connectionProgress.advance(.session, attempt: attempt)
-            do { try prepareAudioNow() } catch { note = error.localizedDescription }
             if activeBLE {
-                stopLocally = true; epoch = 0; ack = 0; keyStream = DeviceKeyStream(); gestureStream = DeviceGestureStream(); lastStatus = Date(); lastHeartbeat = .distantPast
-                // A status request follows the queued auth command, giving the main loop time to publish its new epoch.
-                var validStatus = false
-                for _ in 0..<10 {
-                    let snapshot = try await discovery.ble.exchange(["op": "status"])
-                    let data = try JSONSerialization.data(withJSONObject: snapshot)
-                    if receive(data), epoch != 0 { validStatus = true; break }
-                    try await Task.sleep(nanoseconds: 100_000_000)
+                guard let initialStatus,
+                      receive(try JSONSerialization.data(withJSONObject: initialStatus)), epoch != 0 else {
+                    throw ClientError.transient("BLE 未返回有效设备状态")
                 }
-                guard validStatus else { throw ClientError.transient("BLE 未返回有效设备状态") }
                 didConnect(found: found, address: selected.host, automatic: automatic)
                 startTimer(); return
             }
@@ -453,6 +469,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                         switch message { case .data(let bytes): data = bytes; case .string(let text): data = Data(text.utf8); @unknown default: continue }
                         guard let self, self.generation == id else { return }
                         if self.receive(data), !self.connected {
+                            self.connectionDiagnostics.mark(.status, attempt: id)
                             self.didConnect(found: found, address: selected.host, automatic: automatic)
                         }
                     } catch {
@@ -469,16 +486,24 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             connectionFailed(error)
         }
     }
-    private func authenticate(secret: String, found: String) async throws {
+    private func authenticate(secret: String, found: String, attempt: UUID) async throws -> [String: Any]? {
         key = secret
         if activeBLE {
-            let challenge = try await discovery.ble.exchange(["op": "challenge"])
-            guard let nonce = challenge["nonce"] as? String, let binaryKey = Data(hex: secret) else { throw ClientError.message("BLE 认证挑战无效") }
-            let message = Data("ThinCube-BLE-v1|\(found)|\(nonce)".utf8)
-            let proof = HMAC<SHA256>.authenticationCode(for: message, using: SymmetricKey(data: binaryKey)).map { String(format: "%02x", $0) }.joined()
-            _ = try await discovery.ble.exchange(["op": "auth", "proof": proof])
+            do {
+                return try await BLESessionHandshake.establish(device: found, secret: secret, exchange: { request in
+                    guard self.generation == attempt else { throw CancellationError() }
+                    return try await self.discovery.ble.exchange(request)
+                }, valid: { snapshot in
+                    guard let data = try? JSONSerialization.data(withJSONObject: snapshot),
+                          let status = try? JSONDecoder().decode(DeviceStatus.self, from: data) else { return false }
+                    return status.epoch != 0 && (status.deviceId == nil || status.deviceId == found)
+                }, stage: { self.connectionDiagnostics.mark($0, attempt: attempt) })
+            } catch BLESessionHandshake.Failure.invalidChallenge { throw ClientError.message("BLE 认证挑战无效") }
+            catch BLESessionHandshake.Failure.invalidStatus { throw ClientError.transient("BLE 未返回有效设备状态") }
         }
         _ = try await json("api/status")
+        connectionDiagnostics.mark(.authenticated, attempt: attempt)
+        return nil
     }
     private func authorizeDevice(found: String, attempt: UUID) async throws -> String {
         if pairingV2 {
@@ -491,6 +516,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         while generation == attempt, !Task.isCancelled {
             pin = ""; connectionProgress.advance(.pairing, attempt: attempt); note = hint
             if pairingSession == nil { pairingSession = PairingSession(id: attempt, deviceName: found, transport: transportLabel) }
+            connectionDiagnostics.mark(.pairingRequired, attempt: attempt)
             let code = try await withCheckedThrowingContinuation { pairingContinuation = $0 }
             guard generation == attempt, !Task.isCancelled else { throw CancellationError() }
             note = "正在验证配对码…"
@@ -512,6 +538,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     func submitPairingCode() {
         guard canSubmitPairingCode, let continuation = pairingContinuation else { return }
         pairingContinuation = nil; pairingError = ""
+        connectionDiagnostics.mark(.pairingSubmitted, attempt: generation)
         connectionProgress.advance(.verifying, attempt: generation)
         let code = pin; pin = ""; continuation.resume(returning: code)
     }
@@ -522,13 +549,14 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private func didConnect(found: String, address: String, automatic: Bool) {
         guard connectionProgress.advance(.connected, attempt: generation) else { return }
         pairingSession = nil; pairingError = ""; pin = ""
-        connected = true; connecting = false; recovery.didConnect()
+        connected = true; connecting = false; recovery.didConnect(); automaticFallback.reset()
+        connectionDiagnostics.mark(.controlReady, attempt: generation)
         target = ConnectionTarget(host: address, deviceID: found); host = address
         preferredTransport = activeBLE ? "ble" : "wifi"
         UserDefaults.standard.set(address, forKey: "lastHost")
         UserDefaults.standard.set(address, forKey: (activeBLE ? "bleHost." : "wifiHost.") + found)
         UserDefaults.standard.set(found, forKey: "lastDeviceName"); UserDefaults.standard.set(true, forKey: "autoReconnect")
-        note = audioPrepared ? "已连接，语音待命。" : "已连接；请安装 BlackHole 2ch 后准备音频。"
+        note = audioPrepared ? "已连接，语音待命。" : (audioPreparation.busy ? "控制已连接，正在准备音频…" : "已连接；请安装 BlackHole 2ch 后准备音频。")
         if activeBLE && status?.transportAudioReady == false { note = "BLE 控制已连接，但当前链路 MTU 不足以传输语音。请尝试重新连接或切回 Wi-Fi。" }
         keyDiagnostics.record("连接", "\(automatic ? "自动恢复" : "连接")成功：\(found) · \(transportLabel)")
         // A physical B press can change the mode again while the host is
@@ -784,7 +812,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         Task { [weak self] in
             defer { if self?.generation == id { self?.sendingHeartbeat = false } }
             guard let self, self.generation == id else { return }
-            do { try await self.sendControl(payload) }
+            do { try await self.sendControl(payload); self.connectionDiagnostics.mark(.heartbeatSent, attempt: id) }
             catch { if self.generation == id { self.connectionLost(note: "控制连接中断，已释放快捷键。") } }
         }
     }
@@ -872,13 +900,40 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             if !Task.isCancelled, self.generation == connectionID { self.note = "设备未确认指示灯调试设置，请稍后重试。" }
         }
     }
-    private func prepareAudioNow() throws {
-        try bridge.start()
-        do { if !activeBLE { try receiver.start(buffer: buffer) }; audioPrepared = true }
-        catch { bridge.stop(); audioPrepared = false; throw error }
+    private func prepareAudioInBackground(attempt: UUID) {
+        guard !audioPreparation.busy else { return }
+        let bridge = bridge, useBLE = activeBLE
+        connectionDiagnostics.mark(.audioStarted, attempt: attempt)
+        audioPreparation.start(prepare: { try await bridge.start() }, ready: { [weak self] in
+            guard let self, self.generation == attempt else { return }
+            do {
+                if !useBLE {
+                    try self.receiver.start(buffer: self.buffer) { [weak self] in
+                        Task { @MainActor in self?.connectionDiagnostics.mark(.firstAudio, attempt: attempt) }
+                    }
+                }
+            } catch { bridge.stop(); self.audioPrepared = false; self.note = error.localizedDescription; return }
+            self.audioPrepared = true
+            self.connectionDiagnostics.mark(.audioReady, attempt: attempt)
+            self.lastHeartbeat = .distantPast
+            if self.connected, !self.switching, !self.updating,
+               self.note == "控制已连接，正在准备音频…" { self.note = "已连接，语音待命。" }
+        }, failed: { [weak self] error in
+            guard let self, self.generation == attempt else { return }
+            bridge.stop(); self.audioPrepared = false; self.note = error.localizedDescription
+        })
     }
-    func prepareAudio() { do { try prepareAudioNow(); note = "BlackHole 2ch 已准备，采样率 48 kHz。" } catch { audioPrepared = false; note = error.localizedDescription } }
-    func selectSystemInput() { do { try bridge.selectSystemInput(); note = "系统输入已设为 BlackHole 2ch。也可在目标应用中单独选择它。" } catch { note = error.localizedDescription } }
+    func prepareAudio() { prepareAudioInBackground(attempt: generation) }
+    func selectSystemInput() {
+        let attempt = generation
+        Task {
+            do {
+                try await bridge.selectSystemInput()
+                guard generation == attempt else { return }
+                note = "系统输入已设为 BlackHole 2ch。也可在目标应用中单独选择它。"
+            } catch { if generation == attempt { note = error.localizedDescription } }
+        }
+    }
     func setTapTuning(_ tuning: Bool) {
         tapTuning = tuning
         tapBlockedUntil = ProcessInfo.processInfo.systemUptime + 0.75
@@ -1005,6 +1060,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         scheduleRecovery()
     }
     private func connectionFailed(_ error: Error) {
+        connectionDiagnostics.mark(.failed, attempt: generation)
         let permanent: Bool
         switch error {
         case is CredentialError: permanent = true
@@ -1014,7 +1070,12 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         if permanent && !switching { recovery.requireUserAction(); cachedCredential = nil }
         if permanent { sleepTracker.reset(); deviceSleeping = false }
-        if !switching && !permanent && !sleepTracker.sleeping && connectionMode == .automatic { preferredTransport = preferredTransport == "ble" ? "wifi" : "ble" }
+        if !switching && !permanent && !sleepTracker.sleeping && connectionMode == .automatic {
+            if transportIntent == nil, networkIntent == nil {
+                automaticFallback.wifiFailed(target: target, now: ProcessInfo.processInfo.systemUptime)
+            }
+            preferredTransport = preferredTransport == "ble" ? "wifi" : "ble"
+        }
         connectionLost(note: error.localizedDescription + (permanent ? " 请处理后点击“连接”重试。" : ""))
     }
     private func suspendRecovery(_ reason: ConnectionRecovery.Suspension, note message: String) {
@@ -1040,7 +1101,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         } else if transportIntent != nil && connectionMode != .automatic { resolvingMode = ConnectionMode(rawValue: preferredTransport) ?? .automatic }
         else { resolvingMode = connectionMode }
         guard let id = target.deviceID else { return }
-        let endpoints = discovery.devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) }
+        let endpoints = recoveryEndpoints(discovery.devices, mode: resolvingMode)
         if let match = resolvingMode.endpoint(for: id, in: endpoints, preferredTransport: preferredTransport,
                                              wifiAvailable: pathSatisfied, bluetoothAvailable: discovery.ble.permissionHint == nil) {
             target.host = match.host; host = match.host
@@ -1063,9 +1124,33 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         return transportIntent == nil || connectionMode == .automatic ? connectionMode : (ConnectionMode(rawValue: preferredTransport) ?? .automatic)
     }
+    private func canUseRecoveryEndpoint(_ endpoint: ConnectionEndpoint, mode: ConnectionMode) -> Bool {
+        mode != .automatic || transportIntent != nil || networkIntent != nil ||
+            automaticFallback.accepts(endpoint, now: ProcessInfo.processInfo.systemUptime)
+    }
+    private func recoveryEndpoints(_ devices: [FoundDevice], mode: ConnectionMode) -> [ConnectionEndpoint] {
+        devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) }
+            .filter { canUseRecoveryEndpoint($0, mode: mode) }
+    }
     private func deviceAvailable(_ device: FoundDevice) {
+        if device.id == target.deviceID { connectionDiagnostics.mark(.discovered, attempt: generation) }
+        if connecting, recovery.canAttempt, !switching, !updating,
+           transportIntent == nil, networkIntent == nil, discovery.ble.permissionHint == nil,
+           connectionProgress.attempt == generation,
+           automaticFallback.redirect(mode: connectionMode, target: target,
+                                      advertised: ConnectionEndpoint(deviceID: device.id, host: device.host),
+                                      stage: connectionProgress.stage, now: ProcessInfo.processInfo.systemUptime) {
+            connectionDiagnostics.mark(.redirected, attempt: generation)
+            // Invalidate and cancel the old HTTP task before opening BLE. Its
+            // late response/error cannot change the new attempt or show pairing.
+            teardown(note: "已发现设备蓝牙，正在连接…")
+            target.host = device.host; host = device.host; preferredTransport = "ble"
+            beginConnection(automatic: attemptIsAutomatic)
+            return
+        }
         guard !connected, !connecting, !updating, reconnectTask != nil,
               device.id == target.deviceID, recoveryMode(for: discovery.devices).accepts(host: device.host),
+              canUseRecoveryEndpoint(ConnectionEndpoint(deviceID: device.id, host: device.host), mode: recoveryMode(for: discovery.devices)),
               device.host.hasPrefix("ble://") ? discovery.ble.permissionHint == nil : pathSatisfied,
               recovery.deviceAvailable(now: ProcessInfo.processInfo.systemUptime) else { return }
         target.host = device.host; host = device.host
@@ -1078,7 +1163,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         // the delivered snapshot so switching devices can wake recovery immediately.
         guard let id = target.deviceID else { return }
         let mode = recoveryMode(for: devices)
-        guard let match = mode.endpoint(for: id, in: devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) },
+        guard let match = mode.endpoint(for: id, in: recoveryEndpoints(devices, mode: mode),
                                        preferredTransport: preferredTransport, wifiAvailable: pathSatisfied,
                                        bluetoothAvailable: discovery.ble.permissionHint == nil), target.host != match.host else { return }
         target.host = match.host; host = match.host; preferredTransport = match.host.hasPrefix("ble://") ? "ble" : "wifi"
@@ -1106,6 +1191,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
     }
     private func teardown(note message: String) {
+        connectionDiagnostics.mark(.cancelled, attempt: generation)
+        audioPreparation.cancel()
         deepSleepSettingTask?.cancel(); deepSleepSettingTask = nil; deepSleepSettingBusy = false
         powerLedSettingTask?.cancel(); powerLedSettingTask = nil; powerLedSettingBusy = false
         sleepAckInFlight = false

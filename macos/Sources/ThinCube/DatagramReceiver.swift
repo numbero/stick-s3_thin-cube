@@ -6,7 +6,7 @@ final class DatagramReceiver {
     private var source: DispatchSourceRead?
     private let queue = DispatchQueue(label: "ThinCube.audio.network", qos: .userInteractive)
     private(set) var port: UInt16 = 0
-    func start(buffer: JitterBuffer) throws {
+    func start(buffer: JitterBuffer, firstPacket: @escaping @Sendable () -> Void = {}) throws {
         stop()
         let fd = socket(AF_INET, SOCK_DGRAM, 0)
         guard fd >= 0 else { throw ClientError.message("无法创建音频接收端口") }
@@ -18,12 +18,19 @@ final class DatagramReceiver {
         port = UInt16(bigEndian: addr.sin_port)
         _ = fcntl(fd, F_SETFL, O_NONBLOCK)
         let source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: queue)
+        let initialFrames = buffer.statistics().receivedFrames
+        var reportedFirstPacket = false
         source.setEventHandler {
             var bytes = [UInt8](repeating: 0, count: 2048)
             while true {
                 let count = recv(fd, &bytes, bytes.count, 0)
                 if count <= 0 { break }
-                if count == 988 { buffer.accept(Data(bytes.prefix(count))) }
+                if count == 988 {
+                    buffer.accept(Data(bytes.prefix(count)))
+                    if !reportedFirstPacket, buffer.statistics().receivedFrames > initialFrames {
+                        reportedFirstPacket = true; firstPacket()
+                    }
+                }
             }
         }
         source.setCancelHandler { close(fd) }

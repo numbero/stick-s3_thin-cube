@@ -2,7 +2,22 @@
 #include "../src/voice_state.h"
 #include <assert.h>
 #include <stdio.h>
+#include <initializer_list>
 int main(){
+  {
+    BLEPowerPolicy p;
+    for(uint16_t interval:{uint16_t(12),uint16_t(24)}){
+      p.connected(interval);assert(p.audioReady());assert(!p.requestDue(0,false));
+    }
+    p.connected(72);assert(!p.audioReady());assert(p.requestDue(0,false));
+    p.requested(0,true);assert(!p.audioReady());p.observed(24,true);assert(p.audioReady());
+    for(uint16_t invalid:{uint16_t(0),uint16_t(5),uint16_t(3201),uint16_t(65535)}){
+      p.connected(invalid);assert(p.actual==0&&!p.audioReady());assert(p.requestDue(0,false));
+    }
+    p.connected(24);p.requestDue(100,true);p.requested(100,true);p.observed(72,true);
+    assert(!p.audioReady());p.requestDue(200,false);p.requested(200,true);assert(!p.audioReady());
+    p.observed(24,true);assert(p.audioReady());p.connected(0);assert(!p.audioReady());
+  }
   {
     BLEPowerPolicy p;assert(!p.audioReady());assert(p.requestDue(0,false));p.requested(0,true);
     p.observed(18,true);assert(p.audioReady());assert(!p.requestDue(100,false));

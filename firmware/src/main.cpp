@@ -9,6 +9,7 @@
 #include "motion.h"
 #include "imu_service.h"
 #include "wifi_prov.h"
+#include "connection_timing.h"
 #include "ota.h"
 #include "device.h"
 #include "audio_input.h"
@@ -76,6 +77,7 @@ bool recoverPeripheralBus(){
   return digitalRead(sda)&&digitalRead(scl);
 }
 void setup(){
+  connectionBootStart();
   const bool busRecovered=recoverPeripheralBus();
   auto cfg = M5.config();
   // No Grove/IR/EXT_5V load: the pinned M5Unified defaults this boost on.
@@ -86,9 +88,11 @@ void setup(){
   cfg.external_imu=false;
 #endif
   M5.begin(cfg);
+  connectionBootMark(ConnectionStage::Peripherals);
   devicePowerLedBegin();
   if(!M5.Display.width()){delay(100);M5.Display.init();}
   Serial.begin(115200);
+  connectionTimingObserveWiFi();
   delay(200);
   Serial.printf("[boot] peripheral bus recovered %d board %u LCD %dx%d\n",busRecovered,unsigned(M5.getBoard()),M5.Display.width(),M5.Display.height());
   Serial.printf("[power] ext5v_out %d\n",M5.Power.getExtOutput());
@@ -100,6 +104,7 @@ void setup(){
 
   /* IMU 显式启用一次，并在串口报告状态（不启用则姿态输入整条链路都不工作） */
   const bool imuOK=imuBegin();
+  connectionBootMark(ConnectionStage::Motion);
   Serial.printf("imu       : %s\n", imuOK ? "enabled" : "NOT AVAILABLE");
 
   reportBootInfo();
@@ -111,6 +116,7 @@ void setup(){
   const bool bootFactoryReset=M5.BtnB.isPressed();
   if(!bootFactoryReset&&!connectionSetupResetPending())provPrepareChange();
   deviceBegin();
+  connectionBootMark(ConnectionStage::Device);
   connectionSetupBegin(bootFactoryReset);
   M5.Display.setBrightness(deviceBrightness());
   motionBegin();
@@ -128,10 +134,12 @@ void setup(){
   } else if(provResumeChange()){
     uiLog("validating network");
   } else if (transportMode()==TransportMode::BLE){
+    connectionBootMark(ConnectionStage::Radio);
     if(!bleBegin(deviceName()))uiLog("BLE init failed");
   } else if (!haveCreds){
     provBegin();
   } else {
+    connectionBootMark(ConnectionStage::Radio);
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, pass);
     Serial.printf("[wifi] joining %s\n", ssid);
@@ -141,6 +149,7 @@ void setup(){
 }
 
 void loop(){
+  connectionTimingFlush();
   M5.update();
   const uint32_t ms = millis();
   powerTick(ms);

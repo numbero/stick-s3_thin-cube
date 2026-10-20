@@ -3,14 +3,26 @@ import AudioToolbox
 import CoreAudio
 import ThinCubeCore
 
-final class AudioBridge {
+final class AudioBridge: @unchecked Sendable {
     let buffer: JitterBuffer
+    // All Core Audio lifecycle operations share this queue, including stop.
+    // Cancelling an old preparation cannot race a new start or change the UI.
+    private let queue = DispatchQueue(label: "ThinCube.audio.lifecycle", qos: .userInitiated)
     private var unit: AudioUnit?
-    private(set) var device = AudioDeviceID(0)
+    private var device = AudioDeviceID(0)
     init(buffer: JitterBuffer) { self.buffer = buffer }
     private func check(_ status: OSStatus) throws { if status != noErr { throw ClientError.message("音频设备错误：\(status)") } }
-    func start() throws {
-        stop()
+    @MainActor func start() async throws {
+        try Task.checkCancellation()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do { try self.startNow(); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+    private func startNow() throws {
+        stopNow()
         var property = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDevices, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         var size: UInt32 = 0
         try check(AudioObjectGetPropertyDataSize(AudioObjectID(kAudioObjectSystemObject), &property, 0, nil, &size))
@@ -53,16 +65,28 @@ final class AudioBridge {
             }, inputProcRefCon: Unmanaged.passUnretained(self).toOpaque())
             try check(AudioUnitSetProperty(audioUnit, kAudioUnitProperty_SetRenderCallback, kAudioUnitScope_Input, 0, &callback, UInt32(MemoryLayout.size(ofValue: callback))))
             try check(AudioUnitInitialize(audioUnit)); try check(AudioOutputUnitStart(audioUnit))
-        } catch { stop(); throw error }
+        } catch { stopNow(); throw error }
     }
-    func selectSystemInput() throws {
+    @MainActor func selectSystemInput() async throws {
+        try Task.checkCancellation()
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            queue.async {
+                do { try self.selectSystemInputNow(); continuation.resume() }
+                catch { continuation.resume(throwing: error) }
+            }
+        }
+    }
+    private func selectSystemInputNow() throws {
         guard device != 0 else { throw ClientError.message("请先准备音频") }
         var p = AudioObjectPropertyAddress(mSelector: kAudioHardwarePropertyDefaultInputDevice, mScope: kAudioObjectPropertyScopeGlobal, mElement: kAudioObjectPropertyElementMain)
         try check(AudioObjectSetPropertyData(AudioObjectID(kAudioObjectSystemObject), &p, 0, nil, 4, &device))
     }
-    func stop() {
+    @MainActor func stop() {
+        queue.async { self.stopNow() }
+    }
+    private func stopNow() {
         if let unit { AudioOutputUnitStop(unit); AudioUnitUninitialize(unit); AudioComponentInstanceDispose(unit) }
         unit = nil; device = 0; buffer.setSession(nil)
     }
-    deinit { stop() }
+    deinit { stopNow() }
 }

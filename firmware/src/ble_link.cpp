@@ -1,6 +1,7 @@
 #include "ble_link.h"
 #include "ble_framing.h"
 #include "power_save_policy.h"
+#include "connection_timing.h"
 #include <Arduino.h>
 #include <esp_bt.h>
 #include <esp_bt_main.h>
@@ -53,6 +54,8 @@ esp_ble_adv_params_t params={.adv_int_min=0x30,.adv_int_max=0x60,.adv_type=ADV_T
 void advertise(){if(advReady&&scanReady&&!linked)esp_ble_gap_start_advertising(&params);}
 void gap(esp_gap_ble_cb_event_t event,esp_ble_gap_cb_param_t* p){
   switch(event){
+    case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
+      if(p->adv_start_cmpl.status==ESP_BT_STATUS_SUCCESS)connectionBootMark(ConnectionStage::Advertising);break;
     case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:advReady=p->adv_data_cmpl.status==ESP_BT_STATUS_SUCCESS;advertise();break;
     case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:scanReady=p->scan_rsp_data_cmpl.status==ESP_BT_STATUS_SUCCESS;advertise();break;
     // Secure Connections with no input/output encrypts the link without a
@@ -71,6 +74,7 @@ void gap(esp_gap_ble_cb_event_t event,esp_ble_gap_cb_param_t* p){
         secured=p->ble_security.auth_cmpl.success&&(p->ble_security.auth_cmpl.auth_mode&ESP_LE_AUTH_REQ_SC_ONLY);
         Serial.printf("[ble] automatic encryption success %d accepted %d mode 0x%02x reason 0x%02x\n",p->ble_security.auth_cmpl.success,secured.load(),p->ble_security.auth_cmpl.auth_mode,p->ble_security.auth_cmpl.fail_reason);
         if(secured){
+          connectionTimingMark(ConnectionStage::Secured);
           esp_ble_gap_set_pkt_data_len(remote,251);
           const auto phyResult=esp_ble_gap_set_prefered_phy(remote,0,ESP_BLE_GAP_PHY_2M_PREF_MASK,ESP_BLE_GAP_PHY_2M_PREF_MASK,0);
           Serial.printf("[ble] preferred 2M request result %d\n",int(phyResult));
@@ -91,15 +95,20 @@ void gatts(esp_gatts_cb_event_t event,esp_gatt_if_t iface,esp_ble_gatts_cb_param
     case ESP_GATTS_CONNECT_EVT:{
       if(linked){esp_ble_gap_disconnect(p->connect.remote_bda);break;}
       memcpy(remote,p->connect.remote_bda,6);connection=p->connect.conn_id;linked=true;secured=false;congested=false;
-      controlSubscribed=audioSubscribed=false;mtu=23;generation.fetch_add(1);
+      controlSubscribed=audioSubscribed=false;mtu=23;
       notifyPending=0;
-      intervalObservation=0;intervalRevision.fetch_add(1);
+      const uint16_t initialInterval=p->connect.conn_params.interval;
+      intervalObservation=(uint32_t(initialInterval>=6&&initialInterval<=3200)<<16)|initialInterval;
+      intervalRevision.fetch_add(1);
+      const uint32_t current=generation.fetch_add(1)+1;
+      connectionTimingBegin("ble",current);connectionTimingMark(ConnectionStage::Channel,initialInterval);
       esp_ble_set_encryption(remote,ESP_BLE_SEC_ENCRYPT);break;
     }
     case ESP_GATTS_DISCONNECT_EVT:
+      connectionTimingMark(ConnectionStage::Disconnected,p->disconnect.reason);
       Serial.printf("[ble] disconnect reason 0x%02x\n",p->disconnect.reason);
       linked=secured=controlSubscribed=audioSubscribed=false;generation.fetch_add(1);advertise();break;
-    case ESP_GATTS_MTU_EVT:mtu=std::min<uint16_t>(p->mtu.mtu,517);break;
+    case ESP_GATTS_MTU_EVT:mtu=std::min<uint16_t>(p->mtu.mtu,517);connectionTimingMark(ConnectionStage::MTU,mtu);break;
     case ESP_GATTS_CONGEST_EVT:congested=p->congest.congested;if(congested)congestionCount++;break;
     case ESP_GATTS_CONF_EVT:
       if(p->conf.conn_id==connection){unsigned pending=notifyPending.load();while(pending&&!notifyPending.compare_exchange_weak(pending,pending-1)){};}
@@ -117,8 +126,8 @@ void gatts(esp_gatts_cb_event_t event,esp_gatt_if_t iface,esp_ble_gatts_cb_param
       if(p->write.is_prep||p->write.offset||!secured)status=ESP_GATT_WRITE_NOT_PERMIT;
       else if(p->write.handle==handles[ControlCCC]||p->write.handle==handles[AudioCCC]){
         if(p->write.len!=2||p->write.value[1]||p->write.value[0]>1)status=ESP_GATT_INVALID_ATTR_LEN;
-        else if(p->write.handle==handles[ControlCCC])controlSubscribed=p->write.value[0]==1;
-        else audioSubscribed=p->write.value[0]==1;
+        else if(p->write.handle==handles[ControlCCC]){controlSubscribed=p->write.value[0]==1;if(controlSubscribed)connectionTimingMark(ConnectionStage::ControlSubscribed);}
+        else{audioSubscribed=p->write.value[0]==1;if(audioSubscribed)connectionTimingMark(ConnectionStage::AudioSubscribed);}
       }else if(p->write.handle==handles[ControlValue]){
         Fragment f{};
         if(p->write.len<9||p->write.len>sizeof(f.data))status=ESP_GATT_INVALID_ATTR_LEN;
@@ -200,9 +209,9 @@ void bleTick(uint32_t now){
     observedGeneration=generation;rx={};controlTx={};audioTx={};
     if(statusPending)*statusPending={};if(snapshotPending)*snapshotPending={};
     xQueueReset(incoming);xQueueReset(complete);xQueueReset(controlOut);xQueueReset(audioOut);
-    powerPolicy.reset();observedIntervalRevision=intervalRevision.load();
+    observedIntervalRevision=intervalRevision.load();
     const uint32_t value=intervalObservation.load();
-    if(value>>16)powerPolicy.observed(value&0xffff,true);
+    powerPolicy.connected(value>>16?value&0xffff:0);
   }
   const uint32_t revision=intervalRevision.load();
   if(revision!=observedIntervalRevision){observedIntervalRevision=revision;const uint32_t value=intervalObservation.load();powerPolicy.observed(value&0xffff,value>>16);}
@@ -212,6 +221,7 @@ void bleTick(uint32_t now){
     cp.max_int=powerPolicy.idle?BLEPowerPolicy::IdleMax:BLEPowerPolicy::FastMax;cp.latency=0;cp.timeout=400;
     powerPolicy.requested(now,esp_ble_gap_update_conn_params(&cp)==ESP_OK);
   }
+  if(bleConnected()&&powerPolicy.audioReady())connectionTimingMark(ConnectionStage::PerformanceReady,powerPolicy.actual);
   Fragment f;
   for(int i=0;i<8&&xQueueReceive(incoming,&f,0)==pdTRUE;i++){
     if(rx.accept(f.data,f.length,now)){
