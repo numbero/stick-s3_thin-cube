@@ -19,6 +19,54 @@ final class ConnectionRecoveryTests: XCTestCase {
         XCTAssertEqual(recovery.nextDelay(), 1)
     }
 
+    func testReturningDeviceAtSameAddressCanBypassThirtySecondBackoff() {
+        let target = ConnectionTarget(host: "ble://remembered-device", deviceID: "ThinCube-ABC123")
+        var recovery = ConnectionRecovery(enabled: true)
+        for _ in 0..<6 { _ = recovery.nextDelay() }
+        var rediscovered = target
+        XCTAssertFalse(rediscovered.discovered(id: "ThinCube-ABC123", host: target.host))
+        XCTAssertTrue(recovery.deviceAvailable(now: 120))
+        XCTAssertEqual(recovery.failures, 0)
+        XCTAssertEqual(recovery.nextDelay(), 1)
+    }
+
+    func testRepeatedAdvertisementsCannotContinuouslyBypassBackoff() {
+        var recovery = ConnectionRecovery(enabled: true)
+        XCTAssertTrue(recovery.deviceAvailable(now: 10))
+        XCTAssertEqual(recovery.nextDelay(), 1)
+        for instant in [10.01, 10.1, 11, 12.99] {
+            XCTAssertFalse(recovery.deviceAvailable(now: instant))
+        }
+        XCTAssertEqual(recovery.nextDelay(), 2)
+        XCTAssertTrue(recovery.deviceAvailable(now: 13))
+        XCTAssertEqual(recovery.nextDelay(), 1)
+    }
+
+    func testDiscoveryCannotOverrideDisconnectCredentialDenialOrSuspension() {
+        var recovery = ConnectionRecovery(enabled: false)
+        XCTAssertFalse(recovery.deviceAvailable(now: 10))
+        recovery.request(); recovery.requireUserAction()
+        XCTAssertFalse(recovery.deviceAvailable(now: 10))
+        let suspensions: [ConnectionRecovery.Suspension] = [.sleep, .lock, .inactiveSession, .network, .update, .termination]
+        for reason in suspensions {
+            recovery.request(); recovery.suspend(reason)
+            XCTAssertFalse(recovery.deviceAvailable(now: 10))
+            recovery.resume(reason)
+        }
+        XCTAssertTrue(recovery.deviceAvailable(now: 10))
+        recovery.disconnect()
+        XCTAssertFalse(recovery.deviceAvailable(now: 20))
+    }
+
+    func testNewSessionAndManualRetryResetAdvertisementThrottle() {
+        var recovery = ConnectionRecovery(enabled: true)
+        XCTAssertTrue(recovery.deviceAvailable(now: 10))
+        recovery.didConnect()
+        XCTAssertTrue(recovery.deviceAvailable(now: 11))
+        recovery.request()
+        XCTAssertTrue(recovery.deviceAvailable(now: 12))
+    }
+
     func testLockSleepAndSessionMustAllResumeBeforeConnection() {
         var recovery = ConnectionRecovery(enabled: true)
         recovery.suspend(.lock); recovery.suspend(.sleep); recovery.suspend(.inactiveSession)

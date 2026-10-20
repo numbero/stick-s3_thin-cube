@@ -8,14 +8,22 @@ public struct ConnectionRecovery: Sendable {
     public private(set) var needsUserAction = false
     public private(set) var failures = 0
     private var suspensions: Set<Suspension> = []
+    private var lastAvailabilityAttempt: TimeInterval?
     public init(enabled: Bool) { self.enabled = enabled }
     public var canAttempt: Bool { enabled && !needsUserAction && suspensions.isEmpty }
-    public mutating func request() { enabled = true; needsUserAction = false; failures = 0 }
-    public mutating func disconnect() { enabled = false; needsUserAction = false; failures = 0 }
+    public mutating func request() { enabled = true; needsUserAction = false; failures = 0; lastAvailabilityAttempt = nil }
+    public mutating func disconnect() { enabled = false; needsUserAction = false; failures = 0; lastAvailabilityAttempt = nil }
     public mutating func suspend(_ reason: Suspension) { suspensions.insert(reason) }
     public mutating func resume(_ reason: Suspension) { suspensions.remove(reason) }
     public mutating func requireUserAction() { needsUserAction = true }
-    public mutating func didConnect() { failures = 0; needsUserAction = false }
+    public mutating func didConnect() { failures = 0; needsUserAction = false; lastAvailabilityAttempt = nil }
+    /// Fresh discovery can bypass an offline backoff even at the same address.
+    /// Repeated advertisements must not turn a transport failure into a retry loop.
+    public mutating func deviceAvailable(now: TimeInterval) -> Bool {
+        guard canAttempt, lastAvailabilityAttempt.map({ now - $0 >= 3 }) ?? true else { return false }
+        lastAvailabilityAttempt = now; failures = 0
+        return true
+    }
     public mutating func nextDelay() -> TimeInterval? {
         guard canAttempt else { return nil }
         let delays: [TimeInterval] = [1, 2, 4, 8, 15, 30]

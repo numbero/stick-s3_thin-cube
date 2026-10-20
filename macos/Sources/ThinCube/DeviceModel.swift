@@ -235,6 +235,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         discoveryObserver = discovery.$devices.sink { [weak self] devices in
             Task { @MainActor in self?.discovered(devices) }
         }
+        discovery.onAvailable = { [weak self] device in self?.deviceAvailable(device) }
         pathMonitor.pathUpdateHandler = { [weak self] path in
             Task { @MainActor in
                 guard let self else { return }
@@ -1055,16 +1056,28 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             }
         }
     }
+    private func recoveryMode(for devices: [FoundDevice]) -> ConnectionMode {
+        if let intent = networkIntent {
+            return WiFiConfigurationRecovery.mode(elapsed: Date().timeIntervalSince(intent.started),
+                bluetoothRediscovered: devices.contains(where: { $0.id == target.deviceID && $0.host.hasPrefix("ble://") }))
+        }
+        return transportIntent == nil || connectionMode == .automatic ? connectionMode : (ConnectionMode(rawValue: preferredTransport) ?? .automatic)
+    }
+    private func deviceAvailable(_ device: FoundDevice) {
+        guard !connected, !connecting, !updating, reconnectTask != nil,
+              device.id == target.deviceID, recoveryMode(for: discovery.devices).accepts(host: device.host),
+              device.host.hasPrefix("ble://") ? discovery.ble.permissionHint == nil : pathSatisfied,
+              recovery.deviceAvailable(now: ProcessInfo.processInfo.systemUptime) else { return }
+        target.host = device.host; host = device.host
+        preferredTransport = device.host.hasPrefix("ble://") ? "ble" : "wifi"
+        scheduleRecovery(immediate: true)
+    }
     private func discovered(_ devices: [FoundDevice]) {
         guard !connected, !connecting, !updating else { return }
         // The publisher delivers before Discovery.devices changes. Resolve with
         // the delivered snapshot so switching devices can wake recovery immediately.
         guard let id = target.deviceID else { return }
-        let mode: ConnectionMode
-        if let intent = networkIntent {
-            mode = WiFiConfigurationRecovery.mode(elapsed: Date().timeIntervalSince(intent.started),
-                bluetoothRediscovered: devices.contains(where: { $0.id == id && $0.host.hasPrefix("ble://") }))
-        } else { mode = transportIntent == nil || connectionMode == .automatic ? connectionMode : (ConnectionMode(rawValue: preferredTransport) ?? .automatic) }
+        let mode = recoveryMode(for: devices)
         guard let match = mode.endpoint(for: id, in: devices.map { ConnectionEndpoint(deviceID: $0.id, host: $0.host) },
                                        preferredTransport: preferredTransport, wifiAvailable: pathSatisfied,
                                        bluetoothAvailable: discovery.ble.permissionHint == nil), target.host != match.host else { return }

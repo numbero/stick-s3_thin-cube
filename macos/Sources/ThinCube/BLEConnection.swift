@@ -9,6 +9,7 @@ import ThinCubeCore
     @Published private(set) var devices: [FoundDevice] = []
     var onStatus: ((Data) -> Void)?, onAudio: ((Data) -> Void)?, onDisconnect: ((Error) -> Void)?
     var onOpeningProgress: ((String) -> Void)?
+    var onAvailable: ((FoundDevice) -> Void)?
     private var manager: CBCentralManager!
     private var peripherals: [UUID: CBPeripheral] = [:]
     private var lastSeen: [String: Date] = [:]
@@ -69,6 +70,8 @@ import ThinCubeCore
                 devices[index] = found
             }
         } else { devices.append(found) }
+        // An unchanged address still proves that a rebooted/sleeping device is back.
+        onAvailable?(found)
     }
     func open(_ address: String) async throws {
         close()

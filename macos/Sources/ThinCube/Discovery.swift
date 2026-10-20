@@ -8,6 +8,7 @@ struct FoundDevice: Identifiable, Equatable {
 @MainActor final class Discovery: NSObject, ObservableObject, @preconcurrency NetServiceBrowserDelegate, @preconcurrency NetServiceDelegate {
     @Published var devices: [FoundDevice] = []
     let ble = BLEConnection()
+    var onAvailable: ((FoundDevice) -> Void)?
     private var bleObserver: AnyCancellable?
     private var wifiDevices: [FoundDevice] = []
     private func publish() { devices = wifiDevices + ble.devices }
@@ -16,6 +17,7 @@ struct FoundDevice: Identifiable, Equatable {
     override init() {
         super.init(); browser.delegate = self
         bleObserver = ble.$devices.sink { [weak self] values in guard let self else { return }; self.devices = self.wifiDevices + values }
+        ble.onAvailable = { [weak self] device in self?.onAvailable?(device) }
         browser.searchForServices(ofType: "_thincube._tcp.", inDomain: "local.")
     }
     func netServiceBrowser(_ browser: NetServiceBrowser, didFind service: NetService, moreComing: Bool) {
@@ -37,7 +39,11 @@ struct FoundDevice: Identifiable, Equatable {
             }
         }.first ?? sender.hostName
         guard let host, sender.port == 80 else { return }
-        wifiDevices.removeAll { $0.id == sender.name }; wifiDevices.append(FoundDevice(id: sender.name, host: host)); publish()
+        let found = FoundDevice(id: sender.name, host: host)
+        let becameAvailable = !wifiDevices.contains(found)
+        wifiDevices.removeAll { $0.id == sender.name }; wifiDevices.append(found); publish()
+        // Resolving a cached service during recovery does not prove it is online.
+        if becameAvailable { onAvailable?(found) }
     }
     func refresh(id: String?) {
         guard let id else { return }
