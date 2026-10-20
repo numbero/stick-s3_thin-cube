@@ -20,7 +20,7 @@ struct DeviceStatus: Decodable {
     let wifiProvisioning: Bool?
     let bleMtu: Int?, bleAudioDropped: UInt32?
     let power: PowerTelemetry?
-    let deepSleep, deepSleepAvailable: Bool?
+    let deepSleep, deepSleepAvailable, deepSleepStaged: Bool?
     let powerLedDebug, powerLedAvailable: Bool?
     let sleep: DeviceSleepNotice?
     struct Calibration: Decodable { let seq: UInt32; let op: String; let ok: Bool }
@@ -89,6 +89,20 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published private(set) var deepSleepSettingBusy = false
     @Published private(set) var powerLedSettingBusy = false
     @Published private(set) var deepSleepEnabled = false
+    @Published private(set) var stagedDeepSleep = false
+    var deepSleepDescription: String {
+        if status == nil && !deviceSleeping && !stagedDeepSleep {
+            return "连接设备后可查看当前固件的深睡策略。"
+        }
+        return stagedDeepSleep
+          ? "开启后，从最后一次活动起五分钟息屏并保持连接；电池供电下十分钟进入深睡，二十分钟彻底关机。深睡时可拿起或按电源键唤醒并自动重连；关机后需按电源键开机。提前唤醒后重新计时。USB供电时保持在线；深睡期间A/B键和Mac指令不能唤醒。"
+          : "开启后，使用电池静置五分钟会断开连接并进入深睡；拿起或按机身电源键唤醒后自动重连。USB供电时保持在线。深睡期间A/B键和Mac指令不能唤醒。此固件的深睡模式不会自动关机。"
+    }
+    var deviceSleepHint: String {
+        stagedDeepSleep
+          ? "设备已离线休眠；深睡时可拿起或按电源键唤醒，静置满二十分钟关机后请按电源键开机。"
+          : "设备正在深睡，拿起或按机身电源键唤醒后将自动连接。"
+    }
     private var sleepTracker = DeviceSleepTracker()
     private var sleepAckInFlight = false
     private var deepSleepSettingTask: Task<Void, Never>?
@@ -272,6 +286,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 "brightness": status?.brightness ?? 0, "calibrated": status?.calibrated ?? false,
                 "faceCalibrated": status?.faceCalibrated ?? false, "keysActive": keys.isActive,
                 "power": status?.power?.dictionary ?? [:], "deepSleep": deepSleepEnabled,
+                "deepSleepStaged": stagedDeepSleep,
                 "deepSleepAvailable": status?.deepSleepAvailable ?? false, "deviceSleeping": deviceSleeping, "note": note]
     }
     private func makeBase(_ selectedHost: String) throws -> URL {
@@ -327,7 +342,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     func selectDevice(_ id: String) {
         guard !connected, !connecting, !switching, !updating else { return }
         target = ConnectionTarget(host: "", deviceID: id.isEmpty ? nil : id)
-        sleepTracker.reset(); deviceSleeping = false; deepSleepEnabled = false
+        sleepTracker.reset(); deviceSleeping = false; deepSleepEnabled = false; stagedDeepSleep = false
         host = ""; pin = ""; transportPhase = ""
         refreshRecoveryAddress()
     }
@@ -712,6 +727,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if status == nil || soundVolume == Double(status?.soundVolume ?? 35) { soundVolume = Double(next.soundVolume ?? 35) }
         status = next
         deepSleepEnabled = next.deepSleep ?? false
+        stagedDeepSleep = next.deepSleepStaged ?? false
         if let power = next.power {
             powerDiagnostics.sample(power, device: name, transport: currentTransport,
                                     brightness: next.brightness, streaming: next.streaming,
@@ -868,7 +884,10 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             let deadline = Date().addingTimeInterval(3)
             while !Task.isCancelled, self.generation == connectionID, Date() < deadline {
                 if self.status?.deepSleep == enabled {
-                    self.note = enabled ? "深睡待机已开启；使用电池静置五分钟后进入，拿起或按机身电源键唤醒。" : "深睡待机已关闭；恢复五分钟息屏、十分钟电池关机。"
+                    self.note = enabled ? (self.stagedDeepSleep
+                        ? "深睡待机已开启；从最后活动起五分钟息屏、十分钟深睡、二十分钟电池关机。"
+                        : "深睡待机已开启；使用电池静置五分钟后进入，拿起或按机身电源键唤醒。")
+                        : "深睡待机已关闭；恢复五分钟息屏、十分钟电池关机。"
                     return
                 }
                 try? await Task.sleep(nanoseconds: 100_000_000)
@@ -1056,7 +1075,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private func connectionLost(note message: String) {
         let asleep = sleepTracker.didDisconnect(now: ProcessInfo.processInfo.systemUptime)
         deviceSleeping = asleep
-        teardown(note: asleep ? "设备正在深睡，拿起或按机身电源键唤醒后将自动连接。" : message)
+        teardown(note: asleep ? deviceSleepHint : message)
         scheduleRecovery()
     }
     private func connectionFailed(_ error: Error) {
@@ -1179,7 +1198,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         discovery.refresh(id: target.deviceID)
         let delay = immediate ? 0 : (recovery.nextDelay() ?? 30)
         reconnecting = true
-        if sleepTracker.sleeping { note = "设备正在深睡，拿起或按机身电源键唤醒后将自动连接。" }
+        if sleepTracker.sleeping { note = deviceSleepHint }
         else if delay > 0 { note += " \(Int(delay)) 秒后自动重试。" }
         let id = generation
         reconnectTask = Task { [weak self] in

@@ -20,6 +20,7 @@
 #include "power_led_policy.h"
 #include "motion.h"
 #include "deep_sleep.h"
+#include "idle_power.h"
 #include "ima_adpcm.h"
 #include "wifi_prov.h"
 #include "pairing_policy.h"
@@ -348,6 +349,7 @@ void publish() {
   cJSON_AddBoolToObject(j,"allowed",voice.allowed);cJSON_AddBoolToObject(j,"muted",voice.muted);
   cJSON_AddBoolToObject(j,"localSound",voice.localSound);cJSON_AddBoolToObject(j,"streaming",voice.streaming);
   cJSON_AddBoolToObject(j,"deepSleep",deepSleepEnabled);cJSON_AddBoolToObject(j,"deepSleepAvailable",deepSleepAvailable());
+  cJSON_AddBoolToObject(j,"deepSleepStaged",true);
   cJSON_AddBoolToObject(j,"powerLedDebug",powerLedDebug);cJSON_AddBoolToObject(j,"powerLedAvailable",powerLedAvailable);
   cJSON_AddBoolToObject(j,"powerLedReady",powerLedPolicy.ready);cJSON_AddBoolToObject(j,"powerLedOn",powerLedOn);
   auto sleeping=cJSON_AddObjectToObject(j,"sleep");
@@ -638,7 +640,8 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   Command c;
   bool commandChanged=false;
   while(xQueueReceive(commands,&c,0)==pdTRUE) {
-    if(strcmp(c.op,"heartbeat")){commandChanged=true;uiPowerActivity();}
+    if(strcmp(c.op,"heartbeat"))commandChanged=true;
+    if(idleControlActivity(c.op))uiPowerActivity();
     if(strcmp(c.op,"heartbeat")&&strcmp(c.op,"sleep_ack"))deepSleepCancel();
     voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
     if(!strcmp(c.op,"connect")){

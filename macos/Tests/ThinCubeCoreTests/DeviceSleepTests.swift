@@ -33,13 +33,14 @@ final class DeviceSleepTests: XCTestCase {
     }
     func testFastDeltaCarriesSleepAndCancellationWithinEpoch() throws {
         var snapshots = BLEStatusSnapshots()
-        _ = snapshots.accept(try JSONSerialization.data(withJSONObject: ["epoch": 8, "deepSleep": true, "deepSleepAvailable": true]))
+        _ = snapshots.accept(try JSONSerialization.data(withJSONObject: ["epoch": 8, "deepSleep": true, "deepSleepAvailable": true, "deepSleepStaged": true]))
         let live: [Any] = [8, 0, String(repeating: "00", count: 16), 0.0, "face_up", "sleeping", 0]
         for phase in ["preparing", "awake"] {
             let result = try XCTUnwrap(snapshots.accept(try JSONSerialization.data(withJSONObject: ["s": live, "edge": NSNull(), "sleep": ["id": 9, "phase": phase]])))
             let value = try XCTUnwrap(JSONSerialization.jsonObject(with: result) as? [String: Any])
             XCTAssertEqual((value["sleep"] as? [String: Any])?["phase"] as? String, phase)
             XCTAssertEqual(value["deepSleep"] as? Bool, true)
+            XCTAssertEqual(value["deepSleepStaged"] as? Bool, true)
         }
         snapshots.reset()
         XCTAssertNil(snapshots.accept(try JSONSerialization.data(withJSONObject: ["s": live, "edge": NSNull(), "sleep": ["id": 9, "phase": "preparing"]])))

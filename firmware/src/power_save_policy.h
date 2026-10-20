@@ -50,20 +50,22 @@ struct BLEPowerPolicy {
 
 struct DeepSleepPolicy {
   enum class Decision { Wait, Commit, Cancel };
-  static constexpr uint32_t GraceMs=350,AckTimeoutMs=2000;
-  bool pending=false,needAck=false,acknowledged=false;
-  uint32_t id=0,since=0;
+  static constexpr uint32_t GraceMs=350,AckTimeoutMs=2000,RetryMs=30000;
+  bool pending=false,needAck=false,acknowledged=false,cooling=false;
+  uint32_t id=0,since=0,cancelledAt=0;
   void begin(uint32_t now,uint32_t sequence,bool connected){
-    pending=true;id=sequence?sequence:1;since=now;needAck=connected;acknowledged=false;
+    pending=true;id=sequence?sequence:1;since=now;needAck=connected;acknowledged=false;cooling=false;
   }
-  void cancel(){pending=false;needAck=acknowledged=false;}
+  void cancel(){pending=false;needAck=acknowledged=cooling=false;}
+  void retryLater(uint32_t now){cancel();cooling=true;cancelledAt=now;}
+  bool ready(uint32_t now)const{return !cooling||uint32_t(now-cancelledAt)>=RetryMs;}
   bool ack(uint32_t sequence){if(!pending||sequence!=id)return false;acknowledged=true;return true;}
   Decision update(uint32_t now,bool safe,bool connected){
     if(!pending)return Decision::Wait;
-    if(!safe||(needAck&&!connected)){cancel();return Decision::Cancel;}
+    if(!safe||(needAck&&!connected)){retryLater(now);return Decision::Cancel;}
     if(!needAck&&connected){needAck=true;acknowledged=false;}
     const uint32_t age=uint32_t(now-since);
-    if(age>=AckTimeoutMs&&needAck&&!acknowledged){cancel();return Decision::Cancel;}
+    if(age>=AckTimeoutMs&&needAck&&!acknowledged){retryLater(now);return Decision::Cancel;}
     if(age>=GraceMs&&(!needAck||acknowledged))return Decision::Commit;
     return Decision::Wait;
   }

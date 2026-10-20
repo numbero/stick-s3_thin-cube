@@ -338,7 +338,9 @@ void uiBegin(){
   words.begin();
   idlePower.activity(millis());
   stories.begin(millis(),esp_random());storyQuietAt=millis();
-  Serial.printf("[idle] sleep %us off %us battery-only\n",unsigned(IdlePowerPolicy::SleepMs/1000),unsigned(IdlePowerPolicy::OffMs/1000));
+  Serial.printf("[idle] screen %us normal-off %us deep-sleep %us deep-off %us battery-only\n",
+    unsigned(IdlePowerPolicy::SleepMs/1000),unsigned(IdlePowerPolicy::OffMs/1000),
+    unsigned(IdlePowerPolicy::DeepSleepMs/1000),unsigned(IdlePowerPolicy::DeepOffMs/1000));
   canvas.setPsram(false);        /* 内部 RAM：PSRAM 上整屏 DMA 推屏会有缓存一致性抖动 */
   canvas.setColorDepth(16);
   canvasMemory=heap_caps_malloc(FrameBytes,MALLOC_CAP_INTERNAL|MALLOC_CAP_DMA);
@@ -877,7 +879,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     const bool wasResting=faceDownRest.active;faceDownRest.cancel();
     if(wasResting)goWake("face down task or sensor interruption");
   }
-  const auto action=idlePower.update(ms,blocked,standby,powerAutoOffAllowed(ms));
+  const auto action=idlePower.update(ms,blocked,standby,powerAutoOffAllowed(ms),deviceDeepSleepEnabled());
   if(blocked)standby=false;
   if(deepSleepTick(ms,bootVerified&&!blocked&&!soundPlaying(),deviceControlConnected(ms)))return;
   if(bootVerified&&!soundPlaying()&&action==IdlePowerPolicy::Action::Sleep){

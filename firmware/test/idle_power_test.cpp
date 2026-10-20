@@ -9,6 +9,39 @@
 using Action=IdlePowerPolicy::Action;
 int main(){
   {
+    // With deep sleep enabled all three stages share one activity clock.
+    IdlePowerPolicy p;p.activity(100);
+    assert(p.update(300099,false,false,true,true)==Action::None);
+    assert(p.update(300100,false,false,true,true)==Action::Sleep);
+    assert(!p.deepSleepDue(p.elapsed(300100)));
+    assert(!p.deepSleepDue(p.elapsed(600099)));
+    assert(p.update(600100,false,true,true,true)==Action::None);
+    assert(p.deepSleepDue(p.elapsed(600100)));
+    assert(p.update(1200099,false,true,true,true)==Action::None);
+    assert(p.deepSleepDue(p.elapsed(1200099)));
+    assert(!p.deepSleepDue(p.elapsed(1200100)));
+    assert(p.update(1200100,false,true,true,true)==Action::PowerOff);
+    // Deep-sleep preparation unavailable/failed: online standby still shuts
+    // down at 20m rather than reverting to the normal mode's 10m deadline.
+    for(uint32_t age=600000;age<1200000;age+=1000)
+      assert(p.update(age+100,false,true,true,true)==Action::None);
+    assert(p.update(1200100,false,true,false,true)==Action::None); // USB
+    // Actual activity and protected work each grant a complete new window.
+    p.activity(900000);
+    assert(p.update(1200000,false,false,true,true)==Action::Sleep);
+    assert(!p.deepSleepDue(p.elapsed(1200000)));
+    assert(p.update(2100000,true,true,true,true)==Action::None);
+    assert(p.update(2100001,false,false,true,true)==Action::None);
+    assert(p.update(2400000,false,false,true,true)==Action::Sleep);
+    assert(p.deepSleepDue(p.elapsed(2700000)));
+    assert(p.update(3300000,false,true,true,true)==Action::PowerOff);
+    // Millis wrap preserves the longer 20m deadline too.
+    p.activity(0xfffffff0u);
+    assert(p.deepSleepDue(p.elapsed(599984)));
+    assert(p.update(1199983,false,true,true,true)==Action::None);
+    assert(p.update(1199984,false,true,true,true)==Action::PowerOff);
+  }
+  {
     // Full-battery charge indication pulses do not change the actual input.
     for(uint8_t source:{uint8_t(4),uint8_t(5),uint8_t(6)})assert(idlePowerSource(true,source,5000)==1);
     assert(idlePowerSource(true,4,4000)==1);assert(idlePowerSource(true,4,300)==0);
@@ -93,5 +126,5 @@ int main(){
     MotionActivity m;assert(!m.update(0,0,9.81f,0,0xfffffff0u));
     assert(m.healthy(24));assert(m.update(2,0,9.6f,0,40));
   }
-  puts("9 idle stages, busy/wake/USB guards, charger/input separation, clock wrap and motion scenarios passed");
+  puts("normal 5/10m and deep 5/10/20m stages, busy/wake/USB guards, clock wrap and motion scenarios passed");
 }

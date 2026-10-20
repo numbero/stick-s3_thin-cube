@@ -83,16 +83,17 @@ void setup(){
   // No Grove/IR/EXT_5V load: the pinned M5Unified defaults this boost on.
   cfg.output_power=false;
   cfg.fallback_board=m5::board_t::board_M5StickS3;
-#ifdef THINCUBE_IMU_LEGACY
+  // Preserve the retained motion interrupt until the PM1 deadline is handled.
+  // imuBegin() initializes either backend when a normal boot continues.
   cfg.internal_imu=false;
   cfg.external_imu=false;
-#endif
   M5.begin(cfg);
   connectionBootMark(ConnectionStage::Peripherals);
-  devicePowerLedBegin();
-  if(!M5.Display.width()){delay(100);M5.Display.init();}
   Serial.begin(115200);
   connectionTimingObserveWiFi();
+  deepSleepBoot();
+  devicePowerLedBegin();
+  if(!M5.Display.width()){delay(100);M5.Display.init();}
   delay(200);
   Serial.printf("[boot] peripheral bus recovered %d board %u LCD %dx%d\n",busRecovered,unsigned(M5.getBoard()),M5.Display.width(),M5.Display.height());
   Serial.printf("[power] ext5v_out %d\n",M5.Power.getExtOutput());
