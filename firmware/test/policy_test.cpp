@@ -13,13 +13,13 @@ int main(){
     auto v=ready();v.setPose(true,true);v.button(true);assert(v.streaming&&!v.held);v.button(false);v.button(true);assert(v.held);
   }
   {
-    auto v=ready();v.setPose(true,false);v.button(true);v.muted=true;v.tick(200);
+    auto v=ready();v.setPose(true,false);v.button(true);v.muted=true;v.tick(200,true);
     assert(!v.streaming&&!v.held&&!v.captureWanted());v.muted=false;v.setPose(true,false);assert(!v.streaming);
     v.setPose(false,false);v.setPose(true,false);assert(v.streaming);
   }
   {
     auto v=ready();v.setPose(true,false);v.button(true);v.setPeer(false,200);v.setPeer(true,300);v.setPose(true,false);
-    assert(!v.streaming&&!v.held); // Reconnect never restarts an inverted session.
+    assert(v.streaming&&!v.held); // A confirmed inversion remains eligible after reconnect.
   }
   {
     auto v=ready();v.setPose(true,false);v.stop();v.setPose(true,false);assert(!v.streaming);
@@ -31,12 +31,12 @@ int main(){
     v.setPose(false,false);assert(v.streaming&&v.manual&&!v.held); // Pose exit does not kill a manually-started meeting.
   }
   {
-    auto v=ready();v.setPose(true,false);v.button(true);v.tick(1101);assert(!v.peer&&!v.streaming&&!v.held);
-    v=ready();v.leaseAt=0xfffffff0;v.tick(20);assert(v.peer);v.tick(1100);assert(!v.peer); // Millis wrap
+    auto v=ready();v.setPose(true,false);v.button(true);v.tick(1101,true);assert(!v.peer&&!v.streaming&&!v.held);
+    v=ready();v.leaseAt=0xfffffff0;v.tick(20,true);assert(v.peer);v.tick(1100,true);assert(!v.peer); // Millis wrap
   }
   {
-    auto v=ready();v.setPose(true,false);v.busy=true;v.tick(200);assert(!v.streaming&&!v.captureWanted());
-    v.busy=false;v.setPose(true,false);assert(!v.streaming);v.sleeping=true;assert(!v.captureWanted());
+    auto v=ready();v.setPose(true,false);v.busy=true;v.tick(200,true);assert(!v.streaming&&!v.captureWanted());
+    v.busy=false;v.setPose(true,false);assert(v.streaming);v.sleeping=true;assert(!v.captureWanted());
   }
   {
     PoseDetector p;assert(!p.calibrateUpright(0,0,1));assert(p.calibrateUpright(0,-1,0));assert(p.calibrateFaceUp(0,0,1));
@@ -76,13 +76,13 @@ int main(){
   }
   {
     auto v=ready();v.captureReady=false;v.setPose(true,false);
-    assert(v.pendingGesture&&!v.streaming);v.tick(200);assert(!v.streaming);
-    v.captureReady=true;v.tick(300);assert(v.streaming&&!v.pendingGesture);
+    assert(v.pendingGesture&&!v.streaming);v.tick(200,true);assert(!v.streaming);
+    v.captureReady=true;v.tick(300,true);assert(v.streaming&&!v.pendingGesture);
   }
   {
     auto v=ready();v.captureReady=false;v.setPose(true,false);assert(v.pendingGesture);
-    v.muted=true;v.tick(200);assert(!v.pendingGesture&&!v.streaming);
-    v.muted=false;v.captureReady=true;v.tick(300);assert(!v.streaming);
+    v.muted=true;v.tick(200,true);assert(!v.pendingGesture&&!v.streaming);
+    v.muted=false;v.captureReady=true;v.tick(300,true);assert(!v.streaming);
     v.setPose(true,false);assert(!v.streaming); // Recovery cannot replay a cancelled gesture.
     v.setPose(false,false);v.setPose(true,false);assert(v.streaming);
   }

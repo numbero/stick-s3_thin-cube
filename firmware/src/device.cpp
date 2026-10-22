@@ -101,6 +101,7 @@ constexpr unsigned TapProtocol=0;
 #endif
 bool dualKeys=false,lastHeldB=false;
 bool lastHeld = false, lastStreaming = false, healthy = false;
+uint32_t lastVoiceGeneration = 0;
 void resetKeyControl(){dualKeys=false;gesturesNegotiated=tapsNegotiated=false;gestureEvents.clear();keyEdges.clear();walkieKeys.update(false,false,false);lastHeld=lastHeldB=false;}
 void stopVoice(){voice.stop();walkieKeys.update(false,false,false);}
 bool captureRequested=false,voicePreparing=false;
@@ -320,7 +321,7 @@ const char* voiceBlock() {
   if(transportMode()==TransportMode::BLE&&audioReady()&&!blePerformanceReady())return "radio";
   if(!voice.captureReady&&captureRequested)return "microphone";
   if(voice.streaming)return "";
-  return voice.inverted ? "rearm" : "invert";
+  return voice.inverted&&voice.poseRearmRequired ? "rearm" : "invert";
 }
 void publish() {
   cJSON* j=cJSON_CreateObject();
@@ -559,7 +560,7 @@ bool deviceAuthorized(httpd_req_t* req) {
 }
 void deviceOpenPairing() {
   const int previousOwner=owner;
-  voice.stop();voice.setPeer(false,millis());controlLease.reset();owner=-1;resetKeyControl();
+  voice.pause();voice.setPeer(false,millis());controlLease.reset();owner=-1;resetKeyControl();
   xSemaphoreTake(publication,portMAX_DELAY);
   pairing.offer(millis(),true);newPairCode();publishPairing();
   xSemaphoreGive(publication);
@@ -581,11 +582,12 @@ bool deviceForgetPairing(){
   Preferences p;if(!p.begin("thincube",false))return false;
   const bool ok=!p.isKey("key")||p.remove("key");p.end();if(!ok)return false;
   xSemaphoreTake(publication,portMAX_DELAY);memset(key,0,sizeof(key));memset(candidateKey,0,sizeof(candidateKey));
-  pairing.offer(millis(),false);publishPairing();xSemaphoreGive(publication);bleAuthenticated=false;deviceStop();bleDisconnect();return true;
+  pairing.offer(millis(),false);publishPairing();xSemaphoreGive(publication);bleAuthenticated=false;devicePause();bleDisconnect();return true;
 }
 const char* devicePairPin(){return pin;}
 const char* deviceName(){return name;}
 void deviceStop(){stopVoice();}
+void devicePause(){voice.pause();walkieKeys.update(false,false,false);}
 void deviceToggleMute(){voice.muted=!voice.muted;if(voice.muted)stopVoice();persist();}
 bool deviceStreaming(){return voice.streaming;}
 bool deviceCaptureRequested(){return captureRequested;}
@@ -725,28 +727,31 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   }
   if(transportMode()==TransportMode::BLE?(!bleConnected()||!bleAuthenticated):WiFi.status()!=WL_CONNECTED){voice.setPeer(false,ms);controlLease.reset();}
   voice.busy=busy||transportBusy()||deepSleepPending();
-  voice.tick(ms);
-  // Prepare capture after waking, before consuming the inverted gesture. If
-  // Mic startup needs a retry, VoiceState retains only this fresh gesture.
+  voice.tick(ms,imuHealthy(millis()));
+  // Prepare capture before reconciling the confirmed inverted pose. Temporary
+  // wake/link/microphone delays leave that pose eligible; explicit stops latch.
   if(powerCalibrationOwnsUI()){voice.busy=true;stopVoice();}
   // Reserve audio as soon as an inverted gesture is forming, before pose
   // confirmation. A manual start cancels effects above before starting capture.
-  voicePreparing=poseVoice.prepareCapture(voice,pose.candidate,uiLandscapeActive());
+  voicePreparing=imuHealthy(ms)&&poseVoice.prepareCapture(voice,pose.candidate,uiLandscapeActive());
   const bool voiceReserved=voice.streaming||voice.pendingGesture||voice.pendingManual||voicePreparing;
   soundTick(millis(),voiceReserved||voice.busy||devicePairWindow());
   captureRequested=voice.captureWanted(voicePreparing,uiAmbientCaptureWanted(ms));
   audioTick(captureRequested&&!soundPlaying());
   voice.captureReady=audioReady()&&(transportMode()!=TransportMode::BLE||blePerformanceReady());
-  poseVoice.update(voice,pose.stable,uiButtonAForVoice(),uiLandscapeActive(),pose.candidate==pose.stable);
+  poseVoice.update(voice,pose.stable,uiButtonAForVoice(),uiLandscapeActive(),imuHealthy(millis())&&pose.candidate==pose.stable);
+  // A pause and recovery can both occur in this tick. Reset the physical key
+  // context even when the final streaming flag matches the previous tick.
+  if(voice.streamGeneration!=lastVoiceGeneration)walkieKeys.update(false,false,false);
   if(dualKeys){
     walkieKeys.update(deviceWalkieKeysActive(),M5.BtnA.isPressed(),M5.BtnB.isPressed(),uiButtonAForVoice());
     voice.held=walkieKeys.heldA;
   }else voice.button(uiButtonAForVoice() && !(displayOrientation.rotation&1));
-  voice.tick(ms);
+  voice.tick(ms,imuHealthy(millis()));
   static DevicePose loggedPose=DevicePose::Other;
   if(pose.stable!=loggedPose){loggedPose=pose.stable;Serial.printf("[pose] %s confirmed %ums live %d block %s\n",poseName(loggedPose),unsigned(ms-pose.since),voice.streaming,voiceBlock());}
   static unsigned bleBlock=0;static uint8_t blePacket[196];static int imaIndex=32;
-  if(voice.streaming!=lastStreaming){
+  if(voice.streaming!=lastStreaming||voice.streamGeneration!=lastVoiceGeneration){
     bleBlock=0;keyEdges.clear();gestureEvents.clear();
     if(!voice.streaming)walkieKeys.update(false,false,false);
     Serial.printf("[voice] %s pose %s manual %d ready %d reason %s\n",voice.streaming?"start":"stop",poseName(pose.stable),voice.manual,voice.captureReady,voiceBlock());
@@ -756,6 +761,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   if(voice.held!=lastHeld){edge(voice.held);lastHeld=voice.held;}
   if(walkieKeys.heldB!=lastHeldB){edge(walkieKeys.heldB,'b');lastHeldB=walkieKeys.heldB;}
   lastStreaming=voice.streaming;
+  lastVoiceGeneration=voice.streamGeneration;
   if(!deviceWalkieKeysActive()||!deviceControlConnected(ms)||M5.BtnA.isPressed()||M5.BtnB.isPressed())gestureEvents.clear();
   gestureEvents.expire(ms);
   static int16_t pcm[480];

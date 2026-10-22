@@ -128,7 +128,7 @@ bool deepSleepTick(uint32_t now,bool safe,bool connected){
   if(!policy.pending){
     if(!safe||!policy.ready(now)||!IdlePowerPolicy::deepSleepDue(uiIdleAgeMs(now)))return false;
     policy.begin(now,esp_random(),connected);pending=true;
-    powerSavePerformance();deviceStop();deviceSleepChanged();
+    powerSavePerformance();devicePause();deviceSleepChanged();
     Serial.printf("[deep-sleep] announcing id %u ack_required %d\n",unsigned(policy.id),connected);return true;
   }
   powerSavePerformance();const auto decision=policy.update(now,safe,connected);
@@ -137,7 +137,7 @@ bool deepSleepTick(uint32_t now,bool safe,bool connected){
   std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
   if(!admission.owns_lock())return true;
   if(!inputSafe(millis())){deepSleepCancel();deviceSleepChanged();return true;}
-  deviceStop();soundCancel();audioTick(false);M5.Speaker.end();
+  devicePause();soundCancel();audioTick(false);M5.Speaker.end();
   if(!audioPowerDown()||!deviceSaveForSleep()){deepSleepCancel();deviceSleepChanged();return true;}
   if(!imuSuspendForSleep()){imuResumeAfterSleep();deepSleepCancel();deviceSleepChanged();return true;}
   Bus bus;WakeRegisters registers;

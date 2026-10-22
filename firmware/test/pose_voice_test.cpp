@@ -34,9 +34,9 @@ int main(){
   }
   {
     auto v=ready();PoseVoiceController controller;
-    controller.update(v,DevicePose::Inverted,false);assert(v.inverted&&!v.streaming);
+    controller.update(v,DevicePose::Inverted,false);assert(v.inverted&&v.streaming);
     v.setPeer(false,200);v.setPeer(true,300);
-    controller.update(v,DevicePose::Inverted,false);assert(!v.streaming);
+    controller.update(v,DevicePose::Inverted,false);assert(v.streaming);
     controller.update(v,DevicePose::FaceUp,false);
     controller.update(v,DevicePose::Inverted,false);assert(v.streaming);
     v.button(true);assert(v.held);

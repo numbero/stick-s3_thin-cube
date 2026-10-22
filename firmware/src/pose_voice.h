@@ -2,20 +2,18 @@
 #include "pose_detector.h"
 #include "voice_state.h"
 
-// Boot observes the initial pose without opening a microphone session. A
-// successful calibration already identifies the current pose, so the user's
-// next face-up -> inverted transition must be processed as a new gesture.
+// A confirmed inversion is a standing request, including boot/wake/reconnect.
+// Calibration and play explicitly consume it until the next pose exit.
 struct PoseVoiceController {
   bool initialized = false, suppressed = false;
   bool prepareCapture(const VoiceState& voice,DevicePose candidate,bool exploring)const{
-    // Only prewarm a fresh forming inversion. Boot/reconnect/stop while held
-    // inverted must not start capture or replay the cancelled voice gesture.
-    return initialized&&!suppressed&&!exploring&&voice.voiceEnabled()&&
-      !voice.inverted&&candidate==DevicePose::Inverted;
+    return !suppressed&&!exploring&&!voice.poseRearmRequired&&voice.voiceEnabled()&&
+      !voice.streaming&&!voice.pendingManual&&candidate==DevicePose::Inverted;
   }
   void calibrated(VoiceState& voice, DevicePose pose) {
     voice.stop();
     voice.inverted = pose == DevicePose::Inverted;
+    voice.poseRearmRequired = voice.inverted;
     initialized = true;suppressed=false;
   }
   void update(VoiceState& voice, DevicePose pose, bool buttonDown, bool exploring=false, bool poseSettled=true) {
@@ -26,16 +24,13 @@ struct PoseVoiceController {
       voice.held=voice.armed=false;
       if(pose!=DevicePose::Other){
         voice.inverted=pose==DevicePose::Inverted;initialized=true;
+        voice.poseRearmRequired=voice.inverted;
         if(!exploring&&poseSettled)suppressed=false;
       }
       return;
     }
     if(pose == DevicePose::Other) return;
-    if(!initialized) {
-      voice.inverted = pose == DevicePose::Inverted;
-      initialized = true;
-      return;
-    }
-    voice.setPose(pose == DevicePose::Inverted, buttonDown);
+    initialized = true;
+    voice.setPose(pose == DevicePose::Inverted, buttonDown, poseSettled);
   }
 };

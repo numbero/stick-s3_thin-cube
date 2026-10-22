@@ -26,28 +26,29 @@ int main(){
   {
     auto v=ready();PoseVoiceController c;c.update(v,DevicePose::FaceUp,false);
     c.update(v,DevicePose::Inverted,false);assert(v.pendingGesture&&v.captureWanted());
-    v.tick(200);assert(!v.streaming);v.captureReady=true;v.tick(300);
+    v.tick(200,true);assert(!v.streaming);v.captureReady=true;v.tick(300,true);
     assert(v.streaming&&v.captureWanted()); // A slow Mic/radio preparation keeps only this fresh gesture.
   }
   {
     auto v=ready();assert(v.requestManual(true,200));assert(v.pendingManual&&v.captureWanted());
-    v.captureReady=true;v.tick(300);assert(v.streaming&&v.manual);
+    v.captureReady=true;v.tick(300,true);assert(v.streaming&&v.manual);
     v.setPose(true,true);assert(!v.held);v.button(false);v.button(true);assert(v.held);
     v.setPose(false,false);assert(v.streaming&&v.manual&&!v.held);
     v.stop();assert(!v.captureWanted());
   }
   {
-    auto v=ready();v.requestManual(false,100);v.leaseAt=5100;v.tick(5100);assert(!v.pendingManual&&!v.captureWanted());
+    auto v=ready();v.requestManual(false,100);v.leaseAt=5100;v.tick(5100,true);assert(!v.pendingManual&&!v.captureWanted());
     v.requestManual(false,5200);v.setPeer(false,5300);assert(!v.captureWanted());
-    v=ready();v.requestManual(false,0xfffffff0);v.leaseAt=0xfffffff0;v.captureReady=true;v.tick(20);
+    v=ready();v.requestManual(false,0xfffffff0);v.leaseAt=0xfffffff0;v.captureReady=true;v.tick(20,true);
     assert(v.streaming); // Manual cold start survives millis wrap.
   }
   {
     auto v=ready();PoseVoiceController c;
-    assert(!c.prepareCapture(v,DevicePose::Inverted,false));
-    c.update(v,DevicePose::Inverted,false);assert(!v.streaming&&!v.captureWanted());
-    assert(!c.prepareCapture(v,DevicePose::Inverted,false));
+    assert(c.prepareCapture(v,DevicePose::Inverted,false));
+    c.update(v,DevicePose::Inverted,false);assert(v.pendingGesture&&v.captureWanted());
+    assert(c.prepareCapture(v,DevicePose::Inverted,false));
     v.setPeer(false,200);v.setPeer(true,300);assert(!v.captureWanted());
+    c.update(v,DevicePose::Inverted,false);assert(v.pendingGesture&&v.captureWanted());
     c.update(v,DevicePose::FaceUp,false);v.captureReady=true;c.update(v,DevicePose::Inverted,false);
     v.stop();assert(!v.captureWanted()&&!c.prepareCapture(v,DevicePose::Inverted,false));
   }

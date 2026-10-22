@@ -33,7 +33,7 @@ struct Fixture {
     voice.sleeping=rest.active;
     controller.update(voice,pose.stable,button,false,pose.candidate==pose.stable);
     voice.button(button&&!(display.rotation&1));
-    voice.tick(now);
+    voice.tick(now,true);
     return action;
   }
   void enter(uint32_t start=100){
@@ -204,16 +204,16 @@ int main(){
     f.sample(1100,1,0,0);f.sample(1550,1,0,0);assert(!f.voice.streaming);
   }
   {
-    // Explicit stop/mute/disconnect always bypasses the guard. Holding the old
-    // inverted pose cannot resume a stopped session.
+    // Explicit stop/mute bypasses the guard and requires a fresh pose entry.
+    // A disconnect releases keys immediately, then the held pose may resume.
     for(int reason=0;reason<3;++reason){
       Fixture f;f.enter();f.voice.button(true);assert(f.voice.held);
       if(reason==0)f.voice.stop();
-      else if(reason==1){f.voice.muted=true;f.voice.tick(320);}
+      else if(reason==1){f.voice.muted=true;f.voice.tick(320,true);}
       else f.voice.setPeer(false,320);
       assert(!f.voice.poseExitGuarded()&&!f.voice.held);
       f.voice.muted=false;f.voice.setPeer(true,400);
-      f.sample(400,0,-1,0);f.sample(1000,0,-1,0);assert(!f.voice.streaming);
+      f.sample(400,0,-1,0);f.sample(1000,0,-1,0);assert(f.voice.streaming==(reason==2));
     }
   }
   {

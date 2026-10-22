@@ -49,7 +49,7 @@ const char* requestTransportSwitch(TransportMode target,const char* source,const
   auto next=record;if(!next.begin(target,id,source))return "invalid_request";
   if(!save(next))return "storage_failed";
   if(leaveSetup)provLeave();
-  record=next;busyPublished=true;deviceStop();soundCancel();audioTick(false);
+  record=next;busyPublished=true;devicePause();soundCancel();audioTick(false);
   rebootAt=millis()+700;return nullptr;
 }
 
@@ -63,7 +63,7 @@ bool transportScheduleRestart(TransportMode mode,const char* source,const char* 
   auto next=record;next.previous=transportMode();next.mode=mode;next.phase=SwitchPhase::Pending;
   strcpy(next.request,id);strcpy(next.source,source);
   if(!save(next))return false;
-  record=next;hasChoice=true;busyPublished=true;deviceStop();soundCancel();audioTick(false);
+  record=next;hasChoice=true;busyPublished=true;devicePause();soundCancel();audioTick(false);
   rebootAt=millis()+700;return true;
 }
 bool transportCommit(const char* id){

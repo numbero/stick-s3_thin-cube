@@ -11,8 +11,9 @@ void deviceRegister(httpd_handle_t server);
 void deviceTick(uint32_t ms, bool sleeping, bool busy);
 bool deviceAuthorized(httpd_req_t* req);
 void deviceStop();
+void devicePause(); // transient power/transport interruption; keep pose eligible
 bool deviceStreaming();
-bool deviceCaptureRequested(); // includes prewarming and fresh pending starts
+bool deviceCaptureRequested(); // includes prewarming and pending pose/manual starts
 bool deviceVoicePreparing();
 bool deviceHeld();
 bool deviceWalkieKeysActive();

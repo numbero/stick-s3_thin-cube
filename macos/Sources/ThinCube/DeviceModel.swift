@@ -181,7 +181,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     private var lastStatus = Date.distantPast, lastHeartbeat = Date.distantPast
     private var sendingHeartbeat = false
     private var generation = UUID()
-    private var stopLocally = false
+    private var voiceGate = LocalVoiceGate()
     private var lastDiagnostics = Date.distantPast
     private var soundUpdateTask: Task<Void, Never>?
     private var pendingCalibration: (op: String, seq: UInt32, deadline: Date)?
@@ -244,7 +244,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             guard let self, self.activeBLE, self.connected else { return }; _ = self.receive(data)
         }
         discovery.ble.onAudio = { [weak self] data in
-            guard let self, self.activeBLE, self.connected, !self.stopLocally, !self.switching,
+            guard let self, self.activeBLE, self.connected, !self.voiceGate.blocksOutput(switching: self.switching, updating: self.updating),
                   let status = self.status, status.streaming, !status.muted, status.allowed,
                   let cookie = Data(hex: status.session) else { return }
             for frame in self.bleAudio.decodeFrames(data, session: cookie) { self.buffer.accept(frame); self.connectionDiagnostics.mark(.firstAudio, attempt: self.generation) }
@@ -402,7 +402,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         refreshRecoveryAddress()
         guard !target.host.isEmpty, transportIntent != nil || connectionMode.accepts(host: target.host) else { return nil }
         teardown(note: automatic ? "正在自动恢复连接…" : "正在连接…")
-        host = target.host; connecting = true; stopLocally = true; attemptIsAutomatic = automatic
+        host = target.host; connecting = true; voiceGate.waitForStandby(); attemptIsAutomatic = automatic
         let attempt = generation, selected = target
         connectionProgress.begin(attempt)
         connectionDiagnostics.begin(attempt: attempt, transport: selected.host.hasPrefix("ble://") ? "ble" : "wifi")
@@ -422,7 +422,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         do {
             activeBLE = selected.host.hasPrefix("ble://")
-            stopLocally = true; epoch = 0; ack = 0; keyStream = DeviceKeyStream(); gestureStream = DeviceGestureStream()
+            voiceGate.waitForStandby(); epoch = 0; ack = 0; keyStream = DeviceKeyStream(); gestureStream = DeviceGestureStream()
             lastStatus = Date(); lastHeartbeat = .distantPast
             prepareAudioInBackground(attempt: attempt)
             if activeBLE { base = nil; note = "正在连接蓝牙…"; try await discovery.ble.open(selected.host) }
@@ -480,7 +480,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             let socket = session.webSocketTask(with: request); websocket = socket; socket.resume()
             // Wait for a decoded control frame before reporting success. Gate
             // old streaming/held snapshots until the new peer is in standby.
-            stopLocally = true; epoch = 0; ack = 0; keyStream = DeviceKeyStream(); gestureStream = DeviceGestureStream(); lastStatus = Date(); lastHeartbeat = .distantPast
+            voiceGate.waitForStandby(); epoch = 0; ack = 0; keyStream = DeviceKeyStream(); gestureStream = DeviceGestureStream(); lastStatus = Date(); lastHeartbeat = .distantPast
             let id = generation
             reader = Task { [weak self] in
                 while !Task.isCancelled {
@@ -638,7 +638,9 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         guard cachedCredential != nil else { note = "请先完成配对再切换连接方式。"; return }
         let id = UUID().uuidString
         transportIntent = (id, desired, currentTransport, Date()); preferredTransport = desired; switching = true; transportPhase = "正在请求切换…"
-        stopLocally = true; keys.release(); buffer.setSession(nil); bleAudio.reset()
+        // switching already blocks output. Rejection can leave the device
+        // streaming, so it must not create a wait-for-standby stop latch.
+        keys.release(); buffer.setSession(nil); bleAudio.reset()
         do { try await sendControl(["op": "transport_switch", "epoch": epoch, "target": desired, "requestId": id]) }
         catch { connectionLost(note: "切换请求确认暂未收到，正在查找设备状态。") }
     }
@@ -746,7 +748,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             note = report.ok ? label + "校准成功并已保存。屏幕朝上平放后再倒立即可传音。" : label + "校准未通过，请按提示摆正并保持不动后重试；原校准保留。"
             pendingCalibration = nil; calibrationBusy = false
         }
-        if !next.streaming || next.muted || !next.allowed || updating || switching || stopLocally {
+        if !next.streaming || next.muted || !next.allowed || voiceGate.blocksOutput(switching: switching, updating: updating) {
             buffer.setSession(nil)
         } else { buffer.setSession(next.session) }
         if let edge = keyUpdate.edge {
@@ -783,7 +785,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 keyDiagnostics.record(source, detail + " · 已丢弃：" + (gestureBlock ?? "事件过期、未协商或上下文已改变"))
             }
         }
-        if stopLocally && !next.streaming { stopLocally = false }
+        voiceGate.observe(streaming: next.streaming)
         return true
     }
     private func shortcutBlock(_ status: DeviceStatus) -> String? {
@@ -791,7 +793,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if !connected || connecting { return "控制连接尚未确认" }
         if updating { return "固件升级中" }
         if switching { return "连接模式切换中" }
-        if stopLocally { return "已在 Mac 停止语音" }
+        if voiceGate.waitingForStandby { return "已在 Mac 停止语音" }
         if !status.allowed { return "语音输入未开启" }
         if status.muted { return "麦克风已静音" }
         if !status.streaming { return "设备未处于传音状态" }
@@ -839,7 +841,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
     }
     func command(_ op: String) async {
-        if op == "stop" { stopLocally = true; keys.release(); buffer.setSession(nil) }
+        if op == "stop" { voiceGate.waitForStandby(); keys.release(); buffer.setSession(nil) }
         guard connected, !switching else { return }
         do {
             // An immediate click after connection must establish the audio lease
@@ -869,7 +871,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
     }
     func apply(_ settings: [String: Any]) async {
-        if settings["muted"] as? Bool == true || settings["allowed"] as? Bool == false { stopLocally = true; keys.release(); buffer.setSession(nil) }
+        if settings["muted"] as? Bool == true || settings["allowed"] as? Bool == false { voiceGate.waitForStandby(); keys.release(); buffer.setSession(nil) }
         do { _ = try await json("api/settings", body: settings) } catch { note = error.localizedDescription }
     }
     func tapRequest(_ body: [String: Any]? = nil) async throws -> [String: Any] {
@@ -1188,7 +1190,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         websocket?.cancel(with: .goingAway, reason: nil); websocket = nil
         keys.release(); buffer.setSession(nil); bleAudio.reset(); receiver.stop(); bridge.stop(); connected = false; audioPrepared = false
         activeBLE = false; discovery.ble.close(); commitInFlight = false
-        status = nil; sendingHeartbeat = false; stopLocally = false
+        status = nil; sendingHeartbeat = false; voiceGate.reset()
         if !message.isEmpty { note = message }
     }
 }

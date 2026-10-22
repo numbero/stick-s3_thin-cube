@@ -40,14 +40,14 @@ int main(){
   {
     VoiceState v;v.allowed=v.peer=true;v.leaseAt=100;v.captureReady=false;
     assert(v.requestManual(false,100));assert(v.pendingManual&&!v.streaming);
-    v.tick(200);assert(!v.streaming);v.captureReady=true;v.tick(300);assert(v.streaming&&v.manual);
+    v.tick(200,true);assert(!v.streaming);v.captureReady=true;v.tick(300,true);assert(v.streaming&&v.manual);
     v.stop();v.captureReady=false;assert(v.requestManual(false,400));v.setPeer(false,401);
     assert(!v.pendingManual&&!v.streaming);
     v.setPeer(true,1000);assert(v.requestManual(false,1000));
-    for(unsigned ms=1200;ms<6000;ms+=200){v.setPeer(true,ms);v.tick(ms);}
-    v.setPeer(true,6000);v.tick(6000);assert(!v.pendingManual&&!v.streaming);
+    for(unsigned ms=1200;ms<6000;ms+=200){v.setPeer(true,ms);v.tick(ms,true);}
+    v.setPeer(true,6000);v.tick(6000,true);assert(!v.pendingManual&&!v.streaming);
     v.setPeer(true,7000);v.inverted=true;v.pendingGesture=true;
-    assert(v.requestManual(false,7000));v.setPose(false,false);v.captureReady=true;v.tick(7100);
+    assert(v.requestManual(false,7000));v.setPose(false,false);v.captureReady=true;v.tick(7100,true);
     assert(v.streaming&&v.manual&&!v.pendingGesture);
   }
   using D=DeepSleepPolicy::Decision;

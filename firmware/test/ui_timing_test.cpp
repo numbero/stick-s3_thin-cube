@@ -19,10 +19,10 @@ int main(){
     for(unsigned cycle=0;cycle<4;cycle++){
       const uint32_t now=100+cycle*100;
       controller.update(v,cycle%2?DevicePose::Landscape:DevicePose::FaceUp,false);
-      v.sleeping=true;v.tick(now);assert(!v.streaming);
+      v.sleeping=true;v.tick(now,true);assert(!v.streaming);
       const uint32_t wakeAt=now+1;
       v.sleeping=petIdleSleepDue(now,wakeAt,60,v.streaming,v.inverted,false);
-      controller.update(v,DevicePose::Inverted,false);v.tick(now);
+      controller.update(v,DevicePose::Inverted,false);v.tick(now,true);
       assert(!v.sleeping&&v.streaming&&v.inverted&&!v.manual);
     }
   }
