@@ -1,0 +1,19 @@
+esptool v5.4.0
+Serial port /dev/cu.usbmodem1401:
+NOTE: Pre-connection option "no-reset" was selected. Connection may fail if the chip is not in bootloader or flasher stub mode.
+Connecting...
+Connected to ESP32-S3 on /dev/cu.usbmodem1401:
+Chip type:          ESP32-S3-PICO-1 (LGA56) (revision v0.2)
+Features:           Wi-Fi, BT 5 (LE), Dual Core + LP Core, 240MHz, Embedded Flash 8MB (XMC), Embedded PSRAM 8MB (AP_3v3)
+Crystal frequency:  40MHz
+USB mode:           USB-Serial/JTAG
+MAC:                7c:e8:b1:e2:db:38
+
+Stub flasher is already running. No upload is necessary.
+Changing baud rate to 921600...
+Changed.
+
+Configuring flash size...
+Read 8388608 bytes from 0x00000000 in 48.5 seconds (1382.7 kbit/s) to 'firmware-backup/sticks3-factory-8MB-20261016-7ce8b1e2db38.bin.partial'.
+
+Staying in bootloader.

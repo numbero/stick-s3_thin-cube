@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "backup_kind": "factory_full_flash",
+  "factory_state_source": "User identified the connected device as brand new with factory firmware",
+  "backed_up_at": "2026-10-16T21:55:40+08:00",
+  "recorded_at": "2026-10-16T21:57:56+08:00",
+  "file": "sticks3-factory-8MB-20261016-7ce8b1e2db38.bin",
+  "size_bytes": 8388608,
+  "offset": "0x00000000",
+  "length": "0x00800000",
+  "sha256": "c9404bd91e0b2b0513bfe8b7dfe0a78b82b902033a2b3e426bee2149b539968e",
+  "serial_port": "/dev/cu.usbmodem1401",
+  "device": {
+    "chip": "ESP32-S3-PICO-1 (LGA56)",
+    "revision": "v0.2",
+    "mac": "7c:e8:b1:e2:db:38",
+    "flash_bytes": 8388608,
+    "flash_vendor": "XMC",
+    "flash_manufacturer_id": "0x20",
+    "flash_device_id": "0x4017",
+    "psram_bytes": 8388608,
+    "usb_mode": "USB-Serial/JTAG"
+  },
+  "security": {
+    "secure_boot": false,
+    "flash_encryption": false,
+    "spi_boot_crypt_count": "0x0"
+  },
+  "verification": {
+    "full_flash_reads": 2,
+    "byte_for_byte_equal": true,
+    "matching_bytes": 8388608,
+    "partition_table_offset": "0x8000",
+    "partition_table_parsed_and_verified": true,
+    "partition_table_tool": "ESP-IDF gen_esp32part.py 1.5"
+  },
+  "partitions": [
+    {
+      "name": "nvs",
+      "type": 1,
+      "subtype": 2,
+      "offset": "0x9000",
+      "size_bytes": 24576
+    },
+    {
+      "name": "phy_init",
+      "type": 1,
+      "subtype": 1,
+      "offset": "0xf000",
+      "size_bytes": 4096
+    },
+    {
+      "name": "factory",
+      "type": 0,
+      "subtype": 0,
+      "offset": "0x10000",
+      "size_bytes": 5443584
+    },
+    {
+      "name": "sys",
+      "type": 1,
+      "subtype": 129,
+      "offset": "0x541000",
+      "size_bytes": 1048576
+    },
+    {
+      "name": "vfs",
+      "type": 1,
+      "subtype": 129,
+      "offset": "0x641000",
+      "size_bytes": 1826816
+    }
+  ],
+  "tool": "esptool v5.4.0",
+  "baud": 921600,
+  "logs": [
+    "sticks3-factory-8MB-20261016-7ce8b1e2db38.read1.log",
+    "sticks3-factory-8MB-20261016-7ce8b1e2db38.read2.log",
+    "sticks3-factory-8MB-20261016-7ce8b1e2db38.security.log"
+  ],
+  "device_flash_writes_performed": false,
+  "device_reset_after_backup": true,
+  "scope": "Entire SPI Flash, including bootloader, partition table, applications, NVS and filesystems; eFuse and RAM are not part of the image"
+}

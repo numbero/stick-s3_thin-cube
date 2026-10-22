@@ -1337,6 +1337,7 @@ void uiDraw(uint32_t ms){
   pixelText(caption,PAD,live?201:209,UIStatus::voiceIcon(deviceVoiceStatus(ms))==UIStatus::VoiceIcon::Warning?C::warn:deviceMuted()?C::err:C::ok);
   rule(224);
   pixelText(live?"A:KEY":asleep?"A:WAKE":light.playing()?"A:TEASE":"A:PLAY",PAD,230,C::ink);
-  pixelText("B:MUTE",W-PAD-36,230,C::ink);
+  const char* bHint=deviceWalkieKeysActive()?"B:KEY":"B:MUTE";
+  pixelText(bHint,W-PAD-int(strlen(bHint))*6,230,C::ink);
   present(ms);
 }
