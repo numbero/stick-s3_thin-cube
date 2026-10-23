@@ -2,7 +2,7 @@
 
 ## English OTA notices v0.4.70 (2026-10-24)
 
-Device boot-check and completion screens now use English Font0 text: `SELF CHECK / DO NOT RESTART` and `UPDATE COMPLETE / SAFE TO RESTART`. The Chinese glyph subset was removed; phone instructions now reference the matching English completion text. Release/Base builds, actual-function viewport previews, and final-image phone checks passed. USB installation/hash verification passed, preserving the v0.4.69 fallback and settings. The Mac observed v0.4.70 first checking, then verified with upgrade actions enabled; no USB monitor/reset interrupted the trial. Details are recorded in [the v0.4.70 notes](phone-hotspot-ota-v0.4.70.md).
+Device boot-check and completion screens now use English Font0 text: `SELF CHECK / DO NOT RESTART` and `UPDATE COMPLETE / SAFE TO RESTART`. The Chinese glyph subset was removed; phone instructions now reference the matching English completion text. Release/Base builds, actual-function viewport previews, and final-image phone checks passed. USB installation/hash verification passed, preserving the v0.4.69 fallback and settings. The Mac observed v0.4.70 first checking, then verified with upgrade actions enabled; no USB monitor/reset interrupted the trial. The user confirmed both display stages appeared normally, completing on-device boot-notice visual acceptance. Details are recorded in [the v0.4.70 notes](phone-hotspot-ota-v0.4.70.md).
 
 ## OTA 自检与结果提示 v0.4.69（2026-10-24）
 

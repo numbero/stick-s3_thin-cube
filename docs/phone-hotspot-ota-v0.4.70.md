@@ -12,7 +12,9 @@ The 15-character Chinese bitmap subset and its unused header have been removed. 
 - The actual render function and original M5GFX Font0 were rendered offline for checking, waiting beyond 60 seconds, and completion. All primitives fit the 135×240 viewport; all notice strings are ASCII. Preview images and the reproducible host script are in `artifacts/phone-ota-v0.4.70/`. These are offline images, not device captures.
 - The final v0.4.70 image passed the phone page identity, image, digest, upload ACK, pending result, and cancellation checks. The unchanged backend and button policy passed the v0.4.69 host/sanitizer checks documented in [v0.4.69](phone-hotspot-ota-v0.4.69.md).
 - USB installed with device MAC, both original image hashes, and both VALID selector records verified first. OTA/NVS backups were saved. Only app0 and its seq=7 selector were written; both writes passed esptool hash verification. The already-confirmed app1/v0.4.69 fallback and settings were retained.
-- No serial connection was opened during the trial. The installed Mac app first observed v0.4.70 with startup checking and upgrade actions disabled, then observed the same version after >60 seconds with checking gone and actions enabled (`bootVerified=true`). Evidence: `usb-flash/mac-boot-check-observations.json`. The device completion page is retained for the user; visual acceptance remains pending. No post-trial ROM metadata read or additional reset was performed.
+- No serial connection was opened during the trial. The installed Mac app first observed v0.4.70 with startup checking and upgrade actions disabled, then observed the same version after >60 seconds with checking gone and actions enabled (`bootVerified=true`). Evidence: `usb-flash/mac-boot-check-observations.json`. The device completion page was retained for visual review. No post-trial ROM metadata read or additional reset was performed.
+
+- The user confirmed that both the amber boot-check stage and the green completion stage displayed normally. Boot-notice visual acceptance is complete; this confirmation does not represent another end-to-end iPhone upload test.
 
 ## Firmware
 
