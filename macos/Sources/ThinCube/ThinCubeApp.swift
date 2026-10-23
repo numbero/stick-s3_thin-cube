@@ -28,7 +28,7 @@ private struct ThinCubeMenu: View {
     @ObservedObject var presentation: AppPresentation
     var body: some View {
         Text(model.name)
-        Text(model.pairingRequired ? "等待设备配对" : !model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
+        Text(model.phoneUpgradeActive ? "手机升级 · 等待重新连接" : model.pairingRequired ? "等待设备配对" : !model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
         if model.pairingRequired {
             Button("完成配对…") { presentation.showMainWindow(pane: .device) }
         }
@@ -132,7 +132,7 @@ struct MainView: View {
             }
             .toolbar {
                 ToolbarItem(placement: .status) {
-                    Label(model.pairingRequired ? "等待配对" : model.connected ? "在线 · " + model.name : (model.connecting ? "连接中" : (model.reconnecting ? "等待自动重连" : "未连接")),
+                    Label(model.phoneUpgradeActive ? "手机升级 · 等待重新连接" : model.pairingRequired ? "等待配对" : model.connected ? "在线 · " + model.name : (model.connecting ? "连接中" : (model.reconnecting ? "等待自动重连" : "未连接")),
                           systemImage: model.connected ? (model.currentTransport == "ble" ? "antenna.radiowaves.left.and.right" : "wifi") : "wifi.slash")
                         .font(.system(size: 11.5)).foregroundStyle(model.connected ? .green : .secondary)
                 }
@@ -330,6 +330,7 @@ struct MainView: View {
                         HelpParagraph("首次配对", "先连接信道，再由弹窗引导输入设备 PAIR PIN。蓝牙无需系统验证码；若 macOS 显示配对确认，请点击配对。有效配对会自动复用。")
                         HelpParagraph("设备列表", "已发现表示当前扫描或局域网发现的设备；上次选择但暂未发现属于历史记录。系统忽略蓝牙设备后，仍在广播的设备仍可被发现，ThinCube 的应用授权也会保留。")
                         HelpParagraph("首次连接", "设备首次开机可选 A 蓝牙或 B Wi-Fi 热点。蓝牙无需先配网；选择热点时，按屏幕密码连接 ThinCube-Setup，在 192.168.4.1 配置网络，再在同一局域网配对。")
+                        HelpParagraph("手机升级入口", "按住设备正面 A 键，再单击电源/复位键，看到手机升级提示后松开 A。也可连接本机后，在“固件”页点击“用手机升级…”。设备会临时开启无需 Wi-Fi 密码的升级热点；网页输入屏幕上的 6 位升级码，选择固件后按设备 A 键确认。配对、网络和校准会保留。")
                         HelpParagraph("恢复出厂设置", "设备固件 v0.4.38 起，按住 B，再单击电源/复位键，松开 B 后进入恢复出厂确认页。A 确认清空全部设备配置，包括 Wi-Fi、蓝牙绑定、应用配对、校准、亮度和声音，重启后重新选择连接方式；B 取消并保留原配置。较早固件的此入口仅重设网络和应用授权。")
                         HelpParagraph("设备按键", "对讲机内 B 为自定义快捷键，长按不切换连接。其他模式短按 B 静音，长按 B 3 秒并松开切换模式。所选模式会保存，未连接也不会回退。空闲时同时按住 A+B 3 秒并松开可重新配对。")
                         HelpParagraph("电量与休眠", "红色 LOW 表示电压持续偏低，请及时充电。插拔电源后短暂显示 --% 是重新采样。" + model.sleepPolicyDescription)
@@ -487,7 +488,11 @@ struct MainView: View {
                         ProgressView("正在检查设备启动状态…")
                     }
                 }
-                if model.updating {
+                if model.requestingPhoneUpgrade {
+                    Text("正在停止语音并请求进入手机升级…").font(.callout).foregroundStyle(.secondary)
+                } else if model.phoneUpgradeActive {
+                    Text("手机升级期间，Mac 已暂停连接恢复。").foregroundStyle(.secondary)
+                } else if model.updating {
                     ProgressView(value: model.updateProgress)
                     Text("正在升级，请保持设备供电与网络连接。").font(.callout).foregroundStyle(.secondary)
                 } else if model.switching {
@@ -498,7 +503,7 @@ struct MainView: View {
                     Text("连接设备后可升级固件。").foregroundStyle(.secondary)
                     Button("连接设备") { model.pane = .device }
                 } else if model.currentTransport == "ble" {
-                    Text("固件升级需要 Wi-Fi 连接。").foregroundStyle(.secondary)
+                    Text("从 Mac 上传固件需要 Wi-Fi 连接，也可在下方进入手机升级。").foregroundStyle(.secondary)
                     Button("切换至 Wi-Fi") { Task { await model.selectConnectionMode(.wifi) } }
                         .disabled(!model.canSwitchTransport)
                 } else {
@@ -510,6 +515,45 @@ struct MainView: View {
                     HelpParagraph("升级条件", "通过 Wi-Fi 选择 ThinCube 应用固件 .bin，无需 USB。设备电量须至少 50%，且当前固件的启动健康检查已通过。")
                     HelpParagraph("设备确认", "开始前会停止语音并释放快捷键。在设备上按 A 确认升级，按 B 取消；升级期间保持供电与网络连接。")
                     HelpParagraph("校验与恢复", "升级会校验型号、尺寸及文件完整性，写入备用应用槽。新版本稳定运行 60 秒后确认健康；设备重启后自动恢复连接。")
+                }
+            }
+            Section {
+                if model.requestingPhoneUpgrade {
+                    ProgressView("正在请求设备开启升级热点…")
+                } else if model.phoneUpgradeActive {
+                    if model.phoneUpgradeSession.phase == .unconfirmed {
+                        Label("设备响应未确认", systemImage: "exclamationmark.circle")
+                        Text("请查看设备屏幕；若已开启热点，请按屏幕提示用手机升级。确认设备退出热点后再重新连接。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    } else {
+                        Label("设备已接受手机升级请求", systemImage: "iphone.and.arrow.forward")
+                        Text("设备将重启进入临时热点。手机先下载应用固件 .bin，再连接设备屏幕显示的热点，无需 Wi-Fi 密码。用 Safari 或 Chrome 打开 http://192.168.4.1/，输入屏幕上的 6 位升级码，选择固件后按设备 A 键确认。")
+                            .font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text("升级或退出热点后，设备恢复原连接方式；此时可重新连接 Mac。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Button("退出热点后重新连接") { Task { await model.reconnectAfterPhoneUpgrade() } }
+                        Button("结束提示") { model.endPhoneUpgrade() }
+                    }
+                } else {
+                    Button("用手机升级…") { Task { await model.enterPhoneUpgrade() } }
+                        .disabled(!model.canEnterPhoneUpgrade)
+                    Text("通过当前蓝牙或 Wi-Fi 连接通知设备开启临时热点，并暂时断开 Mac。手机连接热点无需 Wi-Fi 密码，网页输入屏幕上的 6 位升级码，选择固件后按设备 A 键确认。配对、网络和校准设置会保留。")
+                        .font(.callout).foregroundStyle(.secondary)
+                    if model.connected && !model.supportsPhoneUpgrade {
+                        Text("当前设备固件尚不支持此入口，请先通过 Mac 的 Wi-Fi 升级或 USB 安装新版固件。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                Text("只用手机时：按住设备正面 A，再单击电源/复位键，看到“手机升级”提示后松开 A。")
+                    .font(.callout).foregroundStyle(.secondary)
+            } header: {
+                HelpSectionHeader("手机热点升级", helpTitle: "手机升级帮助") {
+                    HelpParagraph("进入模式", "设备按住正面 A 开机或复位；或通过当前已配对的蓝牙、Wi-Fi 连接点击“用手机升级…”。启动健康检查完成后才能从 Mac 发起。")
+                    HelpParagraph("手机操作", "先把 ThinCube 应用固件 .bin 下载到手机，再连接设备显示的临时热点，无需 Wi-Fi 密码。用 Safari 或 Chrome 访问 192.168.4.1，在网页输入设备屏幕上的 6 位升级码。选择固件后，按设备 A 键确认写入；保持设备供电，页面完成前不要断开热点。")
+                    HelpParagraph("退出与恢复", "等待上传时可按设备 B 退出；上传中按 B 会先中止。闲置五分钟自动退出，升级完成后恢复原连接方式。Mac 会暂停重连，确认设备退出热点后点击“退出热点后重新连接”。“结束提示”后也可从设备页手动连接。")
+                    HelpParagraph("恢复出厂入口", "按住 B 开机或复位仍进入恢复出厂确认，不用于手机升级。首次安装、bootloader 或分区表变更需要 USB。")
                 }
             }
         }.formStyle(.grouped)

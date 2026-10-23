@@ -11,6 +11,7 @@
 #include "wifi_prov.h"
 #include "connection_timing.h"
 #include "ota.h"
+#include "maintenance.h"
 #include "device.h"
 #include "audio_input.h"
 #include "power_status.h"
@@ -88,10 +89,19 @@ void setup(){
   cfg.internal_imu=false;
   cfg.external_imu=false;
   M5.begin(cfg);
+  // Latch the boot chord before PM1's retained inactivity deadline can turn
+  // the device off. A+B must never be reinterpreted as a B-only reset.
+  M5.update();
+  const bool bootA=M5.BtnA.isPressed(),bootB=M5.BtnB.isPressed();
+  otaBootBegin();
+  const bool bootTrial=otaBootNotice()==OtaBootNotice::Checking;
+  // A key held across the OTA restart must not divert the pending image into
+  // a confirmation page whose input is owned by the mandatory boot check.
+  const bool bootFactoryReset=bootB&&!bootA&&!bootTrial;
   connectionBootMark(ConnectionStage::Peripherals);
   Serial.begin(115200);
   connectionTimingObserveWiFi();
-  deepSleepBoot();
+  deepSleepBoot(bootA||bootB);
   devicePowerLedBegin();
   if(!M5.Display.width()){delay(100);M5.Display.init();}
   delay(200);
@@ -102,6 +112,7 @@ void setup(){
   M5.Display.setBrightness(128);   // 屏幕常亮太费电，先给 50%
   M5.Display.fillScreen(TFT_BLACK);
   M5.Display.setFont(&fonts::FreeSans9pt7b);
+  const bool bootMaintenanceRequested=!bootTrial&&maintenanceCaptureBoot(bootA,bootB);
 
   /* IMU 显式启用一次，并在串口报告状态（不启用则姿态输入整条链路都不工作） */
   const bool imuOK=imuBegin();
@@ -112,13 +123,14 @@ void setup(){
   deepSleepBegin();
 
   uiBegin();
+  maintenancePrepareBoot();
   transportBegin();
   M5.update();
-  const bool bootFactoryReset=M5.BtnB.isPressed();
   if(!bootFactoryReset&&!connectionSetupResetPending())provPrepareChange();
   deviceBegin();
   connectionBootMark(ConnectionStage::Device);
-  connectionSetupBegin(bootFactoryReset);
+  maintenanceBegin(bootMaintenanceRequested,bootFactoryReset||connectionSetupResetPending());
+  if(!maintenanceActive())connectionSetupBegin(bootFactoryReset);
   M5.Display.setBrightness(deviceBrightness());
   motionBegin();
   uiLog("boot ok");
@@ -130,7 +142,9 @@ void setup(){
   M5.update();
   static char ssid[33], pass[65];
   const bool haveCreds = provLoadCreds(ssid, sizeof(ssid), pass, sizeof(pass));
-  if(connectionSetupActive()){
+  if(maintenanceActive()){
+    uiLog("phone firmware update");
+  } else if(connectionSetupActive()){
     uiLog("connection setup");
   } else if(provResumeChange()){
     uiLog("validating network");
@@ -154,18 +168,19 @@ void loop(){
   M5.update();
   const uint32_t ms = millis();
   powerTick(ms);
-  if(transportMode()==TransportMode::BLE)bleTick(ms);
+  if(!maintenanceActive()&&transportMode()==TransportMode::BLE)bleTick(ms);
   transportTick(ms);
-  provTick();               /* 配网状态机（未进配网时是 no-op） */
+  if(!maintenanceActive())provTick(); /* 配网和临时升级各自独占端口 80 */
+  maintenanceTick(ms);
   if(!connectionSetupActive())otaTick(ms);
   imuPoll(ms);
   uiTick(ms);
 
   /* 稳定运行 60 秒才认账，放弃回滚窗口（docs/wifi-prov-ota.md §3.4） */
   static bool validMarked = false;
-  if (!validMarked && ms > 60000 && uiHealthy() && deviceHealthy() && motionDiag().updates>0){ validMarked=otaMarkValid(); }
+  if (!validMarked && ms > 60000 && uiHealthy() && deviceBootHealthy() && motionDiag().updates>0){ validMarked=otaMarkValid(); }
   if (!validMarked) otaRollbackUnhealthy();
-  deviceTick(ms,petState()==PET_SLEEP,connectionSetupActive()||devicePairWindow()||provActive()||otaActive());
+  deviceTick(ms,petState()==PET_SLEEP,connectionSetupActive()||devicePairWindow()||provActive()||otaActive()||otaBootNotice()!=OtaBootNotice::None||maintenanceActive()||maintenancePending());
   uiSetOrientation(deviceDisplayRotation(),ms);
   uiPowerTick(millis(),validMarked);
   uiStoriesTick(millis());

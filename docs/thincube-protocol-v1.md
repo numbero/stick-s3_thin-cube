@@ -15,6 +15,8 @@
 | POST `/ota/begin` | `{ver,size,sha256}`；返回单次 token，设备等待 A 确认 |
 | GET `/ota/status` | stage、pct、err |
 | POST `/ota` | 原始 app.bin；额外头 `X-ThinCube-OTA: token`，Content-Length 必须精确匹配 |
+| POST `/ota/cancel` | 请求安全取消；进入 verifying/done 后返回 409，不能承诺撤回提交 |
+| POST `/api/maintenance` | v0.4.65：已配对控制端请求 `{requestId}`，接受后一次性重启进入手机升级热点；保留原连接配置 |
 
 配网热点是独立服务：`/` 网页、GET `/scan`、GET `/status`、POST `/save` `{ssid,password}`；DNS 将域名指向 192.168.4.1。热点使用每台设备独立的 8 位随机数字密码，保存在 NVS，v0.3.1 自动迁移旧密码。Wi-Fi 凭据以单个 NVS blob 写入，避免断电造成新 SSID 与旧密码错配。
 
@@ -69,6 +71,23 @@ Mac 使用固定 64 帧槽、约 40 ms 初始预缓冲、序号去重与重排�
 状态：idle → confirm → ready → receiving → verifying → done；失败进入 failed，B 返回日常。确认与等待上传各 30 秒；上传总时限 120 秒，连续无数据 10 秒终止。HTTP worker 独占 OTA 写入句柄，主循环只发送取消信号。物理确认及首块身份校验通过之前不擦除备用槽。精确长度、SHA-256、esp_ota_end 验证通过后才设置启动分区。
 
 启动健康确认要求至少运行 60 秒：屏幕缓冲正常、IMU 已更新、运行时资源创建成功、必要时已经收到麦克风帧；持久静音或完全关闭采集时不强制为检查开启麦克风。90 秒仍 pending 则请求无效镜像回滚。依赖设备安装具备 rollback 支持的 bootloader 与本项目 A/B 分区表；app OTA 不能修复不兼容 bootloader 或分区布局。
+
+v0.4.65 用强 C 符号 `verifyRollbackLater() = true` 覆盖 Arduino 2.0.17 默认的初始化早确认路径，真正将 pending 状态保留至应用自检。启动健康区分本地资源与外部网络：离线路由器不直接判失败；已关联 Wi-Fi 则要求本地 HTTP 服务完成注册。维护/配网门户及首次连接选择有各自资源条件。确认采用每会话 generation，先消费已有按压与松键，再接受新的 A 点击；声明版本必须与镜像描述一致。取消与接收→校验边界、超时与开始接收边界在同一锁内仲裁，主循环时间戳落后 HTTP 更新时不会下溢误判超时。
+
+## v0.4.65 手机热点升级
+
+正常 HTTP/BLE info 与状态提供 `maintenanceOTA:true`。已授权 Mac 经 `POST /api/maintenance {requestId:"UUID"}` 或 BLE `{op:"maintenance",requestId:"UUID",rid}` 请求，成功返回 `{accepted:true}`；同一待执行 requestId 幂等。错误包括 busy、boot_unverified、storage_failed、invalid_request。设备约 700 ms 后重启，仅消费一次 RAM/NVS 升级意图，不改原永久连接方式。设备按住正面 A 开机、约两秒后松开也可独立进入；启动 A+B 不进入升级或恢复出厂，B-only 保留恢复出厂确认。
+
+维护态独占 AP-only + DNS + HTTP 80，SSID `ThinCube-Update-xxxxxx`；v0.4.66 起热点无需 Wi-Fi 密码，六位升级码及临时 token 每次重新生成；不注册普通 `/api/settings`、配对或 `/control`。接口：
+
+| 请求 | 内容 |
+|---|---|
+| GET `/` | 完全离线的手机升级页面，内置 SHA-256，支持原始 File/Blob 上传 |
+| GET `/maintenance/info` | device=`ThinCube-StickS3-v1`、name、version、level（电量）、maxSize、stage、err、ready |
+| POST `/maintenance/session` | JSON `{code:"屏幕六位码"}`；返回 RAM token，五次错码后退避 30 秒 |
+| `/ota/begin`、`/ota/status`、`/ota`、`/ota/cancel` | 维护态只认 `X-ThinCube-Maintenance: token`；上传仍额外携带单次 `X-ThinCube-OTA` |
+
+token 不写 NVS、不替换 Mac key，退出/重启失效。页面先读镜像型号/版本并本地算摘要；发送进度与设备写入不同，只有上传最终 HTTP 200 且 `{ok:true}` 才报告写入校验成功，断线后看到 done 也不代替回包证明。接收中的同一 HTTP worker 不能并行响应状态轮询；设备屏幕显示实际写入进度。五分钟无有效操作退出，OTA 保护阶段不因闲置退出；取消只发信号，worker 安全收尾后才能退出。退出及成功重启恢复原 BLE/STA。细节见[实施说明](phone-hotspot-ota-v0.4.65.md)。
 
 v0.3.8 增加 `pose=landscape`，仍为可选字符串字段。横置稳定确认 160 ms，结束姿态语音并释放快捷键，保留 Mac 手动会话；横屏 A 用于本地探索，不产生快捷键边沿。显示四方向独立以 90 ms 确认，平放保留最近方向。配网、PIN 配对和 OTA 强制使用完整竖屏布局，不进入探索玩法。
 

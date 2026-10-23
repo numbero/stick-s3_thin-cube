@@ -16,6 +16,7 @@ const char* provApPass();
 void      provTick();                  /* 主循环里调：DNS 应答 + 验密状态机 */
 void      provRetry();                 /* FAIL 后重来：清计数回 WAIT（BtnA） */
 bool      provActive();
+bool      provServiceHealthy();        /* local portal or credential-verification resources */
 ProvStage provStage();
 const char* provStageName(ProvStage s);
 const char* provTargetSsid();          /* 手机提交的目标 SSID（空 = 还没提交） */

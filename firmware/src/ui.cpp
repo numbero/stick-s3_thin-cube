@@ -8,6 +8,11 @@
 #include "motion.h"
 #include "wifi_prov.h"
 #include "ota.h"
+#include "ota_confirmation_buttons.h"
+#include "ota_boot_notice_buttons.h"
+
+extern const char* firmwareVersion();
+#include "maintenance.h"
 #include "device.h"
 #include "display_motion.h"
 #include "landscape_games.h"
@@ -36,6 +41,7 @@
 
 namespace {
 void goWake(const char* why);
+bool bootNoticeActive(){return otaBootNotice()!=OtaBootNotice::None;}
 LGFX_Sprite canvas(&M5.Display);
 LGFX_Sprite rotatedCanvas(&M5.Display);
 RotationTransition rotation;
@@ -360,8 +366,8 @@ uint8_t uiActualBrightness(){return M5.Display.getBrightness();}
 uint32_t uiIdleAgeMs(uint32_t ms){return idlePower.elapsed(ms);}
 void uiPowerActivity(){idlePower.activity(millis());}
 void uiSetOrientation(uint8_t requested,uint32_t ms){
-  if(powerCalibrationOwnsUI())requested=0;
-  const bool critical=connectionSetupActive()||provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
+  if(powerCalibrationOwnsUI()||bootNoticeActive())requested=0;
+  const bool critical=bootNoticeActive()||connectionSetupActive()||provActive()||otaActive()||maintenanceActive()||maintenancePending()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(critical){games.cancel();wordsGamePlayed=wordsCaught=false;}
   else if(games.active())return;
   if(critical)requested=requested==2?2:0;
@@ -372,7 +378,7 @@ void uiSetOrientation(uint8_t requested,uint32_t ms){
   if(!rotatedCanvas.getBuffer()||critical)rotation.active=false;
 }
 bool uiRotationActive(){return rotation.active;}
-bool uiOrientationLocked(){return games.active()||light.locksOrientation();}
+bool uiOrientationLocked(){return bootNoticeActive()||games.active()||light.locksOrientation();}
 void uiReportTiming(){
   Serial.printf("[render] frames %u mean %uus max %uus rotation_frames %u rotation_max %uus skipped %u\n",unsigned(frameTiming.count),unsigned(frameTiming.count?frameTiming.totalUs/frameTiming.count:0),unsigned(frameTiming.maxUs),unsigned(frameTiming.rotatingCount),unsigned(frameTiming.rotatingMaxUs),unsigned(frameTiming.skipped));
   frameTiming=FrameTiming{};
@@ -405,10 +411,10 @@ void uiUsbDebug(){
       const bool accepted=words.preview(event,!thinking,now,gate);
       Serial.printf("[words] preview %s %s\n",command+6,accepted?"accepted":"unavailable: device busy");continue;
     }
-    if(!strcmp(command,"debug")){if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy())s_debug=!s_debug;continue;}
+    if(!strcmp(command,"debug")){if(!bootNoticeActive()&&!games.active()&&!provActive()&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy())s_debug=!s_debug;continue;}
     const auto requested=!strncmp(command,"story ",6)?ClawdStory::demoCommand(command+6):ClawdStory::Id::None;
     if(ClawdStory::valid(requested)){
-      if(!games.active()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy()){
+      if(!bootNoticeActive()&&!games.active()&&!provActive()&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!devicePairWindow()&&!deviceStreaming()&&!transportBusy()){
         s_debug=true;idlePower.activity(millis());goWake("story demo");storyDemoRequest=requested;storyDemoRequestedAt=millis();
         Serial.printf("[story] preview requested %s\n",ClawdStory::name(storyDemoRequest));
       }else Serial.println("[story] preview unavailable: device busy");
@@ -416,7 +422,7 @@ void uiUsbDebug(){
     }
     if(!strcmp(command,"story stop")){storyDemoRequest=ClawdStory::Id::None;stories.cancel(esp_random());s_debug=false;continue;}
     if(strcmp(command,"screen"))continue;
-  if(otaActive()||(devicePairWindow()&&!connectionSetupActive()&&!provActive())||transportBusy()||deviceStreaming()||rotation.active||!uiHealthy()){Serial.println("TCFB unavailable: idle stable screen only");continue;}
+  if(otaActive()||maintenanceActive()||maintenancePending()||(devicePairWindow()&&!connectionSetupActive()&&!provActive()&&!bootNoticeActive())||transportBusy()||deviceStreaming()||rotation.active||!uiHealthy()){Serial.println("TCFB unavailable: idle stable screen only");continue;}
     // Serial frame export can take longer than the local capture queue. Do not
     // export in a live session; pause only local capture until the next tick.
     audioTick(false);
@@ -563,23 +569,31 @@ void tickProv(){
 
 /* OTA 期间：A 确认 / B 取消，失败后 B 回主界面；不睡不切页 */
 void tickOta(){
+  static OtaConfirmationButtons buttons;
+  const uint32_t generation=otaSessionGeneration();
   const OtaStage st = otaStage();
+  const bool stable=generation==otaSessionGeneration();
   petSetState(st == OTA_DONE ? PET_EXCITED : st == OTA_FAIL ? PET_UPSET : PET_IDLE);
   if (st == OTA_CONFIRM){
-    if (M5.BtnA.wasClicked()) otaConfirm();
-    if (M5.BtnB.wasClicked()) otaCancel();
-  } else if (st == OTA_READY || st == OTA_RECV){
-    if (M5.BtnB.wasClicked()) otaCancel();
-  } else if (st == OTA_FAIL){
-    if (M5.BtnB.wasClicked()) otaDismiss();
+    const auto action=buttons.update(generation,stable,M5.BtnA.isPressed(),M5.BtnB.isPressed(),
+      M5.BtnA.wasClicked(),M5.BtnB.wasClicked());
+    if(action==OtaConfirmationButtons::Action::Cancel)otaCancel();
+    else if(action==OtaConfirmationButtons::Action::Confirm)otaConfirm(generation);
+  } else {
+    buttons.reset();
+    if (st == OTA_READY || st == OTA_RECV){
+      if (M5.BtnB.wasClicked()) otaCancel();
+    } else if (st == OTA_FAIL){
+      if (M5.BtnB.wasClicked()) otaDismiss();
+    }
   }
 }
 }
 
-bool uiButtonAForVoice(){return M5.BtnA.isPressed()&&!wakeAConsumed&&!gestures.suppressA&&!games.active()&&!gameButton.blocked;}
+bool uiButtonAForVoice(){return !bootNoticeActive()&&!maintenanceActive()&&!maintenancePending()&&M5.BtnA.isPressed()&&!wakeAConsumed&&!gestures.suppressA&&!games.active()&&!gameButton.blocked;}
 bool uiLandscapeActive(){return games.active();}
 
-void uiWakeForVoice(){ faceDownRest.overrideWake();idlePower.activity(millis());goWake("Mac voice start"); }
+void uiWakeForVoice(){ if(bootNoticeActive())return;faceDownRest.overrideWake();idlePower.activity(millis());goWake("Mac voice start"); }
 
 void uiTick(uint32_t ms){
   if(deviceStreaming())s_debug=false;
@@ -587,6 +601,26 @@ void uiTick(uint32_t ms){
   s_chgShown = powerCharging();
   // Keep sensor acquisition and diagnostics alive while setup/OTA own the UI.
   const MotionEv ev = motionPoll(ms);
+  // A new admitted maintenance operation can replace an acknowledged healthy
+  // boot result. Checking itself always owns input and display until IDF VALID.
+  if(otaBootNotice()==OtaBootNotice::Complete&&(otaActive()||maintenanceActive()||maintenancePending()||transportBusy()))otaBootDismiss();
+  static OtaBootNoticeButtons bootButtons;
+  if(bootNoticeActive()){
+    faceDownRest.cancel();games.cancel();s_debug=false;standby=false;screenOff=false;
+    deepSleepCancel();idlePower.activity(ms);
+    storyButton=storyMotion=storyStrongMotion=storyPoked=storyPortrait=false;
+    storyDemoRequest=ClawdStory::Id::None;
+    gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);
+    gameButton.update(ms,M5.BtnA.isPressed(),false,false,false,true);
+    wakeAConsumed=true;
+    if(bootButtons.update(otaBootNotice()==OtaBootNotice::Complete,
+        M5.BtnA.isPressed(),M5.BtnB.isPressed(),M5.BtnA.wasClicked(),M5.BtnB.wasClicked())){
+      otaBootDismiss();idlePower.activity(ms);
+      Serial.println("[ota-ui] completion acknowledged");
+    }
+    return;
+  }
+  bootButtons.reset();
   if(powerCalibrationOwnsUI()){
     faceDownRest.cancel();games.cancel();s_debug=false;standby=false;
     if(powerCalibrationRunning()&&(motionActivityDetected()||M5.BtnA.isPressed()||M5.BtnB.isPressed()))powerCalibrationCancel(7);
@@ -604,7 +638,7 @@ void uiTick(uint32_t ms){
     standby=false;
     if(petState()==PET_SLEEP&&(button||(!faceDownRest.active&&devicePose()!=DevicePose::FaceDown)))goWake(button?"button":"motion");
   }
-  const bool special=connectionSetupActive()||provActive()||otaActive()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
+  const bool special=connectionSetupActive()||provActive()||otaActive()||maintenanceActive()||maintenancePending()||devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady||s_debug;
   if(special)games.cancel();
   const auto restAction=faceDownRest.update(ms,devicePose(),devicePoseCandidate(),motionActivityHealthy(ms),
     special||games.active()||deviceStreaming()||uiRotationActive(),motionActivityDetected(),button);
@@ -630,6 +664,12 @@ void uiTick(uint32_t ms){
     tickProv();return;
   }
   if (otaActive()){ gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),false,false,true);gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);tickOta(); return; }
+  if(maintenanceActive()||maintenancePending()){
+    gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),false,false,true);
+    gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),false,false,false);
+    if(M5.BtnB.wasClicked())maintenanceExit();
+    return;
+  }
 
   const auto gesture=gestures.update(ms,M5.BtnA.isPressed(),M5.BtnB.isPressed(),M5.BtnB.wasClicked(),!transportBusy(),!deviceStreaming(),deviceWalkieKeysActive());
   // A alone in idle mode opens diagnostics; B/combo and live shortcuts retain priority.
@@ -753,7 +793,7 @@ void uiStoriesTick(uint32_t ms){
   const bool changing=known&&(lastCharging!=s_chgShown||lastState!=petState());
   const bool connectionChanged=known&&lastConnected!=connected;
   const bool disconnected=known&&lastConnected&&!connected;
-  const bool busy=connectionSetupActive()||provActive()||otaActive()||transportBusy()||devicePairWindow()||games.active()||
+  const bool busy=bootNoticeActive()||connectionSetupActive()||provActive()||otaActive()||maintenanceActive()||maintenancePending()||transportBusy()||devicePairWindow()||games.active()||
     connectionSetupActive()||deviceStreaming()||deviceHeld()||uiRotationActive()||gestures.switchReady||gestures.comboReady||
     (transportHintUntil&&int32_t(transportHintUntil-ms)>0)||light.active();
   const bool takeover=busy||s_debug;
@@ -804,7 +844,7 @@ ClawdWords::Gate wordsGate(uint32_t ms){
     devicePose()==DevicePose::FaceDown||devicePoseCandidate()==DevicePose::FaceDown;
   gate.rotation=rotation.active;gate.game=games.active()||landscapeVisible;
   gate.setup=connectionSetupActive()||provActive()||devicePairWindow();
-  gate.operation=otaActive()||transportBusy()||powerCalibrationOwnsUI()||s_debug||
+  gate.operation=bootNoticeActive()||otaActive()||maintenanceActive()||maintenancePending()||transportBusy()||powerCalibrationOwnsUI()||s_debug||
     (transportHintUntil&&int32_t(transportHintUntil-ms)>0);
   gate.gesture=gestures.switchReady||gestures.comboReady||gestures.suppressA;
   gate.story=stories.playing();
@@ -858,6 +898,15 @@ void uiWordsTick(uint32_t ms){
     words.talking()?"say":"think",ClawdWords::name(words.event()),words.text().line[0],words.text().line[1]);
 }
 void uiPowerTick(uint32_t ms,bool bootVerified){
+  if(bootNoticeActive()){
+    // Keep the health prerequisites alive; parking the codec here would prevent
+    // deviceBootHealthy() from ever passing. No sensor or audio teardown.
+    faceDownRest.cancel();idlePower.activity(ms);standby=false;screenOff=false;
+    idleDim.update(ms,0,deviceBrightness(),false,false);powerSavePerformance();
+    const uint8_t brightness=std::max(uint8_t(96),deviceBrightness());
+    if(M5.Display.getBrightness()!=brightness)M5.Display.setBrightness(brightness);
+    return;
+  }
   if(powerCalibrationOwnsUI()){
     faceDownRest.cancel();
     powerSavePerformance();
@@ -866,7 +915,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     if(!codecOff){soundCancel();audioTick(false);codecOff=audioPowerDown();}
     if(bootVerified&&powerCalibrationShutdownDue(ms)){
       std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
-      if(admission.owns_lock()&&!otaActive()&&!transportBusy()&&powerConfirmAutoOff()){
+      if(admission.owns_lock()&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!transportBusy()&&powerConfirmAutoOff()){
         powerCalibrationShutdownAttempted();deviceStop();soundCancel();M5.Speaker.end();M5.Display.setBrightness(0);
         Serial.println("[battery-cal] endpoint complete; power-off");
         for(unsigned attempt=0;attempt<3;++attempt){if(M5.Power.M5pm1.powerOff())break;delay(10);}
@@ -874,7 +923,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     }
     return;
   }
-  const bool busy=connectionSetupActive()||provActive()||otaActive()||transportBusy()||devicePairWindow()||
+  const bool busy=bootNoticeActive()||connectionSetupActive()||provActive()||otaActive()||maintenanceActive()||maintenancePending()||transportBusy()||devicePairWindow()||
     connectionSetupActive()||games.active()||deviceStreaming()||deviceVoicePreparing()||s_debug||uiRotationActive()||gestures.switchReady||gestures.comboReady;
   // Broken/stale IMU input cannot be interpreted as prolonged inactivity.
   const bool blocked=busy||!motionActivityHealthy(ms);
@@ -894,7 +943,7 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     // OTA begin shares this admission lock. Recheck after acquiring it so an
     // upload arriving at the deadline cannot race a physical power cut.
     std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
-    if(admission.owns_lock()&&!otaActive()&&!provActive()&&!transportBusy()&&powerConfirmAutoOff()&&deepSleepDisarm()){
+    if(admission.owns_lock()&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!provActive()&&!transportBusy()&&powerConfirmAutoOff()&&deepSleepDisarm()){
       Serial.printf("[idle] power-off after %us inactive\n",unsigned(idlePower.elapsed(ms)/1000));
       deviceStop();soundCancel();audioTick(false);M5.Speaker.end();
       M5.Display.setBrightness(0);
@@ -984,6 +1033,8 @@ void renderConnectionSetup(uint32_t ms){
     line("RESETTING",70,C::glow,&fonts::Font2);line("Clearing settings...",113,C::dim);
   }else if(page==SetupPage::Error){
     line("SETUP FAILED",35,C::err,&fonts::Font2);line(connectionSetupError(),95,C::ink);line("B: restart",175,C::dim);
+  }else if(!transportBootVerified()){
+    line("CHECKING",70,C::glow,&fonts::Font2);line("Firmware self-test",113,C::dim);line("Keep power on",136,C::dim);
   }else{line("RESTARTING",70,C::ok,&fonts::Font2);line("Restarting...",113,C::dim);}
   setFontNow();present(ms);
 }
@@ -1036,7 +1087,7 @@ void renderProv(uint32_t ms){
   switch (st){
     case PROV_AP: snprintf(status,sizeof(status),"Starting hotspot");break;
     case PROV_VERIFY:snprintf(status,sizeof(status),"Connecting %d/%d",provTries(),PROV_MAX_TRIES);break;
-    case PROV_OK:snprintf(status,sizeof(status),"Saved. Restarting");break;
+    case PROV_OK:snprintf(status,sizeof(status),"%s",transportBootVerified()?"Saved. Restarting":"Checking firmware");break;
     case PROV_FAIL:snprintf(status,sizeof(status),"Failed. Retry: A");break;
     default:snprintf(status,sizeof(status),"Waiting for Wi-Fi");break;
   }
@@ -1046,6 +1097,47 @@ void renderProv(uint32_t ms){
   if(!reported){Serial.printf("[prov-ui] text bounds right=%d bottom=%d viewport=%dx%d\n",rightmost,bottommost,W,H);reported=true;}
   setFontNow();
   present(ms);
+}
+
+void renderMaintenance(uint32_t ms){
+  canvas.clearClipRect();canvas.fillSprite(C::screen);canvas.setTextWrap(false,false);
+  auto line=[&](const char* text,int y,uint16_t color,int size=1){
+    // Keep the 6x8 bitmap on whole pixel rows. Shrinking the 132px SSID to
+    // 123px also shrank its height, deleting the first row of GLCD glyphs.
+    const int width=int(strlen(text))*6*size;
+    pixelText(text,(W-width)/2,y,color,size);
+  };
+  line("PHONE UPDATE",10,C::ink);
+  rule(30);
+  if(maintenancePending()){
+    line("RESTARTING",82,C::glow);
+    line(maintenanceActive()?"Restoring connection":"Opening hotspot",122,C::dim);
+    line("Please wait",158,C::dim);
+  }else if(!maintenanceReady()){
+    line("HOTSPOT FAILED",62,C::err);
+    line(maintenanceLastErr(),101,C::err);
+    line("B: EXIT",225,C::ink);
+  }else{
+    line("1 CONNECT WI-FI",40,C::dim);
+    // The generated name is always this 16-character prefix plus six hex
+    // digits. Split at the existing hyphen without omitting any character.
+    char prefix[17]{},suffix[7]{};
+    const char* ssid=maintenanceApSsid();
+    memcpy(prefix,ssid,std::min(size_t(16),strlen(ssid)));
+    if(strlen(ssid)>16)snprintf(suffix,sizeof(suffix),"%s",ssid+16);
+    line(prefix,56,C::ink);
+    line(suffix,72,C::glow,2);
+    line("OPEN WI-FI",98,C::ok);
+    line("NO PASSWORD",111,C::dim);
+    rule(128);
+    line("2 OPEN BROWSER",139,C::dim);
+    line("192.168.4.1",154,C::ink);
+    line("3 ENTER SCREEN CODE",180,C::dim);
+    line(maintenanceCode(),195,C::glow,2);
+    char footer[32];snprintf(footer,sizeof(footer),"B: EXIT   %ds",maintenanceIdleLeftSec(ms));
+    line(footer,225,C::dim);
+  }
+  setFontNow();present(ms);
 }
 
 /* OTA forces the portrait viewport. Fixed Font0 cells and an anchored footer
@@ -1069,11 +1161,11 @@ void renderOta(uint32_t ms){
   const char* name="CONFIRM",*hint="Confirm on device",*footer="A: YES   B: NO";
   uint16_t color=C::glow;
   switch (st){
-    case OTA_READY: name="WAITING";hint="Waiting for Mac";footer="B: CANCEL";break;
+    case OTA_READY: name="WAITING";hint=maintenanceActive()?"Waiting for phone":"Waiting for Mac";footer="B: CANCEL";break;
     case OTA_RECV: name="RECEIVING";hint="Keep power on";footer="B: CANCEL";break;
     case OTA_VERIFY: name="VERIFYING";hint="Checking image";footer="PLEASE WAIT";break;
-    case OTA_DONE: name="COMPLETE";hint="Restarting...";footer="UPDATE COMPLETE";color=C::ok;break;
-    case OTA_FAIL: name="FAILED";hint="Try again on Mac";footer="B: BACK";color=C::err;break;
+    case OTA_DONE: name="WRITTEN";hint="Restarting to check";footer="DO NOT RESTART";break;
+    case OTA_FAIL: name="FAILED";hint=maintenanceActive()?"Retry on phone":"Try again on Mac";footer="B: BACK";color=C::err;break;
     default: break;
   }
   line(name,73,color,2);
@@ -1103,7 +1195,7 @@ void renderOta(uint32_t ms){
   }
   line(hint,183,C::dim);
   canvas.drawFastHLine(margin,H-32,W-2*margin,C::dim2);
-  line(footer,H-18,st==OTA_DONE?C::ok:C::ink);
+  line(footer,H-18,st==OTA_DONE?C::glow:C::ink);
   setFontNow();
   present(ms);
 }
@@ -1227,6 +1319,51 @@ void renderStarCatch(uint32_t ms){
   present(ms);
 }
 
+// The timer is informational only. Completion comes exclusively from the
+// successful PENDING_VERIFY -> VALID transition, never from elapsed seconds.
+void renderBootNotice(uint32_t ms){
+  const auto state=otaBootNotice();
+  const bool complete=state==OtaBootNotice::Complete;
+  static OtaBootNotice previous=OtaBootNotice::None;
+  if(state!=previous){
+    Serial.printf("[ota-ui] %s %s\n",complete?"upgrade complete; safe to restart":"checking; do not restart",firmwareVersion());
+    previous=state;
+  }
+  canvas.fillSprite(C::screen);
+  const uint16_t color=complete?C::ok:C::glow;
+  auto label=[&](const char* text,int y,uint16_t ink,int size=2){
+    pixelText(text,(W-int(strlen(text))*6*size)/2,y,ink,size);
+  };
+  putCenter("FIRMWARE UPDATE",12,color,&fonts::Font0);
+  canvas.drawFastHLine(10,29,W-20,C::dim2);
+  putCenter(firmwareVersion(),40,C::dim,&fonts::Font0);
+  if(complete){
+    canvas.drawCircle(W/2,82,15,color);
+    canvas.drawLine(W/2-8,82,W/2-2,88,color);
+    canvas.drawLine(W/2-2,88,W/2+9,76,color);
+    label("UPDATE",110,color);
+    label("COMPLETE",132,color);
+    putCenter("SAFE TO RESTART",155,color,&fonts::Font0);
+    putCenter("PRESS A / B",200,C::ink,&fonts::Font0);
+    putCenter("TO CONTINUE",222,C::dim,&fonts::Font0);
+  }else{
+    label("SELF CHECK",70,color);
+    label("DO NOT",106,color);
+    label("RESTART",126,color);
+    putCenter("KEEP POWER ON",148,C::ink,&fonts::Font0);
+    const unsigned elapsed=otaBootElapsedSec();
+    char label[32];
+    if(elapsed<60)snprintf(label,sizeof(label),"%u / 60 s",elapsed);
+    else snprintf(label,sizeof(label),"CHECKING HEALTH...");
+    putCenter(label,177,C::dim,&fonts::Font0);
+    canvas.drawRect(12,198,W-24,7,C::dim2);
+    // Filling the bar still means waiting; only the backend can turn it green.
+    canvas.fillRect(14,200,int((W-28)*std::min(60u,elapsed)/60),3,color);
+    putCenter("PLEASE WAIT",223,C::dim,&fonts::Font0);
+  }
+  present(ms);
+}
+
 void uiDraw(uint32_t ms){
   prepareCanvas(ms);
   const auto voice=deviceVoiceStatus(ms);
@@ -1242,16 +1379,18 @@ void uiDraw(uint32_t ms){
   // operation pages retain their animation cadence. Only a settled static
   // portrait sleep frame can be cached; every visible input is part of its key.
   const bool staticSleep=petState()==PET_SLEEP&&W==135&&!rotation.active&&!games.active()&&
-    !deviceStreaming()&&!connectionSetupActive()&&!provActive()&&!otaActive()&&!devicePairWindow()&&!transportBusy()&&
+    !bootNoticeActive()&&!deviceStreaming()&&!connectionSetupActive()&&!provActive()&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!devicePairWindow()&&!transportBusy()&&
     !powerCalibrationOwnsUI()&&!s_debug&&!stories.playing()&&!gestures.switchReady&&!gestures.comboReady&&
     !(transportHintUntil&&int32_t(transportHintUntil-ms)>0);
   if(!sleepFrames.draw(ms,s_stateAt,staticSleep,{s_lvlShown,flags,rotation.target})){
     frameTiming.skipped++;return;
   }
   FrameTimer frameTimer;
+  if(bootNoticeActive()){renderBootNotice(ms);return;}
   if(connectionSetupActive()){renderConnectionSetup(ms);return;}
   if (provActive()&&!gestures.switchReady&&!transportBusy()){ renderProv(ms); return; }
   if (otaActive()){ renderOta(ms); return; }
+  if(maintenanceActive()||maintenancePending()){renderMaintenance(ms);return;}
   if(gestures.switchReady||gestures.comboReady||transportBusy()||(transportHintUntil&&int32_t(transportHintUntil-ms)>0)){
     canvas.fillSprite(C::screen);const bool shortLayout=H==135;putCenter("ThinCube",shortLayout?6:12,C::ink);
     const bool switching=transportBusy();

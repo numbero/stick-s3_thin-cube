@@ -8,6 +8,7 @@
 #include "device.h"
 #include "deep_sleep.h"
 #include "ota.h"
+#include "maintenance.h"
 #include "wifi_prov.h"
 #include "transport.h"
 #include "connection_setup.h"
@@ -87,7 +88,7 @@ bool waveStop(){
   waveActive=false;FifoBus bus;waveRestored=fifoCapture.restore(bus);waveReport();return waveRestored;
 }
 bool waveBegin(){
-  if(waveActive||waveExporting||suspended||!ready||otaActive()||provActive()||devicePairWindow()||transportBusy()||deepSleepPending())return false;
+  if(waveActive||waveExporting||suspended||!ready||otaActive()||maintenanceActive()||maintenancePending()||provActive()||devicePairWindow()||transportBusy()||deepSleepPending())return false;
   if(!waveRestored&&!softwareFifo&&!waveStop())return false;
   if(!wave)wave=static_cast<WavePoint*>(heap_caps_malloc(WaveCapacity*sizeof(WavePoint),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   if(!wave){Serial.println("[tap-wave] unavailable: PSRAM allocation");return false;}
@@ -154,7 +155,7 @@ void wavePoll(uint32_t now){
     if(waveActive&&(waveCount==WaveCapacity||uint32_t(now-waveStarted)>=60000))waveStop();
   }
   if(waveExporting){
-    if(deviceStreaming()||deviceCaptureRequested()||otaActive()||provActive()||deepSleepPending()){
+    if(deviceStreaming()||deviceCaptureRequested()||otaActive()||maintenanceActive()||maintenancePending()||provActive()||deepSleepPending()){
       waveExporting=false;Serial.println("TCWAVE-CANCELLED busy");return;
     }
     for(unsigned n=0;n<8&&waveExport<waveCount;++n,++waveExport){
@@ -221,7 +222,7 @@ bool configureTapRuntime(bool enable){
   return true;
 }
 bool diagnosticContext(uint32_t now){
-  const bool safe=!otaActive()&&!provActive()&&!connectionSetupActive()&&!devicePairWindow()&&
+  const bool safe=otaBootNotice()==OtaBootNotice::None&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!provActive()&&!connectionSetupActive()&&!devicePairWindow()&&
     !transportBusy()&&!deepSleepPending()&&!uiLandscapeActive()&&petState()!=PET_SLEEP&&imuHealthy(now);
   return safe&&(tapParameters.manual||(deviceStreaming()&&deviceInverted()));
 }
@@ -374,7 +375,7 @@ void imuTapConfigure(const TapParameters& parameters,const char* requestId){
 #ifdef THINCUBE_IMU_LEGACY
   snprintf(tapRequest,sizeof(tapRequest),"%s",requestId);++tapRevision;
   if(!parameters.valid()){strcpy(tapResult,"invalid_parameters");return;}
-  if(!ready||suspended||waveActive||(!waveRestored&&!softwareFifo)||otaActive()||provActive()||transportBusy()||deepSleepPending()){
+  if(!ready||suspended||waveActive||(!waveRestored&&!softwareFifo)||otaActive()||maintenanceActive()||maintenancePending()||provActive()||transportBusy()||deepSleepPending()){
     strcpy(tapResult,"busy");return;
   }
   TapNvsStore store;

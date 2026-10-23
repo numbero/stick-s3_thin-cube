@@ -1,6 +1,7 @@
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>
+#include <esp_http_server.h>
 
 /* ThinCube v1 OTA，详见 docs/thincube-protocol-v1.md。
    配对鉴权 → {ver,size,sha256} → 设备 A 确认 → 校验设备镜像标识
@@ -17,7 +18,16 @@ enum OtaStage {
   OTA_FAIL,       /* 失败/取消/超时 */
 };
 
+/* 本次启动的试运行提示；普通 VALID 开机不显示“升级完成”。
+   仅主循环调用，Complete 保留到用户确认，Checking 不允许关闭。 */
+enum class OtaBootNotice { None, Checking, Complete };
+void      otaBootBegin();              /* uiBegin 前缓存本次 PENDING_VERIFY */
+OtaBootNotice otaBootNotice();
+uint32_t  otaBootElapsedSec();         /* 与 60 秒健康门槛使用相同启动时钟 */
+void      otaBootDismiss();
+
 void      otaTick(uint32_t ms);        /* 主循环里调：起 httpd / 确认超时 / 重启 */
+bool      otaRegisterRoutes(httpd_handle_t server); // maintenance server reuses the same OTA engine
 bool      otaActive();                 /* stage != IDLE：占用屏幕 */
 bool      otaConnected();              /* STA 是否已连上（决定上传页可达） */
 OtaStage  otaStage();
@@ -25,8 +35,9 @@ const char* otaStageName(OtaStage s);
 const char* otaTargetVer();            /* 客户端声明的目标版本（空=未定） */
 int       otaPct();                    /* 0..100 */
 const char* otaLastErr();
-void      otaConfirm();                /* BtnA：确认 */
-void      otaCancel();                 /* BtnB：取消 */
+uint32_t  otaSessionGeneration();
+void      otaConfirm(uint32_t expectedGeneration); /* fresh BtnA click for this manifest */
+bool      otaCancel();                 /* BtnB：取消；VERIFY/DONE 后返回 false */
 void      otaDismiss();                /* FAIL 后回主界面 */
 int       otaConfirmLeftSec();         /* CONFIRM 页剩余秒数（倒计时显示用） */
 bool      otaMarkValid();              /* 仅健康检查后确认；失败则继续重试 */

@@ -1,6 +1,7 @@
 #include "transport.h"
 #include "wifi_prov.h"
 #include "ota.h"
+#include "maintenance.h"
 #include "device.h"
 #include "audio_input.h"
 #include "sound_effects.h"
@@ -42,7 +43,7 @@ const char* requestTransportSwitch(TransportMode target,const char* source,const
   if(!strcmp(record.request,id))return record.mode==target&&record.phase!=SwitchPhase::RolledBack?nullptr:"request_conflict";
   if(!storageOK)return "storage_failed";
   const bool leaveSetup=provCanLeave(provStage())&&target==TransportMode::BLE&&!strcmp(source,"button");
-  if((provActive()&&!leaveSetup)||otaActive()||transportBusy()||deepSleepPending())return "busy";
+  if((provActive()&&!leaveSetup)||otaActive()||maintenanceActive()||maintenancePending()||transportBusy()||deepSleepPending())return "busy";
   if(!transportBootVerified())return "boot_unverified";
   if(target==transportMode())return "already_active";
   // Wi-Fi without saved credentials starts provisioning after reboot.

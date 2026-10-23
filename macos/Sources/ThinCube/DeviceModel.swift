@@ -128,6 +128,17 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     var canSubmitPairingCode: Bool { pairingRequired && connectionProgress.stage == .pairing && PairingCode.isValid(pin) }
     @Published var updating = false
     @Published var updateProgress = 0.0
+    @Published private(set) var supportsPhoneUpgrade = false
+    @Published private(set) var phoneUpgradeSession = PhoneUpgradeSession(restoring:
+        PhoneUpgradeSession.Phase(rawValue: UserDefaults.standard.string(forKey: "phoneUpgradePhase") ?? "") ?? .idle)
+    var requestingPhoneUpgrade: Bool { phoneUpgradeSession.phase == .requesting }
+    var phoneUpgradeActive: Bool { phoneUpgradeSession.phase == .waitingForPhone || phoneUpgradeSession.phase == .unconfirmed }
+    var canEnterPhoneUpgrade: Bool {
+        connected && supportsPhoneUpgrade && !connecting && !updating && !switching &&
+            !calibrationBusy && status?.bootVerified == true && !phoneUpgradeSession.pausesConnection
+    }
+    private static let phoneUpgradeNote = "设备已接受手机升级请求，正在重启进入热点。手机连接热点无需 Wi-Fi 密码；打开网页后输入屏幕上的 6 位升级码，选择固件并按设备 A 键确认。退出热点后可重新连接。"
+    private static let phoneUpgradeUnconfirmedNote = "未收到设备对手机升级的确认。请查看设备屏幕；若已开启热点，请按提示完成升级，退出热点后再重新连接。"
     @Published var calibrationBusy = false
     @Published var status: DeviceStatus?
     @Published private(set) var shortcut = Shortcut()
@@ -215,6 +226,10 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         }
         target = ConnectionTarget(host: host, deviceID: UserDefaults.standard.string(forKey: "lastDeviceName"))
         recovery = ConnectionRecovery(enabled: !host.isEmpty && (UserDefaults.standard.object(forKey: "autoReconnect") as? Bool ?? true))
+        if phoneUpgradeSession.pausesConnection {
+            recovery.suspend(.maintenance)
+            note = phoneUpgradeSession.phase == .waitingForPhone ? Self.phoneUpgradeNote : Self.phoneUpgradeUnconfirmedNote
+        }
         let center = NSWorkspace.shared.notificationCenter
         for (notification, reason) in [(NSWorkspace.willSleepNotification, ConnectionRecovery.Suspension.sleep),
                                        (NSWorkspace.sessionDidResignActiveNotification, .inactiveSession)] {
@@ -293,6 +308,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
                 "power": status?.power?.dictionary ?? [:], "deepSleep": status?.deepSleep ?? unifiedDeepSleep,
                 "deepSleepStaged": stagedDeepSleep,
                 "deepSleepUnified": unifiedDeepSleep,
+                "phoneUpgradePhase": phoneUpgradeSession.phase.rawValue, "maintenanceOTA": supportsPhoneUpgrade,
                 "deepSleepAvailable": status?.deepSleepAvailable ?? false, "deviceSleeping": deviceSleeping, "note": note]
     }
     private func makeBase(_ selectedHost: String) throws -> URL {
@@ -384,6 +400,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     func connect() async {
         guard !updating, !connecting, !connected else { return }
+        clearPhoneUpgradePause()
         let selected = host.trimmingCharacters(in: .whitespacesAndNewlines)
         if selected != target.host { target = ConnectionTarget(host: selected, deviceID: nil) }
         if target.deviceID == nil, let found = discovery.devices.first(where: { $0.host == selected }) { target.deviceID = found.id }
@@ -434,6 +451,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             guard selected.accepts(found) else { throw ClientError.message("此地址上的设备与所选设备不同，请重新选择设备并点击连接。") }
             name = found; version = info["version"] as? String ?? ""
             pairingV2 = info["pairingV2"] as? Bool == true
+            supportsPhoneUpgrade = info["maintenanceOTA"] as? Bool == true
             target.deviceID = found
             connectionProgress.advance(.authorization, attempt: attempt)
             loadShortcut()
@@ -987,6 +1005,65 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         networkConfigurationNote = result.phase == "succeeded" ? "Wi-Fi 配置成功，已保留原配对。" : "Wi-Fi 配置失败：\(result.failureDescription)，已恢复原连接及网络配置，请修改后重试。"
         transportPhase = ""; note = networkConfigurationNote
     }
+    func enterPhoneUpgrade() async {
+        guard canEnterPhoneUpgrade else {
+            if !supportsPhoneUpgrade { note = "此固件尚不支持手机升级入口，请先通过 Mac 的 Wi-Fi 升级或 USB 安装新版固件。" }
+            else if status?.bootVerified != true { note = PhoneUpgradeSession.rejectionDescription("boot_unverified") }
+            else { note = "请等待设备连接、升级或其他操作完成后再试。" }
+            return
+        }
+        guard let id = phoneUpgradeSession.begin() else { return }
+        // If the app quits before a reply arrives, preserve the uncertainty and
+        // avoid opening a new session while the phone may be upgrading.
+        UserDefaults.standard.set(PhoneUpgradeSession.Phase.unconfirmed.rawValue, forKey: "phoneUpgradePhase")
+        updating = true; recovery.suspend(.update); recovery.suspend(.maintenance)
+        reconnectTask?.cancel(); reconnectTask = nil; reconnecting = false
+        keys.release(); buffer.setSession(nil); bleAudio.reset()
+        defer { updating = false; recovery.resume(.update); scheduleRecovery() }
+        await command("stop")
+        note = "正在请求设备进入手机升级，连接将暂时断开…"
+        do {
+            let value = try await json("api/maintenance", body: ["requestId": id.uuidString])
+            let reply = try JSONDecoder().decode(PhoneUpgradeAcceptance.self, from: JSONSerialization.data(withJSONObject: value))
+            guard reply.accepted else {
+                if phoneUpgradeSession.rejected(id) {
+                    clearPhoneUpgradePause()
+                    note = "设备未接受手机升级请求，请稍后重试。"
+                }
+                return
+            }
+            guard phoneUpgradeSession.accepted(id) else { return }
+            UserDefaults.standard.set(PhoneUpgradeSession.Phase.waitingForPhone.rawValue, forKey: "phoneUpgradePhase")
+            networkIntent = nil; sleepTracker.reset(); deviceSleeping = false
+            teardown(note: Self.phoneUpgradeNote)
+        } catch ClientError.http(let code, let reason) {
+            guard phoneUpgradeSession.rejected(id) else { return }
+            clearPhoneUpgradePause()
+            note = code == 404
+                ? "此固件尚不支持手机升级入口，请先通过 Mac 的 Wi-Fi 升级或 USB 安装新版固件。"
+                : PhoneUpgradeSession.rejectionDescription(reason)
+        } catch {
+            guard phoneUpgradeSession.unconfirmed(id) else { return }
+            UserDefaults.standard.set(PhoneUpgradeSession.Phase.unconfirmed.rawValue, forKey: "phoneUpgradePhase")
+            teardown(note: Self.phoneUpgradeUnconfirmedNote)
+        }
+    }
+    func reconnectAfterPhoneUpgrade() async {
+        guard phoneUpgradeActive, !updating else { return }
+        clearPhoneUpgradePause()
+        await connect()
+    }
+    func endPhoneUpgrade() {
+        guard phoneUpgradeActive, !updating else { return }
+        clearPhoneUpgradePause()
+        recovery.requireUserAction()
+        note = "手机升级提示已结束。确认设备已退出热点后，点击“连接”重新连接。"
+    }
+    private func clearPhoneUpgradePause() {
+        phoneUpgradeSession.finish()
+        UserDefaults.standard.removeObject(forKey: "phoneUpgradePhase")
+        recovery.resume(.maintenance)
+    }
     func chooseFirmware() {
         guard !activeBLE, !switching else { note = "固件升级需要 Wi-Fi，请先切换连接模式。"; return }
         let panel = NSOpenPanel(); panel.allowedContentTypes = [.data]; panel.allowsMultipleSelection = false
@@ -1025,6 +1102,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         } catch { keys.release(); buffer.setSession(nil); note = error.localizedDescription }
     }
     func disconnect(note message: String = "已断开") {
+        clearPhoneUpgradePause()
         networkIntent = nil
         sleepTracker.reset(); deviceSleeping = false
         recovery.disconnect(); switching = false; transportIntent = nil; modeBeforeSwitch = nil; transportPhase = ""; UserDefaults.standard.set(false, forKey: "autoReconnect")
@@ -1061,7 +1139,11 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     private func suspendRecovery(_ reason: ConnectionRecovery.Suspension, note message: String) {
         recovery.suspend(reason)
-        teardown(note: recovery.enabled ? message : "")
+        if phoneUpgradeActive {
+            teardown(note: phoneUpgradeSession.phase == .waitingForPhone ? Self.phoneUpgradeNote : Self.phoneUpgradeUnconfirmedNote)
+        } else {
+            teardown(note: recovery.enabled ? message : "")
+        }
     }
     private func resumeRecovery(_ reason: ConnectionRecovery.Suspension) {
         recovery.resume(reason)
@@ -1190,7 +1272,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         websocket?.cancel(with: .goingAway, reason: nil); websocket = nil
         keys.release(); buffer.setSession(nil); bleAudio.reset(); receiver.stop(); bridge.stop(); connected = false; audioPrepared = false
         activeBLE = false; discovery.ble.close(); commitInFlight = false
-        status = nil; sendingHeartbeat = false; voiceGate.reset()
+        status = nil; supportsPhoneUpgrade = false; sendingHeartbeat = false; voiceGate.reset()
         if !message.isEmpty { note = message }
     }
 }

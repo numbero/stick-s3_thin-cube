@@ -47,7 +47,7 @@ final class ConnectionRecoveryTests: XCTestCase {
         XCTAssertFalse(recovery.deviceAvailable(now: 10))
         recovery.request(); recovery.requireUserAction()
         XCTAssertFalse(recovery.deviceAvailable(now: 10))
-        let suspensions: [ConnectionRecovery.Suspension] = [.sleep, .lock, .inactiveSession, .network, .update, .termination]
+        let suspensions: [ConnectionRecovery.Suspension] = [.sleep, .lock, .inactiveSession, .network, .update, .maintenance, .termination]
         for reason in suspensions {
             recovery.request(); recovery.suspend(reason)
             XCTAssertFalse(recovery.deviceAvailable(now: 10))

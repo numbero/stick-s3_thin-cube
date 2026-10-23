@@ -22,6 +22,7 @@ bool deviceLocalSound();
 bool deviceInverted();
 uint8_t deviceDisplayRotation();
 bool deviceHealthy();
+bool deviceBootHealthy(); // local resources/radio only; no router or paired host required
 bool deviceControlConnected(uint32_t ms);
 bool deviceDoubleTap(uint32_t now);
 UIStatus::VoiceInputs deviceVoiceStatus(uint32_t ms);

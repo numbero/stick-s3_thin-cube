@@ -10,6 +10,8 @@
 #include "audio_input.h"
 #include "sound_effects.h"
 #include "ota.h"
+#include "maintenance.h"
+#include "connection_setup.h"
 #include "ui.h"
 #include "transport.h"
 #include "ble_link.h"
@@ -125,6 +127,7 @@ bool sameKey(const char* a,const char* b){
 void publishPairing(){pairingVisible=pairing.visible;pairingCodeActive=pairing.active(millis());}
 void newPairCode(){snprintf(pin,sizeof(pin),"%06u",unsigned(esp_random()%1000000));memset(candidateKey,0,sizeof(candidateKey));}
 bool beginPairing(){
+  if(maintenanceActive()||maintenancePending())return false;
   xSemaphoreTake(publication,portMAX_DELAY);
   const bool allowed=pairing.visible||!key[0];
   if(allowed){if(!pairing.visible)pairing.offer(millis(),false);if(pairing.begin(millis()))newPairCode();publishPairing();}
@@ -190,13 +193,16 @@ cJSON* body(httpd_req_t* r) {
 }
 bool enqueue(const Command& c) { return xQueueSend(commands,&c,0)==pdTRUE; }
 bool auth(httpd_req_t* r) {
+  if(maintenanceActive()||maintenancePending()){
+    json(r,"{\"error\":\"busy\"}","409 Conflict");return false;
+  }
   if (deviceAuthorized(r)) return true;
   json(r,"{\"error\":\"pairing_required\"}","401 Unauthorized"); return false;
 }
 esp_err_t info(httpd_req_t* r) {
   char b[384];
   xSemaphoreTake(publication,portMAX_DELAY);bool paired=key[0];xSemaphoreGive(publication);
-  snprintf(b,sizeof(b),"{\"name\":\"%s\",\"version\":\"%s\",\"protocol\":1,\"transport\":\"wifi\",\"transportSwitch\":true,\"pairingV2\":true,\"pairingOpen\":%s,\"wifiProvisioning\":true,\"paired\":%s}",name,firmwareVersion(),devicePairWindow()?"true":"false",paired?"true":"false");
+  snprintf(b,sizeof(b),"{\"name\":\"%s\",\"version\":\"%s\",\"protocol\":1,\"transport\":\"wifi\",\"transportSwitch\":true,\"maintenanceOTA\":true,\"pairingV2\":true,\"pairingOpen\":%s,\"wifiProvisioning\":true,\"paired\":%s}",name,firmwareVersion(),devicePairWindow()?"true":"false",paired?"true":"false");
   return json(r,b);
 }
 esp_err_t pairingBegin(httpd_req_t* r){
@@ -265,6 +271,17 @@ esp_err_t wifi(httpd_req_t* r) {
   const char* error=provRequestNetwork(s->valuestring,p->valuestring,cJSON_IsString(id)?id->valuestring:generated);cJSON_Delete(j);
   if(!error)return json(r,"{\"accepted\":true}");
   char message[80];snprintf(message,sizeof(message),"{\"error\":\"%s\"}",error);return json(r,message,"409 Conflict");
+}
+esp_err_t maintenance(httpd_req_t* r){
+  // A repeated request can prove possession of the same key after admission;
+  // all actual admission/state mutation remains under transportAdmission().
+  if(!deviceAuthorized(r))return json(r,"{\"error\":\"pairing_required\"}","401 Unauthorized");
+  cJSON* request=body(r);const auto id=cJSON_GetObjectItemCaseSensitive(request,"requestId");
+  const char* error=cJSON_IsString(id)?maintenanceRequest(id->valuestring):"invalid_request";
+  cJSON_Delete(request);
+  if(!error)return json(r,"{\"accepted\":true}");
+  char message[80];snprintf(message,sizeof(message),"{\"error\":\"%s\"}",error);
+  return json(r,message,"409 Conflict");
 }
 esp_err_t ws(httpd_req_t* r) {
   if(r->method==HTTP_GET) {
@@ -386,6 +403,7 @@ void publish() {
   esp_ota_img_states_t bootState;
   const bool verified=esp_ota_get_state_partition(esp_ota_get_running_partition(),&bootState)!=ESP_OK||bootState!=ESP_OTA_IMG_PENDING_VERIFY;
   cJSON_AddBoolToObject(j,"bootVerified",verified);
+  cJSON_AddBoolToObject(j,"maintenanceOTA",true);
   char cookie[33];for(int i=0;i<16;i++)snprintf(cookie+i*2,3,"%02x",nonce[i]);cJSON_AddStringToObject(j,"session",cookie);
   if(const auto next=keyEdges.front()){
     auto e=cJSON_AddObjectToObject(j,"edge");cJSON_AddNumberToObject(e,"seq",next->seq);cJSON_AddBoolToObject(e,"down",next->down);
@@ -411,6 +429,7 @@ void bleRequest(const char* text){
     cJSON_AddStringToObject(result,"name",name);cJSON_AddStringToObject(result,"version",firmwareVersion());
     cJSON_AddNumberToObject(result,"protocol",1);cJSON_AddBoolToObject(result,"paired",key[0]);
     cJSON_AddStringToObject(result,"transport","ble");cJSON_AddBoolToObject(result,"transportSwitch",true);
+    cJSON_AddBoolToObject(result,"maintenanceOTA",true);
     cJSON_AddBoolToObject(result,"pairingV2",true);cJSON_AddBoolToObject(result,"pairingOpen",devicePairWindow());cJSON_AddBoolToObject(result,"wifiProvisioning",true);
   }else if(!strcmp(operation,"pair_begin")){
     if(!beginPairing())error="pairing_not_open";else cJSON_AddNumberToObject(result,"expiresIn",120);
@@ -436,6 +455,12 @@ void bleRequest(const char* text){
     if(!valid)error="pairing_required";
     else{bleAuthenticated=true;Command c;strcpy(c.op,"connect");c.fd=-2;if(!enqueue(c)){bleAuthenticated=false;error="busy";}else{connectionTimingMark(ConnectionStage::Authenticated);cJSON_AddBoolToObject(result,"authenticated",true);}}
   }else if(!bleAuthenticated)error="pairing_required";
+  else if(!strcmp(operation,"maintenance")){
+    const auto id=cJSON_GetObjectItemCaseSensitive(j,"requestId");
+    error=cJSON_IsString(id)?maintenanceRequest(id->valuestring):"invalid_request";
+    if(!error)cJSON_AddBoolToObject(result,"accepted",true);
+  }
+  else if((maintenanceActive()||maintenancePending())&&strcmp(operation,"status"))error="busy";
   else if(!strcmp(operation,"status")){cJSON_Delete(result);result=cJSON_Parse(published);if(!result)result=cJSON_CreateObject();}
   else if(!strcmp(operation,"network_result")){networkResult(result);}
   else if(!strcmp(operation,"tap")){
@@ -542,6 +567,7 @@ void deviceRegister(httpd_handle_t server) {
     {.uri="/api/network",.method=HTTP_GET,.handler=networkStatus},
     {.uri="/api/settings",.method=HTTP_POST,.handler=settings},
     {.uri="/api/wifi",.method=HTTP_POST,.handler=wifi},
+    {.uri="/api/maintenance",.method=HTTP_POST,.handler=maintenance},
     {.uri="/control",.method=HTTP_GET,.handler=ws,.is_websocket=true},
   };
   for(auto& route:routes)if(httpd_register_uri_handler(server,&route)!=ESP_OK)healthy=false;
@@ -593,13 +619,23 @@ bool deviceStreaming(){return voice.streaming;}
 bool deviceCaptureRequested(){return captureRequested;}
 bool deviceVoicePreparing(){return voicePreparing||voice.pendingGesture||voice.pendingManual;}
 bool deviceHeld(){return voice.held||walkieKeys.heldB;}
-bool deviceWalkieKeysActive(){return dualKeys&&voice.streaming&&voice.inverted&&voice.canStream()&&!(displayOrientation.rotation&1)&&!uiLandscapeActive();}
+bool deviceWalkieKeysActive(){return otaBootNotice()==OtaBootNotice::None&&dualKeys&&voice.streaming&&voice.inverted&&voice.canStream()&&!(displayOrientation.rotation&1)&&!uiLandscapeActive();}
 bool deviceMuted(){return voice.muted;}
 bool deviceLocalSound(){return voice.localSound&&!voice.muted;}
 bool deviceInverted(){return voice.inverted;}
 uint8_t deviceDisplayRotation(){return displayOrientation.rotation;}
 bool deviceHealthy(){return healthy&&(transportMode()==TransportMode::BLE?bleHealthy():runtimeRegistered)&&
   audioInitialized()&&(!captureRequested||(audioReady()&&audioDelivered()));}
+bool deviceBootHealthy(){
+  if(!healthy||!audioInitialized()||(captureRequested&&(!audioReady()||!audioDelivered())))return false;
+  if(maintenanceActive())return maintenanceReady();
+  if(connectionSetupActive())return connectionSetupPage()==SetupPage::Choose||connectionSetupPage()==SetupPage::Saving;
+  if(provActive())return provServiceHealthy();
+  // Wi-Fi starts before association and provisioning can be healthy offline.
+  // Once associated, the local HTTP services must actually start as well.
+  if(transportMode()==TransportMode::BLE)return bleHealthy();
+  return WiFi.getMode()!=WIFI_OFF&&(WiFi.status()!=WL_CONNECTED||runtimeRegistered);
+}
 bool deviceControlConnected(uint32_t ms){
   const bool link=transportMode()==TransportMode::BLE?(bleConnected()&&bleAuthenticated):WiFi.status()==WL_CONNECTED;
   return link&&!transportBusy()&&controlLease.connected(ms);
@@ -640,14 +676,16 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     if(bleSeenGeneration!=bleGeneration()){bleSeenGeneration=bleGeneration();bleAuthenticated=false;challenge[0]=0;voice.setPeer(false,ms);controlLease.reset();owner=-1;resetKeyControl();}
     static char message[769];for(int i=0;i<4&&bleTake(message,sizeof(message));i++)bleRequest(message);
   }
-  voice.sleeping=sleeping;voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
+  const bool maintenanceBusy=maintenanceActive()||maintenancePending();
+  voice.sleeping=sleeping;voice.busy=busy||maintenanceBusy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
   Command c;
   bool commandChanged=false;
   while(xQueueReceive(commands,&c,0)==pdTRUE) {
     if(strcmp(c.op,"heartbeat"))commandChanged=true;
+    if((maintenanceActive()||maintenancePending())&&strcmp(c.op,"stop")&&strcmp(c.op,"heartbeat"))continue;
     if(idleControlActivity(c.op))uiPowerActivity();
     if(strcmp(c.op,"heartbeat")&&strcmp(c.op,"sleep_ack"))deepSleepCancel();
-    voice.busy=busy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
+    voice.busy=busy||maintenanceBusy||transportBusy()||powerCalibrationOwnsUI()||deepSleepPending();
     if(!strcmp(c.op,"connect")){
       if(owner!=c.fd)otaCloseControlConnection(owner);
       voice.setPeer(false,ms);controlLease.reset();owner=c.fd;outputIP=IPAddress(c.address);epoch=esp_random();resetKeyControl();
@@ -726,7 +764,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
     }
   }
   if(transportMode()==TransportMode::BLE?(!bleConnected()||!bleAuthenticated):WiFi.status()!=WL_CONNECTED){voice.setPeer(false,ms);controlLease.reset();}
-  voice.busy=busy||transportBusy()||deepSleepPending();
+  voice.busy=busy||maintenanceBusy||transportBusy()||deepSleepPending();
   voice.tick(ms,imuHealthy(millis()));
   // Prepare capture before reconciling the confirmed inverted pose. Temporary
   // wake/link/microphone delays leave that pose eligible; explicit stops latch.

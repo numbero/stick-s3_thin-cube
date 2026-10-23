@@ -1,5 +1,29 @@
 # ThinCube 实施与验收状态
 
+## English OTA notices v0.4.70 (2026-10-24)
+
+Device boot-check and completion screens now use English Font0 text: `SELF CHECK / DO NOT RESTART` and `UPDATE COMPLETE / SAFE TO RESTART`. The Chinese glyph subset was removed; phone instructions now reference the matching English completion text. Release/Base builds, actual-function viewport previews, and final-image phone checks passed. USB installation/hash verification passed, preserving the v0.4.69 fallback and settings. The Mac observed v0.4.70 first checking, then verified with upgrade actions enabled; no USB monitor/reset interrupted the trial. Details are recorded in [the v0.4.70 notes](phone-hotspot-ota-v0.4.70.md).
+
+## OTA 自检与结果提示 v0.4.69（2026-10-24）
+
+新增设备琥珀色“自检中／请勿重启”和绿色“升级完成／按键继续”，只有真实健康确认才显示完成；期间保持亮屏、阻止日常交互抢占，保留 60 秒健康门槛与 90 秒异常回滚。重启前设备与手机均仅提示已写入／待自检，手机不按计时宣告成功。正式/Base 构建、47 个真实 OTA sanitizer 场景、完成页按键策略、最终镜像手机页检查及 142 项 Swift 检查（1 跳过、0 失败）通过。已 USB 写入 app1/v0.4.69 并校验，保留 app0/v0.4.68 回退与设置；Mac 实读新版先启动检查、后检查消失且升级入口恢复可用，未在试启动期间打开 USB。完成页保持现场，物理显示与本轮新版 iPhone 全流程待用户验收。详见[升级结果提示](phone-hotspot-ota-v0.4.69.md)。
+
+## 热点入口大字倒计时 v0.4.68（2026-10-24）
+
+按用户确认的第二种预览实现：按住 A 显示大字 `2 → 1` 与两秒进度条，满两秒显示 READY、大号 A 和 RELEASE A。保留琥珀主题，仅更新变化区域和新增进度，保持原入口按键规则。正式/Base 构建、9 个真实源码 host sanitizer 场景、维护策略及最终镜像手机页检查通过。已通过 USB 写入非活动 app0 并正常试启动，独立运行超过 90 秒后实读 `seq=5 / VALID`，再次重启仍运行 v0.4.68/app0；两槽镜像匹配，v0.4.67/app1 与原有效选择记录完整保留。物理按键视觉效果待用户查看。详见[大字倒计时](phone-hotspot-ota-v0.4.68.md)。
+
+## 热点开机入口显示 v0.4.67（2026-10-24）
+
+两秒按住 A 的启动页统一琥珀配色；首次绘制一次，满两秒后仅更新“Release A”提示区，去掉每 20 ms 整屏清黑重画。正式/Base 构建、9 个真实函数 host sanitizer 场景及最终镜像手机页检查通过。用户手机 OTA 已写入 v0.4.67；首次试启动未确认即被中断并回退 v0.4.66。完整镜像核对后仅重新触发试启动，已实测 app1/v0.4.67 为 `seq=4 / VALID` 且再次重启正常，原 app0/v0.4.66 保留。之后按用户要求经 USB 完整重写同一 v0.4.67 app1，写入校验、VALID/原回退槽与再次正常启动核验通过。用户再次按 A＋复位明确确认“琥珀色正常，也不再闪烁”，两项显示修复已实机验收通过。使用说明已明确普通 OTA 后先静置约 90 秒再复位；手机写入成功与重启后自检最终结果的反馈闭环仍待完善。详见[显示修复与固件位置](phone-hotspot-ota-v0.4.67.md)。
+
+## 手机热点升级与 OTA 回滚修复（2026-10-23–24）
+
+设备源码 v0.4.66、Mac v0.4.38（build 59）：设备 A 开机入口、Mac 发起入口和 iPhone/Safari 真实上传已实机验收。按现场反馈移除热点密码、保留六位升级码与设备 A 确认，并修复小字体缩放造成的热点名称缺笔。Mac 已签名安装到 `/Applications/ThinCube.app`。
+
+手机上传后 app0 为 `seq=3 / VALID`，镜像校验与发布包一致；app1 原有效镜像保留。再次重启仍运行 v0.4.66/app0，Mac 自动恢复在线，原亮度和两项校准保留。异常试启动回滚此前已在真机验证。正式/Base 构建、最新手机页检查和维护策略测试通过；此前 142 项 Swift 测试及 44 个真实 OTA 源码 sanitizer 场景通过。实机取消未单独执行，详见[完整实施与验收说明](phone-hotspot-ota-v0.4.66.md)。
+
+## 以下为历史记录
+
 更新：2026-10-11。当前 Mac 为 v0.4.7（build 28），设备已通过 USB 更新至 v0.4.14，通信协议为 v1。状态栏图标顺序见 [状态栏图标顺序](status-icon-order-v0.4.14.md)。用户确认八段全部使用轻巧版，现已扩充为十三段并保留诊断页 A 键逐段测试。操作与验证边界见 [十三段轻巧小剧场](clawd-stories-v0.4.13.md)，连接配对见 [连接与重新配对](connection-pairing-v0.4.6.md)，既有 Wi-Fi / BLE 验收见 [实现记录](wifi-ble-implementation.md)；下方保留各版本的历史验证范围。
 
 ## 设备 v0.4.14 状态栏图标顺序（2026-10-11）

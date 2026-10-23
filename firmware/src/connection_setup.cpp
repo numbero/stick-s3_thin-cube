@@ -109,7 +109,9 @@ bool connectionSetupActive(){return page!=SetupPage::None;}
 SetupPage connectionSetupPage(){return page;}
 const char* connectionSetupError(){return error;}
 void connectionSetupTick(bool a,bool b,bool aClicked,bool bClicked){
-  if(rebootAt&&int32_t(millis()-rebootAt)>=0)ESP.restart();
+  // Preserve a choice made during an OTA trial, but let the local self-test
+  // confirm the image before this intentional restart can trigger rollback.
+  if(rebootAt&&int32_t(millis()-rebootAt)>=0&&transportBootVerified())ESP.restart();
   if(page==SetupPage::Resetting){if(int32_t(millis()-resetAt)>=0)finishFactoryReset();return;}
   const auto action=buttons.update(page,a,b,aClicked,bClicked);
   if(action==SetupAction::ConfirmReset){

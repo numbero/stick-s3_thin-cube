@@ -1,7 +1,7 @@
 #pragma once
 bool deepSleepDiagnostic(); // USB-only prepare/rollback check; never powers off
 #include <stdint.h>
-void deepSleepBoot(); // immediately after M5.begin, before UI / radio startup
+void deepSleepBoot(bool userBoot=false); // immediately after M5.begin, before UI / radio startup
 void deepSleepBegin();
 bool deepSleepAvailable();
 bool deepSleepPending();

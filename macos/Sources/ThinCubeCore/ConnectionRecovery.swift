@@ -3,7 +3,7 @@ import Foundation
 /// Connection intent survives transport failures; deliberate disconnect is a
 /// separate event. Delays are bounded so an offline device can return later.
 public struct ConnectionRecovery: Sendable {
-    public enum Suspension: Hashable, Sendable { case sleep, lock, inactiveSession, network, update, termination }
+    public enum Suspension: Hashable, Sendable { case sleep, lock, inactiveSession, network, update, maintenance, termination }
     public private(set) var enabled: Bool
     public private(set) var needsUserAction = false
     public private(set) var failures = 0

@@ -2,6 +2,7 @@
 #include "ui.h"
 #include "transport.h"
 #include "ota.h"
+#include "maintenance.h"
 #include "deep_sleep.h"
 #include "power_status.h"
 #include "connection_setup.h"
@@ -46,7 +47,7 @@ const char portal[]=R"HTML(<!doctype html><html lang="zh-CN"><meta charset="utf-
 const $=s=>document.querySelector(s);let polling=false;
 async function scan(){try{const r=await fetch('/scan');const list=await r.json();for(const n of list){const o=document.createElement('option');o.value=n.s;o.textContent=n.s+' ('+n.r+' dBm)';$('#net').append(o);}if(!list.length)setTimeout(scan,1800);}catch{}}
 $('#net').onchange=e=>{$('#ssid').value=e.target.value};scan();
-$('#form').onsubmit=async e=>{e.preventDefault();if(polling)return;polling=true;$('#save').disabled=true;$('#status').textContent='正在验证…';try{const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:$('#ssid').value,password:$('#pass').value})});if(!r.ok)throw Error('请检查网络名称与密码长度');const poll=async()=>{try{const s=await(await fetch('/status')).json();$('#status').textContent=s.stage==='ok'?'连接成功，设备正在重启。':s.stage==='fail'?'连接失败：'+s.err:'正在连接 '+s.tries+'/3';if(s.stage==='ok'||s.stage==='fail'){polling=false;$('#save').disabled=false;$('#pass').value='';return;}setTimeout(poll,800);}catch{$('#status').textContent='连接中断，请重新连接设备热点';polling=false;$('#save').disabled=false;}};poll();}catch(err){$('#status').textContent=err.message;polling=false;$('#save').disabled=false;}};
+$('#form').onsubmit=async e=>{e.preventDefault();if(polling)return;polling=true;$('#save').disabled=true;$('#status').textContent='正在验证…';try{const r=await fetch('/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid:$('#ssid').value,password:$('#pass').value})});if(!r.ok)throw Error('请检查网络名称与密码长度');const poll=async()=>{try{const s=await(await fetch('/status')).json();$('#status').textContent=s.stage==='ok'?'连接成功，设备完成启动检查后会自动重启。':s.stage==='fail'?'连接失败：'+s.err:'正在连接 '+s.tries+'/3';if(s.stage==='ok'||s.stage==='fail'){polling=false;$('#save').disabled=false;$('#pass').value='';return;}setTimeout(poll,800);}catch{$('#status').textContent='连接中断，请重新连接设备热点';polling=false;$('#save').disabled=false;}};poll();}catch(err){$('#status').textContent=err.message;polling=false;$('#save').disabled=false;}};
 </script></html>)HTML";
 esp_err_t response(httpd_req_t* r,const char* data,const char* type="application/json",const char* code="200 OK"){
   httpd_resp_set_status(r,code);httpd_resp_set_type(r,type);httpd_resp_set_hdr(r,"Cache-Control","no-store");return httpd_resp_send(r,data,HTTPD_RESP_USE_STRLEN);
@@ -68,6 +69,7 @@ esp_err_t save(httpd_req_t* r){
 }
 const char* provStageName(ProvStage s){switch(s){case PROV_AP:return "ap";case PROV_WAIT:return "wait";case PROV_VERIFY:return "verify";case PROV_OK:return "ok";case PROV_FAIL:return "fail";default:return "idle";}}
 bool provActive(){return stage!=PROV_IDLE;}
+bool provServiceHealthy(){return started&&submissions&&(managedChange?WiFi.getMode()!=WIFI_OFF:server!=nullptr);}
 ProvStage provStage(){return stage;}
 const char* provTargetSsid(){return target.ssid;}
 const char* provLastErr(){return error;}
@@ -102,7 +104,7 @@ const char* provRequestNetwork(const char* ssid,const char* pass,const char* req
   if(!validWiFiCredentials(ssid,pass))return "invalid_wifi";
   if(!requestId||!requestId[0]||strlen(requestId)>36)return "invalid_request";
   std::unique_lock<std::mutex> admission(transportAdmission(),std::try_to_lock);
-  if(!admission.owns_lock()||provActive()||otaActive()||transportBusy()||deepSleepPending()||powerCalibrationOwnsUI()||connectionSetupActive())return "busy";
+  if(!admission.owns_lock()||provActive()||otaActive()||maintenanceActive()||maintenancePending()||transportBusy()||deepSleepPending()||powerCalibrationOwnsUI()||connectionSetupActive())return "busy";
   if(!transportBootVerified())return "boot_unverified";
   std::lock_guard<std::mutex> g(lock);
   WiFiChange next;next.phase=WiFiChange::Pending;next.previous=transportMode();
@@ -158,7 +160,7 @@ void provBegin(){
     {.uri="/generate_204",.method=HTTP_GET,.handler=redirect}, {.uri="/hotspot-detect.html",.method=HTTP_GET,.handler=redirect},
     {.uri="/connecttest.txt",.method=HTTP_GET,.handler=redirect}, {.uri="/ncsi.txt",.method=HTTP_GET,.handler=redirect},
   };
-  for(auto& route:routes)httpd_register_uri_handler(server,&route);
+  for(auto& route:routes)if(httpd_register_uri_handler(server,&route)!=ESP_OK){httpd_stop(server);server=nullptr;strcpy(error,"portal routes failed");stage=PROV_FAIL;return;}
   WiFi.scanNetworks(true);scanPending=true;stage=PROV_WAIT;uiLog("wifi setup");
 }
 void provBeginWithCredentials(const char* ssid,const char* pass){
@@ -184,5 +186,5 @@ void provTick(){
     }
   }
   if(managedChange&&stage==PROV_FAIL&&!changeRebootAt)finishChange(false,error[0]?error:"network_or_password");
-  if(!managedChange&&stage==PROV_OK&&ms-okAt>2000)ESP.restart();
+  if(!managedChange&&stage==PROV_OK&&ms-okAt>2000&&transportBootVerified())ESP.restart();
 }

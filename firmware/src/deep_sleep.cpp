@@ -12,6 +12,7 @@
 #include "sound_effects.h"
 #include "transport.h"
 #include "ota.h"
+#include "maintenance.h"
 #include "wifi_prov.h"
 #include <M5Unified.h>
 #include <esp_system.h>
@@ -40,7 +41,7 @@ bool cancelTimer(Bus& bus){
   return ok;
 }
 bool inputSafe(uint32_t now){
-  return !otaActive()&&!provActive()&&!transportBusy()&&
+  return !otaActive()&&!maintenanceActive()&&!maintenancePending()&&!provActive()&&!transportBusy()&&
     !devicePairWindow()&&!deviceStreaming()&&!soundPlaying()&&powerBatteryLevel(now)>=0&&
     !powerBatteryLow(now)&&powerConfirmAutoOff();
 }
@@ -56,10 +57,10 @@ void failed(Bus& bus,WakeRegisters& registers){
   M5.Display.wakeup();deepSleepCancel();deviceSleepChanged();
 }
 }
-void deepSleepBoot(){
+void deepSleepBoot(bool userBoot){
   Bus bus;const auto boot=SleepTimer::consumeBoot(bus);
   timerReady=boot.clean||cancelTimer(bus);
-  if(!boot.expired||!timerReady||!SleepTimer::mayPowerOff(bus))return;
+  if(userBoot||!boot.expired||!timerReady||!SleepTimer::mayPowerOff(bus))return;
   M5.Display.setBrightness(0);
   bool disarmed=false;
   for(unsigned n=0;n<3&&!disarmed;++n)disarmed=WakeRegisters::disarm(bus);
@@ -97,7 +98,7 @@ bool deepSleepDisarm(){
   const bool ok=WakeRegisters::disarm(bus)&&cancelled;if(!ok)available=false;return ok;
 }
 bool deepSleepDiagnostic(){
-  if(!imuLegacy()||!available||deepSleepPending()||otaActive()||provActive()||transportBusy()||
+  if(!imuLegacy()||!available||deepSleepPending()||otaActive()||maintenanceActive()||maintenancePending()||provActive()||transportBusy()||
      devicePairWindow()||deviceStreaming()||deviceVoicePreparing()||M5.BtnA.isPressed()||M5.BtnB.isPressed()){
     Serial.println("[sleep-check] refused: idle healthy device required");return false;
   }

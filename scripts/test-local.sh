@@ -12,6 +12,12 @@ done
 python3 -m unittest discover -s scripts -p 'test_battery_calibration.py'
 python3 -m unittest discover -s scripts -p 'test_tap_sampling.py'
 bash scripts/test-legacy-imu.sh
+python3 scripts/test-ota-host.py
+if command -v node >/dev/null 2>&1; then
+    node scripts/test_phone_update_page.js
+else
+    echo "Phone page JavaScript checks require Node.js and were skipped."
+fi
 if [[ "$(uname -s)" != Darwin ]]; then
     echo "Firmware checks complete; macOS Swift tests require a Mac and were skipped."
     exit 0
