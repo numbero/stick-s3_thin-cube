@@ -74,6 +74,8 @@ Mac 使用固定 64 帧槽、约 40 ms 初始预缓冲、序号去重与重排�
 
 v0.4.65 用强 C 符号 `verifyRollbackLater() = true` 覆盖 Arduino 2.0.17 默认的初始化早确认路径，真正将 pending 状态保留至应用自检。启动健康区分本地资源与外部网络：离线路由器不直接判失败；已关联 Wi-Fi 则要求本地 HTTP 服务完成注册。维护/配网门户及首次连接选择有各自资源条件。确认采用每会话 generation，先消费已有按压与松键，再接受新的 A 点击；声明版本必须与镜像描述一致。取消与接收→校验边界、超时与开始接收边界在同一锁内仲裁，主循环时间戳落后 HTTP 更新时不会下溢误判超时。
 
+v0.4.71 compares numeric release-version cores before OTA admission and rejects a lower target with HTTP 409 `firmware_downgrade`, before token creation or flash erase. Same-version reinstallation remains allowed. The phone page independently applies the same check and rejects official package filenames that disagree with the image descriptor.
+
 ## v0.4.65 手机热点升级
 
 正常 HTTP/BLE info 与状态提供 `maintenanceOTA:true`。已授权 Mac 经 `POST /api/maintenance {requestId:"UUID"}` 或 BLE `{op:"maintenance",requestId:"UUID",rid}` 请求，成功返回 `{accepted:true}`；同一待执行 requestId 幂等。错误包括 busy、boot_unverified、storage_failed、invalid_request。设备约 700 ms 后重启，仅消费一次 RAM/NVS 升级意图，不改原永久连接方式。设备按住正面 A 开机、约两秒后松开也可独立进入；启动 A+B 不进入升级或恢复出厂，B-only 保留恢复出厂确认。

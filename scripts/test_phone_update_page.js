@@ -33,6 +33,17 @@ for (const size of [1, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129, 352, 65536, 
   assert.equal(hash(bytes), expectedHash(bytes), `SHA-256 at length ${size}`);
 }
 const valid = image();
+assert.equal(core.isDowngrade('v0.4.70','v0.4.67'),true);
+assert.equal(core.isDowngrade('v0.4.70','v0.4.67-legacy'),true);
+assert.equal(core.isDowngrade('v1.0.0','v0.99.999'),true);
+assert.equal(core.isDowngrade('v0.4.70','v0.4.70'),false);
+assert.equal(core.isDowngrade('v0.4.70','v0.4.71'),false);
+assert.equal(core.isDowngrade('v0.4.9','v0.4.10'),false);
+assert.equal(core.isDowngrade('dev','v0.4.70'),false);
+assert.equal(core.isDowngrade('v0.4.70','v0.4.4294967296'),false);
+assert.throws(() => core.parseFirmware(image(1024,'v0.4.67'),'thincube-v0.4.70.bin'),/filename_version_mismatch/);
+assert.equal(core.parseFirmware(valid,'thincube-v0.4.65.bin').ver,'v0.4.65');
+
 assert.deepEqual({...core.parseFirmware(valid, 'ThinCube.BIN', 2097152)}, {ver:'v0.4.65',size:1024});
 assert.equal(core.parseFirmware(image(352), 'app.bin').size, 352);
 assert.throws(() => core.parseFirmware(valid, 'firmware.zip'), /file_extension/);
@@ -118,6 +129,31 @@ function baseResponse(request) {
     return {data:{ok:true,token:uploadToken}};
   }
   return undefined;
+}
+async function downgradeFlows() {
+  const old = image(1024,'v0.4.67');
+  const client = browser(request => {
+    if(request.url==='/maintenance/info') return {data:{...info,version:'v0.4.70'}};
+    return baseResponse(request);
+  });
+  await tick();
+  client.element('code').value='123456'; await client.element('sessionForm').fire('submit');
+  client.element('file').files=[{name:'thincube-v0.4.67.bin',size:old.length,bytes:old}];
+  await client.element('file').fire('change');
+  assert.equal(client.element('start').disabled,true);
+  assert.match(client.element('message').textContent,/已阻止降级/);
+  assert.equal(client.element('versionChange').textContent,'v0.4.70 → v0.4.67');
+  assert.equal(client.requests.some(r=>r.url==='/ota/begin'||r.url==='/ota'),false);
+  client.element('file').files=[{name:'thincube-v0.4.70.bin',size:old.length,bytes:old}];
+  await client.element('file').fire('change');
+  assert.equal(client.element('start').disabled,true);
+  assert.match(client.element('message').textContent,/文件名中的版本与固件内部版本不一致/);
+  const same=image(1024,'v0.4.70');
+  client.element('file').files=[{name:'thincube-v0.4.70.bin',size:same.length,bytes:same}];
+  await client.element('file').fire('change');
+  assert.equal(client.element('start').disabled,false);
+  assert.equal(client.element('versionChange').textContent,'v0.4.70 → v0.4.70');
+  console.log('PASS: older image and misleading filename rejected, numeric version order and same-version reinstall admitted');
 }
 async function flows() {
   let polls = 0, sawProgressWithoutSuccess = false;
@@ -235,4 +271,4 @@ async function flows() {
   assert.equal(cannotCancel.element('message').className,'error');
   console.log('PASS: authenticated upload, write ACK stays pending boot health, no timed success or false ACK, exact errors, retry, session expiry, delayed cancellation, and VERIFY refusal');
 }
-flows().catch(error => { console.error(error); process.exitCode=1; });
+downgradeFlows().then(flows).catch(error => { console.error(error); process.exitCode=1; });

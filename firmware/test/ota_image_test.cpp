@@ -22,5 +22,20 @@ int main(){
   assert(OtaImagePolicy::versionValid("v0.4.65-rc1+2"));
   for(const auto invalid:{"","\"bad","v1\n","v1\\","v1 space","01234567890123456789012345678901ab"})assert(!OtaImagePolicy::versionValid(invalid));
   assert(!OtaImagePolicy::versionValid(nullptr));
+  assert(OtaImagePolicy::isDowngrade("v0.4.70","v0.4.67"));
+  assert(OtaImagePolicy::isDowngrade("v0.4.70","v0.4.67-legacy"));
+  assert(OtaImagePolicy::isDowngrade("v1.0.0","v0.99.999"));
+  assert(OtaImagePolicy::isDowngrade("v0.5.0","v0.4.999"));
+  assert(!OtaImagePolicy::isDowngrade("v0.4.70","v0.4.70"));
+  assert(!OtaImagePolicy::isDowngrade("v0.4.70","v0.4.71"));
+  assert(!OtaImagePolicy::isDowngrade("v0.4.9","v0.4.10"));
+  assert(!OtaImagePolicy::isDowngrade("v0.4.70","v0.5.0"));
+  assert(!OtaImagePolicy::isDowngrade("dev","v0.4.70"));
+  assert(!OtaImagePolicy::isDowngrade("v0.4.70","dev"));
+  uint32_t parts[3];
+  assert(!OtaImagePolicy::releaseCore("v0.4",parts));
+  assert(!OtaImagePolicy::releaseCore("v0..70",parts));
+  assert(!OtaImagePolicy::releaseCore("v0.4.4294967296",parts));
+  assert(!OtaImagePolicy::releaseCore(nullptr,parts));
   puts("OTA image identity and displayed target version checked before flash erase");
 }

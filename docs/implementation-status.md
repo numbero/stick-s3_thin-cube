@@ -1,5 +1,9 @@
 # ThinCube 实施与验收状态
 
+## Wrong-file OTA protection v0.4.71 (2026-10-24)
+
+Device readback and the live Mac app confirmed the reported intended-v0.4.70 test selected the exact v0.4.67 image, which predates the new boot notices. Added phone/device release-downgrade rejection before erase, filename/descriptor agreement checks, and prominent current → target display; same-version reinstall remains supported. Release/Base builds, 49 OTA sanitizer scenarios, final-image phone checks and all local tests passed (Swift 142, one skip). USB installation and health passed. The user verified old-file rejection, then completed a real iPhone v0.4.71 → v0.4.71 hotspot upload and observed both amber self-check and green completion. Mac status transitioned from unverified to verified; final readback confirmed app1/seq=10/VALID, full image match, intact app0/seq=9 fallback, and a normal restart into app1. Details are recorded in [the diagnosis](phone-hotspot-ota-v0.4.71.md).
+
 ## English OTA notices v0.4.70 (2026-10-24)
 
 Device boot-check and completion screens now use English Font0 text: `SELF CHECK / DO NOT RESTART` and `UPDATE COMPLETE / SAFE TO RESTART`. The Chinese glyph subset was removed; phone instructions now reference the matching English completion text. Release/Base builds, actual-function viewport previews, and final-image phone checks passed. USB installation/hash verification passed, preserving the v0.4.69 fallback and settings. The Mac observed v0.4.70 first checking, then verified with upgrade actions enabled; no USB monitor/reset interrupted the trial. The user confirmed both display stages appeared normally, completing on-device boot-notice visual acceptance. Details are recorded in [the v0.4.70 notes](phone-hotspot-ota-v0.4.70.md).

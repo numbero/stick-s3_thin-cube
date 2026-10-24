@@ -48,6 +48,7 @@ inline const esp_partition_t sparePartition={"ota_1",0x210000,2097152};
 
 struct OtaHost {
   uint32_t clock=100000;
+  std::string runningVersion="v0.4.64";
   bool paired=true,maintenance=false,maintenanceReady=true,maintenanceAuthorized=true;
   bool maintenancePending=false,setup=false,provisioning=false,calibration=false,sleep=false;
   bool switching=false,connected=false,localHealthy=true,imuHealthy=true,haveSpare=true;
@@ -66,6 +67,7 @@ struct OtaHost {
 inline OtaHost host;
 inline std::mutex admissionMutex;
 inline uint32_t millis(){return host.clock;}
+inline const char* firmwareVersion(){return host.runningVersion.c_str();}
 inline uint32_t esp_random(){return 0xabcdef12;}
 inline bool maintenanceActive(){return host.maintenance;}
 inline bool maintenanceReady(){return host.maintenanceReady;}

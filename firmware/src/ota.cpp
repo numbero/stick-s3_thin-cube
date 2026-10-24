@@ -20,6 +20,8 @@
 #include <mutex>
 #include <algorithm>
 
+extern const char* firmwareVersion();
+
 // Arduino 2.0.17 otherwise confirms PENDING_VERIFY inside initArduino(), before setup().
 // Strong C linkage overrides its weak hook; our 60-second local self-test owns confirmation.
 extern "C" bool verifyRollbackLater(){return true;}
@@ -63,6 +65,7 @@ esp_err_t begin(httpd_req_t* r) {
   bool valid=cJSON_IsNumber(s)&&s->valuedouble>=OtaImagePolicy::MinimumSize&&s->valuedouble<=OtaImagePolicy::MaximumSize&&s->valuedouble==s->valueint&&cJSON_IsString(h)&&strlen(h->valuestring)==64&&cJSON_IsString(v)&&OtaImagePolicy::versionValid(v->valuestring);
   if(valid)for(int i=0;i<64;i++)if(!isxdigit(static_cast<unsigned char>(h->valuestring[i])))valid=false;
   if(!valid){cJSON_Delete(j);return reply(r,"{\"error\":\"invalid_manifest\"}","400 Bad Request");}
+  if(OtaImagePolicy::isDowngrade(firmwareVersion(),v->valuestring)){cJSON_Delete(j);return reply(r,"{\"error\":\"firmware_downgrade\"}","409 Conflict");}
   std::lock_guard<std::mutex> admission(transportAdmission());
   std::lock_guard<std::mutex> lock(guard);
   if(maintenancePending()||connectionSetupActive()||provActive()){cJSON_Delete(j);return reply(r,"{\"error\":\"busy\"}","409 Conflict");}
@@ -131,6 +134,7 @@ esp_err_t upload(httpd_req_t* r) {
   if(reason){if(handle)esp_ota_abort(handle);fail(reason);char response[96];snprintf(response,sizeof(response),"{\"ok\":false,\"error\":\"%s\"}",reason);return reply(r,response,"400 Bad Request");}
   esp_err_t result=esp_ota_end(handle);handle=0;
   if(result!=ESP_OK){fail("image_verification_failed");return reply(r,"{\"ok\":false}","400 Bad Request");}
+  Serial.printf("[ota] image verified: current %s target %s slot %s bytes %u\n",firmwareVersion(),expectedVersion,slot->label,unsigned(expectedSize));
   if(esp_ota_set_boot_partition(slot)!=ESP_OK){fail("set_boot_failed");return reply(r,"{\"ok\":false}","500 Internal Server Error");}
   {std::lock_guard<std::mutex> lock(guard);doneAt=millis();stage=OTA_DONE;token[0]=0;}
   return reply(r,"{\"ok\":true}");

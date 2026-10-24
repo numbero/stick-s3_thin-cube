@@ -76,7 +76,7 @@ Mac 客户端的常用入口：
 | **声音** | 准备 BlackHole 音频、允许语音输入、手动开始/停止持续语音，调整增益与扬声器。 |
 | **固件** | Mac 通过 Wi-Fi 上传固件；或在蓝牙/Wi-Fi 连接下点“用手机升级…”开启设备热点。写入具体镜像均需设备 A 确认，电量至少 50%。 |
 
-手机先将 `thincube-<版本>.bin` 下载到本机文件，再连接无需密码的 `ThinCube-Update-xxxxxx` 热点，用完整 Safari/Chrome 打开 `http://192.168.4.1/`，输入设备屏幕六位升级码并选择固件。按设备 A 确认后等待写入校验完成；手机发送到 100% 时仍需等待最终结果。等待时 B 退出，上传时 B 先取消；失败可重试，闲置五分钟自动退出。升级或退出后设备恢复原蓝牙/Wi-Fi 模式。写入完成不代表升级已最终生效。重启后设备以琥珀色显示“SELF CHECK／DO NOT RESTART”，请保持供电约 60–90 秒，不要手动复位、关机或插拔 USB；只有健康检查通过并正式确认新版后，才会显示绿色“UPDATE COMPLETE”和版本号，短按 A/B 继续。手机热点会随重启断开，网页保留待自检提示，不会定时宣告成功；自检未确认前再次重启会自动回到旧版。Mac 发起后暂停重连，设备退出热点后可在“固件”页重新连接。自检提示见[英文升级结果提示](docs/phone-hotspot-ota-v0.4.70.md)，入口布局见[大字倒计时](docs/phone-hotspot-ota-v0.4.68.md)，完整操作见[手机热点升级](docs/phone-hotspot-ota-v0.4.66.md)。
+手机先将 `thincube-<版本>.bin` 下载到本机文件，再连接无需密码的 `ThinCube-Update-xxxxxx` 热点，用完整 Safari/Chrome 打开 `http://192.168.4.1/`，输入设备屏幕六位升级码并选择固件。按设备 A 确认后等待写入校验完成；手机发送到 100% 时仍需等待最终结果。等待时 B 退出，上传时 B 先取消；失败可重试，闲置五分钟自动退出。升级或退出后设备恢复原蓝牙/Wi-Fi 模式。写入完成不代表升级已最终生效。重启后设备以琥珀色显示“SELF CHECK／DO NOT RESTART”，请保持供电约 60–90 秒，不要手动复位、关机或插拔 USB；只有健康检查通过并正式确认新版后，才会显示绿色“UPDATE COMPLETE”和版本号，短按 A/B 继续。手机热点会随重启断开，网页保留待自检提示，不会定时宣告成功；自检未确认前再次重启会自动回到旧版。Mac 发起后暂停重连，设备退出热点后可在“固件”页重新连接。v0.4.71 起，页面和设备共同阻止误装旧版，官方文件名必须与镜像内部版本一致；同版本重装仍允许。最新包见 `artifacts/phone-ota-v0.4.71/for-iphone/thincube-v0.4.71.bin`。诊断与修复见[误装旧版防护](docs/phone-hotspot-ota-v0.4.71.md)，自检提示见[英文升级结果提示](docs/phone-hotspot-ota-v0.4.70.md)，入口布局见[大字倒计时](docs/phone-hotspot-ota-v0.4.68.md)，完整操作见[手机热点升级](docs/phone-hotspot-ota-v0.4.66.md)。
 
 遇到问题时，先检查下面几项：
 
@@ -114,7 +114,7 @@ Mac 首次构建前需配置固定 Apple 签名身份，见[签名配置脚本](
 |---|---|
 | 实施进展与验收范围 | [实施状态](docs/implementation-status.md) |
 | 连接、配对与重设 | [连接与配对](docs/connection-pairing-v0.4.6.md)、[恢复出厂](docs/factory-reset-v0.4.38.md) |
-| 通信、音频与升级 | [v1 协议](docs/thincube-protocol-v1.md)、[Wi-Fi / BLE 实现](docs/wifi-ble-implementation.md)、[手机热点升级](docs/phone-hotspot-ota-v0.4.70.md)、[历史配网与 OTA](docs/wifi-prov-ota.md) |
+| 通信、音频与升级 | [v1 协议](docs/thincube-protocol-v1.md)、[Wi-Fi / BLE 实现](docs/wifi-ble-implementation.md)、[手机热点升级](docs/phone-hotspot-ota-v0.4.71.md)、[历史配网与 OTA](docs/wifi-prov-ota.md) |
 | 角色与玩法 | [Clawd 设计](docs/clawd-character-v2.md)、[横屏玩法](docs/landscape-exploration.md) |
 | 快捷键与手势 | [A/B 快捷键](docs/walkie-b-shortcut-v0.4.41.md)、[双敲设置](docs/tap-settings-v0.4.28.md)、[设备保存](docs/tap-persistence-v0.4.57.md)、[按键诊断](docs/key-diagnostics-v0.4.26.md) |
 | 省电与开发环境 | [统一休眠策略](docs/unified-sleep-v0.4.60.md)、[在线待机](docs/idle-power-v0.4.9.md)、[朝下息屏](docs/face-down-rest-v0.4.19.md)、[云端研发](docs/cloud-development.md) |

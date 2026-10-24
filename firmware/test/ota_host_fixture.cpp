@@ -64,6 +64,15 @@ void admissionAndManifest(){
     auto request=manifest(invalid==0?351:9000,invalid==1?"bad\nversion":invalid==2?"":TargetVersion);
     begin(&request);assert(request.responseStatus=="400 Bad Request"&&stage==OTA_IDLE&&host.erases==0);
   }
+  // The server independently rejects an older image before confirmation,
+  // token publication, or spare-slot erase, even if a client bypasses its UI.
+  resetWorker();host.runningVersion="v0.4.70";otaSetBattery(85);
+  auto downgrade=manifest(9000,"v0.4.67");begin(&downgrade);
+  assert(downgrade.responseStatus=="409 Conflict"&&downgrade.response.find("firmware_downgrade")!=std::string::npos);
+  assert(stage==OTA_IDLE&&!token[0]&&!host.erases&&!host.commits);
+  resetWorker();host.runningVersion=TargetVersion;otaSetBattery(85);
+  auto reinstall=manifest(9000);begin(&reinstall);
+  assert(reinstall.responseStatus=="200 OK"&&stage==OTA_CONFIRM&&!host.erases);
   resetWorker();otaSetBattery(49);auto low=manifest(9000);begin(&low);assert(low.responseStatus=="409 Conflict");
   resetWorker();otaSetBattery(85);host.clock+=15001;auto stale=manifest(9000);begin(&stale);assert(stale.responseStatus=="409 Conflict");
 }
