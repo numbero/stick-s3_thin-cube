@@ -70,7 +70,7 @@ void powerTick(uint32_t ms){
   calibration.update(ms,voltageOK?int(mv):-1,gauge.medianMillivolts(),inputSource,
     chargeRead&&uint32_t(ms-chargeAt)<BatteryGauge::StaleMs,charging,deviceControlConnected(ms));
   calibrationOwns=calibration.ownsUI();
-  otaSetBattery(gauge.otaLevel(ms));
+  otaSetPower(gauge.otaLevel(ms),inputSource);
 }
 
 int powerBatteryLevel(uint32_t ms){return gauge.level(ms);}

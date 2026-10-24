@@ -14,12 +14,12 @@ static const char phoneUpdatePage[] = R"THINCUBE(<!doctype html>
 </head>
 <body><main>
 <header><div class="brand">THINCUBE / LOCAL UPDATE</div><h1>用手机升级固件</h1><p class="intro">设备热点无需 Wi-Fi 密码。连接后仍需输入屏幕上的 6 位升级码，选择固件，并在设备上按 A 确认。</p></header>
-<div class="notice">请先把 ThinCube 应用固件 <strong>.bin</strong> 下载到手机。写入期间保持热点连接、停留在本页，勿锁屏。重启后还需约 60–90 秒自检；请保持供电，勿手动重启、关机或插拔 USB，直到设备显示绿色“UPDATE COMPLETE”。热点没有互联网是正常现象。</div>
+<div class="notice">请先连接 USB 电源，并把 ThinCube 应用固件 <strong>.bin</strong> 下载到手机。写入期间保持热点连接、停留在本页，勿锁屏。重启后还需约 60–90 秒自检；请保持供电，勿手动重启、关机或插拔 USB，直到设备显示绿色“UPDATE COMPLETE”。热点没有互联网是正常现象。</div>
 <p class="hint">请用 Safari 或 Chrome 打开 <strong>http://192.168.4.1/</strong>。若系统弹出的网络认证窗口无法选择文件，请切换到完整浏览器。</p>
-<section class="card" aria-labelledby="deviceTitle"><div class="row"><h2 id="deviceTitle">设备连接</h2><button id="refresh" class="quiet" type="button">重新连接</button></div><div id="deviceState" class="device-state"><span class="status-dot" aria-hidden="true"></span><span id="connection">正在连接设备…</span></div><dl><dt>设备</dt><dd id="device">ThinCube StickS3</dd><dt>当前版本</dt><dd id="currentVersion">—</dd><dt>电量</dt><dd id="battery">—</dd></dl></section>
+<section class="card" aria-labelledby="deviceTitle"><div class="row"><h2 id="deviceTitle">设备连接</h2><button id="refresh" class="quiet" type="button">重新连接</button></div><div id="deviceState" class="device-state"><span class="status-dot" aria-hidden="true"></span><span id="connection">正在连接设备…</span></div><dl><dt>设备</dt><dd id="device">ThinCube StickS3</dd><dt>当前版本</dt><dd id="currentVersion">—</dd><dt>电量</dt><dd id="battery">—</dd><dt>供电</dt><dd id="power">正在检测</dd></dl></section>
 <section class="card" aria-labelledby="sessionTitle"><h2 id="sessionTitle"><span class="number" aria-hidden="true">1</span>验证本次升级</h2><form id="sessionForm"><label for="code">设备屏幕上的 6 位升级码</label><input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="000000" required aria-describedby="sessionHint"><p id="sessionHint" class="hint">升级码仅用于本次热点会话，不会改变 Mac 配对。</p><button id="authorize" class="full secondary" type="submit">验证升级码</button></form><p id="sessionState" class="hint" role="status" hidden></p></section>
 <section class="card" aria-labelledby="fileTitle"><h2 id="fileTitle"><span class="number" aria-hidden="true">2</span>选择应用固件</h2><label class="sr-only" for="file">选择 ThinCube .bin 固件文件</label><input id="file" type="file" accept=".bin,application/octet-stream" aria-describedby="fileHint"><p id="fileHint" class="hint">支持 ThinCube StickS3 应用镜像，最大 2 MiB。文件会先在手机本地检查。</p><div id="fileDetail" class="file-detail" hidden><p id="versionChange" class="version-change"></p><dl><dt>目标版本</dt><dd id="targetVersion"></dd><dt>文件大小</dt><dd id="fileSize"></dd></dl><div class="digest">SHA-256<br><span id="digest"></span></div></div></section>
-<section class="card" aria-labelledby="updateTitle"><h2 id="updateTitle"><span class="number" aria-hidden="true">3</span>确认并升级</h2><p class="hint">电量需达到 50%。提交后，请核对设备屏幕上的目标版本，并在 30 秒内按 A。按 B 可取消。</p><button id="start" type="button" class="full" disabled>开始升级</button><div id="progress" hidden><progress id="bar" max="100" value="0" aria-label="手机发送进度"></progress><p id="progressText" role="status" aria-live="polite"></p><button id="cancel" type="button" class="secondary full">取消本次升级</button></div></section>
+<section class="card" aria-labelledby="updateTitle"><h2 id="updateTitle"><span class="number" aria-hidden="true">3</span>确认并升级</h2><p class="hint">需接入 USB 电源且电量达到 50%；已充满并接着电源也可升级。提交后，请核对设备屏幕上的目标版本，并在 30 秒内按 A。按 B 可取消。</p><p id="powerHint" class="hint" role="status" aria-live="polite">正在检测供电和电量…</p><button id="start" type="button" class="full" disabled>开始升级</button><div id="progress" hidden><progress id="bar" max="100" value="0" aria-label="手机发送进度"></progress><p id="progressText" role="status" aria-live="polite"></p><button id="cancel" type="button" class="secondary full">取消本次升级</button></div></section>
 <p id="message" role="status" aria-live="polite" aria-atomic="true"></p>
 <p class="footer">所有操作均在手机和设备之间完成。<br>写入后设备会重启自检，并恢复原连接模式。<br>热点断开后，本页无法跟踪自检结果，请查看设备屏幕。</p>
 </main>
@@ -97,12 +97,13 @@ function sha256(bytes) {
 // END TESTABLE FIRMWARE HELPERS
 
 (function() {
-  var ids = ['refresh','deviceState','connection','device','currentVersion','battery','sessionForm','code','authorize','sessionState','file','fileDetail','targetVersion','fileSize','versionChange','digest','start','progress','bar','progressText','cancel','message'];
+  var ids = ['refresh','deviceState','connection','device','currentVersion','battery','power','powerHint','sessionForm','code','authorize','sessionState','file','fileDetail','targetVersion','fileSize','versionChange','digest','start','progress','bar','progressText','cancel','message'];
   var ui = {}; ids.forEach(function(id) { ui[id] = document.getElementById(id); });
-  var state = {info:null,token:'',file:null,manifest:null,busy:false,reading:false,authorizing:false,cancelling:false,cancelTask:null,xhr:null,cancelled:false,phase:'idle',run:0};
+  var state = {info:null,token:'',file:null,manifest:null,busy:false,reading:false,refreshing:false,authorizing:false,cancelling:false,cancelTask:null,xhr:null,cancelled:false,phase:'idle',run:0};
   var errors = {
     firmware_downgrade:'所选固件比设备当前版本更旧，已阻止降级。请重新选择最新版本；如需恢复旧版请使用 USB。', filename_version_mismatch:'文件名中的版本与固件内部版本不一致，请重新获取原始固件文件。', file_extension:'请选择下载到手机的 .bin 应用固件文件。', image_too_small:'文件过小或下载不完整，请重新下载 ThinCube 应用固件。', image_too_large:'文件超过设备支持的大小，请使用最大 2 MiB 的应用固件。', wrong_device_image:'这不是适用于 ThinCube StickS3 的应用固件，请检查下载文件。', invalid_version:'固件版本标识无效，请重新下载官方 ThinCube 固件。', file_read_failed:'无法读取文件。请先将固件下载到手机本地，再重新选择。', invalid_code:'升级码不正确，请输入设备当前显示的 6 位数字。', bad_code:'升级码不正确，请输入设备当前显示的 6 位数字。', code:'升级码不正确，请输入设备当前显示的 6 位数字。', rate_limited:'升级码尝试次数过多，请稍等后重试。', session_expired:'本次升级授权已过期，请重新输入设备屏幕上的升级码。', maintenance_required:'本次升级授权无效，请重新输入设备屏幕上的升级码。', maintenance_session_required:'本次升级授权无效，请重新输入设备屏幕上的升级码。', invalid_session:'本次升级授权无效，请重新输入设备屏幕上的升级码。', pairing_required:'本次升级授权无效，请重新输入设备屏幕上的升级码。', maintenance_inactive:'设备已退出手机升级模式，请重新进入该模式并连接热点。', not_in_maintenance:'设备已退出手机升级模式，请重新进入该模式并连接热点。', busy:'设备正在处理另一次升级，请先在设备上按 B 取消，稍后重试。', battery_must_be_known_and_at_least_50:'电量不足 50% 或电量尚未读出。请给设备充电，稍后重试。', no_compatible_slot:'设备没有足够大的备用升级分区，请通过 USB 升级。', boot_health_pending:'设备仍在进行上次升级的启动检查，请等待约 90 秒后再试。', battery_calibration_active:'设备正在校准电量，请先完成或退出校准。', sleep_pending:'设备正在准备休眠，请唤醒后重新进入手机升级模式。', transport_switch_pending:'设备正在切换连接，请稍后重试。', invalid_manifest:'升级信息无效，请重新选择固件。', bad_request:'设备未能识别请求，请重新连接并重试。', token:'本次写入凭证已失效，请重新发起升级并按 A 确认。', confirm_on_device:'本次升级尚未得到设备确认，请重新开始，并在设备上按 A。', timeout:'设备等待确认或上传超时。请重新开始，并在 30 秒内按 A 确认。', confirm_timeout:'设备等待确认超时，请重新开始并在 30 秒内按 A。', cancelled:'本次升级已取消，可以重新选择文件并重试。', cancelled_or_timeout:'设备已中止本次升级，请重新开始。', upload_timeout:'上传超时，设备已中止本次写入。请保持热点连接后重试。', receive_timeout:'设备接收超时，已中止本次写入。请保持热点连接后重试。', connection_lost:'与设备的连接中断。请检查手机仍连接 ThinCube 热点，再重新连接。', request_timeout:'设备响应超时。请保持热点连接，查看设备屏幕后重试。', exact_length_required:'固件文件长度与升级信息不一致，请重新选择文件。', sha256_mismatch:'固件传输校验不一致，设备未启用此镜像，请重新选择文件并重试。', erase_failed:'备用分区擦除失败，请重新启动设备后重试。', write_failed:'固件写入失败，设备未启用此镜像，请重新启动后重试。', image_verification_failed:'设备镜像校验失败，未启用此固件，请重新下载后重试。', version_mismatch:'固件版本与升级信息不一致，请重新选择文件。', set_boot_failed:'固件写入后无法切换启动分区，请重新启动设备后重试。', cannot_cancel:'设备已进入最终校验或重启阶段，请勿断电，等待设备完成。', invalid_response:'未收到有效的设备确认，请检查设备屏幕并重新连接。', upload_not_confirmed:'手机没有收到设备的写入校验成功确认。请先查看设备屏幕和当前版本，再决定是否重试。'
   };
+  errors.external_power_required = '请连接设备 USB 电源后再升级，并保持连接直到设备显示 UPDATE COMPLETE。';
   errors.too_many_attempts = '升级码连续输错 5 次，请等待 30 秒后重试。';
   errors.not_ready = '设备正在退出或尚未准备好升级热点，请查看设备屏幕后重新连接。';
   errors.json_required = '设备未能识别升级请求，请刷新本页后重试。';
@@ -110,10 +111,13 @@ function sha256(bytes) {
   function explanation(error) { var code = error && error.message || 'invalid_response'; return errors[code] || ('设备返回错误：'+code+'。请查看设备屏幕后重试。'); }
   function updateControls() {
     var written = state.phase === 'written';
-    ui.start.disabled = written || state.busy || state.cancelling || state.reading || state.authorizing || !state.token || !state.manifest || !state.info;
-    ui.start.textContent = written ? '请查看设备自检结果' : state.busy ? '升级进行中…' : '开始升级';
+    var external = state.info && state.info.externalPower === true;
+    var batteryOK = state.info && typeof state.info.otaLevel === 'number' && state.info.otaLevel >= 50;
+    ui.start.disabled = written || state.busy || state.cancelling || state.reading || state.authorizing || !state.token || !state.manifest || !external || !batteryOK;
+    ui.start.textContent = written ? '请查看设备自检结果' : state.busy ? '升级进行中…' : state.info && !external ? '请先连接 USB 电源' : '开始升级';
+    ui.powerHint.textContent = written || state.busy ? '请保持 USB 供电，直到设备显示绿色 UPDATE COMPLETE。' : !state.info ? '正在检测供电和电量…' : !external ? errors.external_power_required : !batteryOK ? errors.battery_must_be_known_and_at_least_50 : '外部供电已确认，电量符合升级条件。请保持 USB 连接。';
     ui.file.disabled = written || state.busy || state.cancelling; ui.code.disabled = written || state.busy || state.cancelling || state.authorizing;
-    ui.authorize.disabled = written || state.busy || state.cancelling || state.authorizing; ui.refresh.disabled = written || state.busy || state.cancelling;
+    ui.authorize.disabled = written || state.busy || state.cancelling || state.authorizing; ui.refresh.disabled = written || state.busy || state.cancelling || state.refreshing;
   }
   function forgetSession() {
     state.token = ''; ui.sessionForm.hidden = false; ui.sessionState.hidden = true; ui.code.value = ''; updateControls();
@@ -143,25 +147,36 @@ function sha256(bytes) {
       reader.onerror = function() { reject(new Error('file_read_failed')); }; reader.readAsArrayBuffer(file);
     });
   }
-  async function refresh() {
+  async function refresh(background) {
+    if (state.refreshing || state.busy || state.phase === 'written') return;
+    background = background === true;
+    state.refreshing = true;
     ui.refresh.disabled = true;
     try {
       var info = await jsonRequest('/maintenance/info','GET',null,false);
+      if (state.busy || state.phase === 'written') return;
       if (info.device !== 'ThinCube-StickS3-v1' || typeof info.version !== 'string') throw new Error('wrong_device_image');
       state.info = info; ui.connection.textContent = '已连接升级热点'; ui.deviceState.className = 'device-state online';
       ui.device.textContent = 'ThinCube StickS3'; ui.currentVersion.textContent = info.version;
       ui.battery.textContent = typeof info.level === 'number' && info.level >= 0 ? info.level+'%' : '正在读取';
+      ui.power.textContent = info.externalPower === true ? '已连接外部电源' : '未检测到外部电源';
       if (state.file && state.manifest && state.file.size > Math.min(info.maxSize || 2097152,2097152)) {
         state.manifest = null; ui.fileDetail.hidden = true; throw new Error('image_too_large');
       }
       if (state.manifest && isDowngrade(info.version,state.manifest.ver)) { state.manifest = null; message(errors.firmware_downgrade,'error'); }
-      else if (typeof info.level === 'number' && info.level >= 0 && info.level < 50) message(errors.battery_must_be_known_and_at_least_50,'error');
-      else if (!state.busy) message('请核对设备屏幕上的升级码，并选择固件。');
+      else if (!background && !state.busy) message('请核对设备屏幕上的升级码，并选择固件。');
     } catch (error) {
-      state.info = null; ui.connection.textContent = '设备连接不可用'; ui.deviceState.className = 'device-state'; message(explanation(error),'error');
-    } finally { updateControls(); }
+      state.info = null; ui.power.textContent = '供电状态未知'; ui.connection.textContent = '设备连接不可用'; ui.deviceState.className = 'device-state'; message(explanation(error),'error');
+    } finally { state.refreshing = false; updateControls(); }
   }
   ui.refresh.addEventListener('click',refresh);
+  // Poll only while choosing/authorizing. During the upload the same HTTP
+  // worker is busy receiving the image; device-side checks own power safety.
+  async function pollPower() {
+    if (state.phase === 'written') return;
+    if (!state.busy && !state.reading && !state.authorizing) await refresh(true);
+    setTimeout(pollPower,2000);
+  }
   ui.sessionForm.addEventListener('submit',async function(event) {
     event.preventDefault(); if (state.busy || state.authorizing) return;
     if (!/^[0-9]{6}$/.test(ui.code.value)) { message(errors.invalid_code,'error'); return; }
@@ -171,7 +186,7 @@ function sha256(bytes) {
       if (!/^[a-f0-9]{32}$/i.test(result.token || '')) throw new Error('invalid_response');
       state.token = result.token; ui.code.value = ''; ui.sessionForm.hidden = true;
       ui.sessionState.textContent = '本次升级已授权。退出热点模式后自动失效。'; ui.sessionState.className = 'hint authorized'; ui.sessionState.hidden = false;
-      message(state.manifest ? '固件已检查，可以开始升级。' : '升级码已验证，请选择固件。');
+      message(state.manifest ? '固件已检查，请确认供电和电量条件后开始升级。' : '升级码已验证，请选择固件。');
     } catch (error) { forgetSession(); message(explanation(error),'error'); }
     finally { state.authorizing = false; updateControls(); }
   });
@@ -194,7 +209,7 @@ function sha256(bytes) {
       ui.targetVersion.textContent = manifest.ver; ui.fileSize.textContent = (manifest.size/1024).toFixed(1)+' KiB'; ui.digest.textContent = manifest.sha256; ui.fileDetail.hidden = false;
       if (state.info && isDowngrade(state.info.version,manifest.ver)) throw new Error('firmware_downgrade');
       state.file = file; state.manifest = manifest;
-      message('固件型号和文件校验已完成。'+(state.token ? '现在可以开始升级。' : '请先验证设备屏幕上的升级码。'));
+      message('固件型号和文件校验已完成。'+(state.token ? '请确认供电和电量条件后开始升级。' : '请先验证设备屏幕上的升级码。'));
     } catch (error) { if (currentRead === fileRead) message(explanation(error),'error'); }
     finally { if (currentRead === fileRead) { state.reading = false; updateControls(); } }
   });
@@ -258,6 +273,7 @@ function sha256(bytes) {
       if (state.phase === 'upload' && error.message !== 'cancelled') {
         try { var failure = await jsonRequest('/ota/status','GET',null,true); if (failure.stage === 'failed' && failure.err) detail = new Error(failure.err); } catch (_) {}
       }
+      if (detail.message === 'external_power_required' && state.info) state.info.externalPower = false;
       if (run === state.run) {
         if (state.cancelled) {
           // Aborting a phone request does not prove a flash commit stopped.
@@ -300,6 +316,7 @@ function sha256(bytes) {
   });
   window.addEventListener('beforeunload',function(event) { if (state.busy) { event.preventDefault(); event.returnValue = ''; } });
   refresh();
+  setTimeout(pollPower,2000);
 })();
 </script>
 </body></html>)THINCUBE";

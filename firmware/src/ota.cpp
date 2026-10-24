@@ -34,10 +34,22 @@ std::atomic<uint32_t> sessionGeneration{0};
 std::mutex guard;
 char token[33]{}, version[32]{}, error[40]{}, digest[65]{};
 uint32_t size=0, since=0, doneAt=0, batteryAt=0;
-int battery=-1;
+int battery=-1,powerSource=-1;
 httpd_handle_t server=nullptr;
 bool started=false;
 OtaBootNotice bootNotice=OtaBootNotice::None;
+
+OtaPowerStatus powerStatusLocked(){
+  const uint32_t age=millis()-batteryAt;
+  // Match powerInputSource freshness. CHG_STAT alone is insufficient: it
+  // turns off when a USB-powered battery is full, and may be stale on failure.
+  return {age<=15000?battery:-1,age<=2000&&powerSource==1};
+}
+const char* powerErrorLocked(){
+  const auto power=powerStatusLocked();
+  if(!power.externalPower)return "external_power_required";
+  return power.level<50?"battery_must_be_known_and_at_least_50":nullptr;
+}
 
 bool authorized(httpd_req_t* r){
   return maintenanceActive()?maintenanceReady()&&maintenanceAuthorized(r):deviceAuthorized(r);
@@ -73,7 +85,10 @@ esp_err_t begin(httpd_req_t* r) {
   if(deepSleepPending()){cJSON_Delete(j);return reply(r,"{\"error\":\"sleep_pending\"}","409 Conflict");}
   if(transportBusy()){cJSON_Delete(j);return reply(r,"{\"error\":\"transport_switch_pending\"}","409 Conflict");}
   if(stage!=OTA_IDLE&&stage!=OTA_FAIL){cJSON_Delete(j);return reply(r,"{\"error\":\"busy\"}","409 Conflict");}
-  if(battery<50||millis()-batteryAt>15000){cJSON_Delete(j);return reply(r,"{\"error\":\"battery_must_be_known_and_at_least_50\"}","409 Conflict");}
+  if(const char* why=powerErrorLocked()){
+    cJSON_Delete(j);char response[96];snprintf(response,sizeof(response),"{\"error\":\"%s\"}",why);
+    return reply(r,response,"409 Conflict");
+  }
   auto slot=esp_ota_get_next_update_partition(nullptr);
   if(!slot||s->valueint>int(slot->size)){cJSON_Delete(j);return reply(r,"{\"error\":\"no_compatible_slot\"}","409 Conflict");}
   esp_ota_img_states_t state;
@@ -93,6 +108,7 @@ esp_err_t upload(httpd_req_t* r) {
     if(httpd_req_get_hdr_value_str(r,"X-ThinCube-OTA",supplied,sizeof(supplied))!=ESP_OK||!token[0]||strcmp(supplied,token))return reply(r,"{\"error\":\"token\"}","401 Unauthorized");
     if(stage!=OTA_READY)return reply(r,"{\"error\":\"confirm_on_device\"}","409 Conflict");
     if(r->content_len!=size)return reply(r,"{\"error\":\"exact_length_required\"}","400 Bad Request");
+    if(!powerStatusLocked().externalPower){strcpy(error,"external_power_required");token[0]=0;stage=OTA_FAIL;return reply(r,"{\"error\":\"external_power_required\"}","409 Conflict");}
     expectedSize=size;strcpy(expectedDigest,digest);strcpy(expectedVersion,version);stage=OTA_RECV;
   }
   if(maintenanceActive())maintenanceTouch();
@@ -103,6 +119,7 @@ esp_err_t upload(httpd_req_t* r) {
   bool first=true;
   while(remaining&&!reason) {
     if(cancel){reason="cancelled";break;}
+    if(!otaPowerStatus().externalPower){reason="external_power_required";break;}
     if(millis()-start>120000||millis()-lastData>10000){reason="upload_timeout";break;}
     size_t count=0,want=std::min(remaining,sizeof(chunk));
     while(count<want) {
@@ -113,6 +130,7 @@ esp_err_t upload(httpd_req_t* r) {
       if(cancel||millis()-start>120000){reason="cancelled_or_timeout";break;}
     }
     if(reason)break;
+    if(!otaPowerStatus().externalPower){reason="external_power_required";break;}
     if(first) {
       if(!OtaImagePolicy::prefixValid(chunk,count,expectedVersion)){reason="wrong_device_image";break;}
       if(!slot||esp_ota_begin(slot,expectedSize,&handle)!=ESP_OK){reason="erase_failed";break;}
@@ -129,11 +147,14 @@ esp_err_t upload(httpd_req_t* r) {
     // Cancellation and the commit boundary share a lock: once VERIFY begins,
     // a button/HTTP cancellation must not promise an abort that cannot happen.
     std::lock_guard<std::mutex> lock(guard);
-    if(cancel)reason="cancelled";else stage=OTA_VERIFY;
+    if(cancel)reason="cancelled";
+    else if(!powerStatusLocked().externalPower)reason="external_power_required";
+    else stage=OTA_VERIFY;
   }
   if(reason){if(handle)esp_ota_abort(handle);fail(reason);char response[96];snprintf(response,sizeof(response),"{\"ok\":false,\"error\":\"%s\"}",reason);return reply(r,response,"400 Bad Request");}
   esp_err_t result=esp_ota_end(handle);handle=0;
   if(result!=ESP_OK){fail("image_verification_failed");return reply(r,"{\"ok\":false}","400 Bad Request");}
+  if(!otaPowerStatus().externalPower){fail("external_power_required");return reply(r,"{\"error\":\"external_power_required\"}","409 Conflict");}
   Serial.printf("[ota] image verified: current %s target %s slot %s bytes %u\n",firmwareVersion(),expectedVersion,slot->label,unsigned(expectedSize));
   if(esp_ota_set_boot_partition(slot)!=ESP_OK){fail("set_boot_failed");return reply(r,"{\"ok\":false}","500 Internal Server Error");}
   {std::lock_guard<std::mutex> lock(guard);doneAt=millis();stage=OTA_DONE;token[0]=0;}
@@ -172,7 +193,13 @@ const char* otaTargetVer(){static char b[32];std::lock_guard<std::mutex> lock(gu
 const char* otaLastErr(){static char b[40];std::lock_guard<std::mutex> lock(guard);strcpy(b,error);return b;}
 int otaPct(){std::lock_guard<std::mutex> lock(guard);return size?std::min(100,int(uint64_t(written)*100/size)):0;}
 uint32_t otaSessionGeneration(){return sessionGeneration.load();}
-void otaConfirm(uint32_t expectedGeneration){std::lock_guard<std::mutex> lock(guard);if(stage==OTA_CONFIRM&&sessionGeneration==expectedGeneration){since=millis();stage=OTA_READY;}}
+void otaConfirm(uint32_t expectedGeneration){
+  std::lock_guard<std::mutex> lock(guard);
+  if(stage==OTA_CONFIRM&&sessionGeneration==expectedGeneration){
+    if(const char* why=powerErrorLocked()){strcpy(error,why);token[0]=0;stage=OTA_FAIL;}
+    else {since=millis();stage=OTA_READY;}
+  }
+}
 bool otaCancel(){
   std::lock_guard<std::mutex> lock(guard);
   const OtaStage current=stage;
@@ -183,7 +210,8 @@ bool otaCancel(){
 }
 void otaDismiss(){std::lock_guard<std::mutex> lock(guard);if(stage==OTA_FAIL){stage=OTA_IDLE;error[0]=token[0]=0;}}
 int otaConfirmLeftSec(){std::lock_guard<std::mutex> lock(guard);return stage==OTA_CONFIRM?std::max(0,30-int((millis()-since)/1000)):0;}
-void otaSetBattery(int level){std::lock_guard<std::mutex> lock(guard);battery=level;batteryAt=millis();}
+void otaSetPower(int level,int source){std::lock_guard<std::mutex> lock(guard);battery=level;powerSource=source;batteryAt=millis();}
+OtaPowerStatus otaPowerStatus(){std::lock_guard<std::mutex> lock(guard);return powerStatusLocked();}
 void otaBootBegin(){
   esp_ota_img_states_t state;
   bootNotice=esp_ota_get_state_partition(esp_ota_get_running_partition(),&state)==ESP_OK&&state==ESP_OTA_IMG_PENDING_VERIFY
@@ -228,6 +256,9 @@ void otaTick(uint32_t ms){
     std::lock_guard<std::mutex> lock(guard);
     // The HTTP task can set since/doneAt after this loop captured ms. Signed
     // deltas avoid interpreting that newer timestamp as a 49-day timeout.
+    if((stage==OTA_CONFIRM||stage==OTA_READY)&&!powerStatusLocked().externalPower){
+      strcpy(error,"external_power_required");token[0]=0;stage=OTA_FAIL;
+    }
     if((stage==OTA_CONFIRM||stage==OTA_READY)&&int32_t(ms-since)>30000){
       strcpy(error,"timeout");token[0]=0;stage=OTA_FAIL;
     }

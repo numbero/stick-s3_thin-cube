@@ -76,6 +76,10 @@ v0.4.65 用强 C 符号 `verifyRollbackLater() = true` 覆盖 Arduino 2.0.17 默
 
 v0.4.71 compares numeric release-version cores before OTA admission and rejects a lower target with HTTP 409 `firmware_downgrade`, before token creation or flash erase. Same-version reinstallation remains allowed. The phone page independently applies the same check and rejects official package filenames that disagree with the image descriptor.
 
+v0.4.73 requires external input power for all HTTP OTA admissions, including phone hotspot and Mac Wi-Fi uploads, while retaining the known conservative battery ≥50% requirement. The main loop publishes one locked OTA power snapshot from PM1 input-source/VIN reads; HTTP tasks do not access I2C. External power expires after 2 seconds without a new sample; a full battery with USB still connected is eligible even when CHG_STAT is inactive. Missing, failed or stale input reads return HTTP 409 `external_power_required` before confirmation/token creation/erase. Confirmation and upload recheck power; loss detected before boot-slot selection fails the attempt and leaves the current boot slot selected. An open OTA handle is aborted, while an already-consumed handle is never aborted again. The existing post-commit boot check and rollback behavior remain in effect.
+
+`GET /maintenance/info` adds `externalPower` (fresh confirmed external input, Boolean) and `otaLevel` (conservative OTA battery percentage or -1). The page polls these fields every 2 seconds while idle, disables Start unless `externalPower === true` and `otaLevel >= 50`, and pauses polling during upload. Informational polling does not reset the five-minute maintenance idle timeout.
+
 ## v0.4.65 手机热点升级
 
 正常 HTTP/BLE info 与状态提供 `maintenanceOTA:true`。已授权 Mac 经 `POST /api/maintenance {requestId:"UUID"}` 或 BLE `{op:"maintenance",requestId:"UUID",rid}` 请求，成功返回 `{accepted:true}`；同一待执行 requestId 幂等。错误包括 busy、boot_unverified、storage_failed、invalid_request。设备约 700 ms 后重启，仅消费一次 RAM/NVS 升级意图，不改原永久连接方式。设备按住正面 A 开机、约两秒后松开也可独立进入；启动 A+B 不进入升级或恢复出厂，B-only 保留恢复出厂确认。

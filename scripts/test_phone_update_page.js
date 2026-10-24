@@ -73,6 +73,7 @@ console.log('PASS: offline SHA-256 vectors, padding boundaries, full image, and 
 
 function browser(handler) {
   const elements = new Map(), requests = [];
+  let powerPoll;
   class Element {
     constructor(id) { this.id=id; this.textContent=''; this.className=''; this.hidden=false; this.disabled=false; this.value=''; this.files=[]; this.handlers={}; }
     addEventListener(name, fn) { this.handlers[name]=fn; }
@@ -102,13 +103,18 @@ function browser(handler) {
   class Reader {
     readAsArrayBuffer(file) { this.result=Uint8Array.from(file.bytes).buffer; setTimeout(() => this.onload(), 0); }
   }
-  const context = vm.createContext({Uint8Array,Uint32Array,DataView,Error,XMLHttpRequest:XHR,FileReader:Reader,document:{getElementById:element},window:{addEventListener(){}},setTimeout:(fn,ms)=>setTimeout(fn,Math.min(ms,2)),Date});
+  const context = vm.createContext({Uint8Array,Uint32Array,DataView,Error,XMLHttpRequest:XHR,FileReader:Reader,document:{getElementById:element},window:{addEventListener(){}},setTimeout:(fn,ms)=>{if(ms===2000){powerPoll=fn;return;}return setTimeout(fn,Math.min(ms,2));},Date});
   vm.runInContext(script,context);
-  return {element, requests};
+  return {element, requests, poll:async()=>{assert.ok(powerPoll);const fn=powerPoll;powerPoll=null;await fn();}};
 }
-const info = {version:'v0.4.64',device:'ThinCube-StickS3-v1',level:90,maxSize:2097152,stage:'idle',err:''};
+const info = {version:'v0.4.64',device:'ThinCube-StickS3-v1',level:90,otaLevel:90,externalPower:true,maxSize:2097152,stage:'idle',err:''};
 const sessionToken = 'a'.repeat(32), uploadToken = 'b'.repeat(32);
 const tick = () => new Promise(resolve => setTimeout(resolve, 10));
+async function waitFor(predicate,description) {
+  const deadline=Date.now()+1500;
+  while(!predicate()&&Date.now()<deadline)await tick();
+  assert.ok(predicate(),description);
+}
 async function setup(client) {
   await tick();
   client.element('code').value = '123456'; await client.element('sessionForm').fire('submit');
@@ -155,6 +161,39 @@ async function downgradeFlows() {
   assert.equal(client.element('versionChange').textContent,'v0.4.70 → v0.4.70');
   console.log('PASS: older image and misleading filename rejected, numeric version order and same-version reinstall admitted');
 }
+async function powerFlows() {
+  let power={...info,level:100,otaLevel:100,externalPower:false},offline=false,rejectBegin=false;
+  const client=browser(request=>{
+    if(request.url==='/maintenance/info')return offline?{networkError:true}:{data:power};
+    if(request.url==='/ota/begin'&&rejectBegin)return {status:409,data:{error:'external_power_required'}};
+    return baseResponse(request);
+  });
+  await tick();
+  client.element('code').value='123456';await client.element('sessionForm').fire('submit');
+  client.element('file').files=[{name:'firmware.bin',size:valid.length,bytes:valid}];await client.element('file').fire('change');
+  assert.equal(client.element('start').disabled,true,'100% battery alone is not eligible');
+  assert.match(client.element('powerHint').textContent,/连接设备 USB 电源/);
+  await client.element('start').fire('click');
+  assert.equal(client.requests.some(r=>r.url==='/ota/begin'||r.url==='/ota'),false);
+  power={...power,externalPower:true,charging:false};await client.poll();
+  assert.equal(client.element('start').disabled,false,'full battery and external input are eligible even without active charging');
+  power={...power,externalPower:false};await client.poll();
+  assert.equal(client.element('start').disabled,true,'unplugging automatically disables the button');
+  for(const otaLevel of [-1,49]){
+    power={...power,externalPower:true,otaLevel};await client.poll();
+    assert.equal(client.element('start').disabled,true,'conservative battery reading remains mandatory');
+  }
+  power={...power,otaLevel:50};await client.poll();assert.equal(client.element('start').disabled,false);
+  offline=true;await client.poll();assert.equal(client.element('start').disabled,true,'lost connection fails closed');
+  offline=false;power={...power,externalPower:undefined};await client.poll();
+  assert.equal(client.element('start').disabled,true,'missing power status fails closed');
+  power={...power,externalPower:true};await client.poll();assert.equal(client.element('start').disabled,false);
+  rejectBegin=true;await client.element('start').fire('click');
+  assert.equal(client.element('start').disabled,true,'device rejection immediately invalidates cached USB status');
+  assert.match(client.element('message').textContent,/连接设备 USB 电源/);
+  assert.equal(client.requests.some(r=>r.url==='/ota'),false);
+  console.log('PASS: battery-only, unknown/stale connection, unplug/replug polling, full USB battery, 50% gate, and server-side power rejection');
+}
 async function flows() {
   let polls = 0, sawProgressWithoutSuccess = false;
   const written = browser((request,elements) => {
@@ -182,7 +221,7 @@ async function flows() {
   assert.equal(written.element('file').disabled,true);
   assert.equal(written.element('bar').value,100,'100% describes transfer, not boot health');
   const pendingMessage = written.element('message').textContent, writtenRequests = written.requests.length;
-  await tick(); // The mock runs page timers at most 2 ms apart: elapsed time cannot imply VALID.
+  await written.poll(); // The background timer must not query a closed hotspot or imply VALID.
   assert.equal(written.element('message').className,'pending');
   assert.equal(written.element('message').textContent,pendingMessage);
   assert.equal(written.requests.length,writtenRequests,'no pretend health polling after the hotspot closes');
@@ -232,8 +271,9 @@ async function flows() {
     if(request.url==='/ota/status')return {data:{stage:'ready',pct:0,err:''}};
     pendingUpload=request; return null;
   });
-  await setup(cancelled); const completion=cancelled.element('start').fire('click'); await tick();
-  assert.ok(pendingUpload); await cancelled.element('cancel').fire('click'); await completion;
+  await setup(cancelled); const completion=cancelled.element('start').fire('click');
+  await waitFor(()=>pendingUpload,'upload has started before cancellation');
+  await cancelled.element('cancel').fire('click'); await completion;
   assert.equal(pendingUpload.aborted,true); assert.ok(cancelled.requests.some(request=>request.url==='/ota/cancel'));
   assert.notEqual(cancelled.element('message').className,'pending'); assert.equal(cancelled.element('start').disabled,false);
 
@@ -243,7 +283,8 @@ async function flows() {
     if(request.url==='/ota/status')return {data:{stage:'confirm',pct:0,err:''}};
     throw new Error('No file may be sent before physical confirmation');
   });
-  await setup(cancelledConfirmation); const waitForA=cancelledConfirmation.element('start').fire('click'); await tick();
+  await setup(cancelledConfirmation); const waitForA=cancelledConfirmation.element('start').fire('click');
+  await waitFor(()=>!cancelledConfirmation.element('cancel').disabled,'device confirmation is pending');
   const delayedCancel=cancelledConfirmation.element('cancel').fire('click'); await tick();
   assert.match(cancelledConfirmation.element('message').textContent,/正在确认设备能否取消/);
   assert.equal(cancelledConfirmation.element('start').disabled,true,'cannot retry before cancellation response');
@@ -259,8 +300,9 @@ async function flows() {
     if(request.url==='/ota/status')return {data:{stage:'ready',pct:0,err:''}};
     verifyingUpload=request; return null;
   });
-  await setup(cannotCancel); const verifying=cannotCancel.element('start').fire('click'); await tick();
-  assert.ok(verifyingUpload); const failedCancel=cannotCancel.element('cancel').fire('click'); await tick();
+  await setup(cannotCancel); const verifying=cannotCancel.element('start').fire('click');
+  await waitFor(()=>verifyingUpload,'upload has started before VERIFY cancellation');
+  const failedCancel=cannotCancel.element('cancel').fire('click'); await tick();
   assert.equal(verifyingUpload.aborted,true);
   assert.equal(cannotCancel.element('start').disabled,true);
   assert.doesNotMatch(cannotCancel.element('message').textContent,/已取消|已接受取消|会安全中止/);
@@ -271,4 +313,4 @@ async function flows() {
   assert.equal(cannotCancel.element('message').className,'error');
   console.log('PASS: authenticated upload, write ACK stays pending boot health, no timed success or false ACK, exact errors, retry, session expiry, delayed cancellation, and VERIFY refusal');
 }
-downgradeFlows().then(flows).catch(error => { console.error(error); process.exitCode=1; });
+downgradeFlows().then(powerFlows).then(flows).catch(error => { console.error(error); process.exitCode=1; });

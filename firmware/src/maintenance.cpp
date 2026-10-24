@@ -97,6 +97,9 @@ esp_err_t info(httpd_req_t* request){
   cJSON_AddStringToObject(value,"name",deviceName());
   cJSON_AddStringToObject(value,"project","ThinCube-StickS3-v1");
   cJSON_AddNumberToObject(value,"level",battery.load());cJSON_AddNumberToObject(value,"maxSize",2097152);
+  const auto power=otaPowerStatus();
+  cJSON_AddBoolToObject(value,"externalPower",power.externalPower);
+  cJSON_AddNumberToObject(value,"otaLevel",power.level);
   cJSON_AddStringToObject(value,"stage",otaStageName(otaStage()));
   const char* maintenanceError=failure.load();
   cJSON_AddStringToObject(value,"err",maintenanceError[0]?maintenanceError:otaLastErr());

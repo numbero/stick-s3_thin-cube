@@ -8,7 +8,7 @@ void resetWorker(){
   bootNotice=OtaBootNotice::None;
   std::memset(token,0,sizeof(token));std::memset(version,0,sizeof(version));
   std::memset(error,0,sizeof(error));std::memset(digest,0,sizeof(digest));
-  size=since=doneAt=batteryAt=0;battery=-1;server=nullptr;started=false;++scenarios;
+  size=since=doneAt=batteryAt=0;battery=powerSource=-1;server=nullptr;started=false;++scenarios;
 }
 std::vector<uint8_t> image(size_t length=9000){
   std::vector<uint8_t> bytes(length,0x5a);
@@ -29,7 +29,7 @@ httpd_req_t manifest(size_t length,const char* ver=TargetVersion){
   return jsonRequest("{\"size\":"+std::to_string(length)+",\"sha256\":\""+digestHex()+"\",\"ver\":\""+ver+"\"}");
 }
 httpd_req_t prepare(const std::vector<uint8_t>& bytes,bool confirm=true){
-  otaSetBattery(85);auto request=manifest(bytes.size());
+  otaSetPower(85,1);auto request=manifest(bytes.size());
   assert(begin(&request)==ESP_OK&&request.responseStatus=="200 OK");
   assert(stage==OTA_CONFIRM&&token[0]&&host.erases==0);
   if(confirm){otaConfirm(otaSessionGeneration());assert(stage==OTA_READY);}
@@ -40,14 +40,14 @@ void unchangedBoot(){assert(host.bootPartition==&runningPartition&&!host.commits
 void failed(const char* why){assert(stage==OTA_FAIL);assert(std::string(otaLastErr())==why);unchangedBoot();}
 
 void admissionAndManifest(){
-  resetWorker();host.paired=false;otaSetBattery(85);auto denied=manifest(9000);
+  resetWorker();host.paired=false;otaSetPower(85,1);auto denied=manifest(9000);
   begin(&denied);assert(denied.responseStatus=="401 Unauthorized"&&denied.receiveCalls==0&&stage==OTA_IDLE);
-  resetWorker();host.maintenance=true;host.maintenanceAuthorized=false;otaSetBattery(85);denied=manifest(9000);
+  resetWorker();host.maintenance=true;host.maintenanceAuthorized=false;otaSetPower(85,1);denied=manifest(9000);
   begin(&denied);assert(denied.responseStatus=="401 Unauthorized"&&host.erases==0);
-  resetWorker();host.maintenance=true;host.maintenanceReady=false;otaSetBattery(85);denied=manifest(9000);
+  resetWorker();host.maintenance=true;host.maintenanceReady=false;otaSetPower(85,1);denied=manifest(9000);
   begin(&denied);assert(denied.responseStatus=="401 Unauthorized");
   for(int barrier=0;barrier<8;++barrier){
-    resetWorker();otaSetBattery(85);
+    resetWorker();otaSetPower(85,1);
     if(barrier==0)host.maintenancePending=true;
     if(barrier==1)host.setup=true;
     if(barrier==2)host.provisioning=true;
@@ -60,21 +60,21 @@ void admissionAndManifest(){
     assert(request.responseStatus=="409 Conflict"&&stage==OTA_IDLE&&host.erases==0);
   }
   for(int invalid=0;invalid<3;++invalid){
-    resetWorker();otaSetBattery(85);
+    resetWorker();otaSetPower(85,1);
     auto request=manifest(invalid==0?351:9000,invalid==1?"bad\nversion":invalid==2?"":TargetVersion);
     begin(&request);assert(request.responseStatus=="400 Bad Request"&&stage==OTA_IDLE&&host.erases==0);
   }
   // The server independently rejects an older image before confirmation,
   // token publication, or spare-slot erase, even if a client bypasses its UI.
-  resetWorker();host.runningVersion="v0.4.70";otaSetBattery(85);
+  resetWorker();host.runningVersion="v0.4.70";otaSetPower(85,1);
   auto downgrade=manifest(9000,"v0.4.67");begin(&downgrade);
   assert(downgrade.responseStatus=="409 Conflict"&&downgrade.response.find("firmware_downgrade")!=std::string::npos);
   assert(stage==OTA_IDLE&&!token[0]&&!host.erases&&!host.commits);
-  resetWorker();host.runningVersion=TargetVersion;otaSetBattery(85);
+  resetWorker();host.runningVersion=TargetVersion;otaSetPower(85,1);
   auto reinstall=manifest(9000);begin(&reinstall);
   assert(reinstall.responseStatus=="200 OK"&&stage==OTA_CONFIRM&&!host.erases);
-  resetWorker();otaSetBattery(49);auto low=manifest(9000);begin(&low);assert(low.responseStatus=="409 Conflict");
-  resetWorker();otaSetBattery(85);host.clock+=15001;auto stale=manifest(9000);begin(&stale);assert(stale.responseStatus=="409 Conflict");
+  resetWorker();otaSetPower(49,1);auto low=manifest(9000);begin(&low);assert(low.responseStatus=="409 Conflict");
+  resetWorker();otaSetPower(85,1);host.clock+=15001;auto stale=manifest(9000);begin(&stale);assert(stale.responseStatus=="409 Conflict");
 }
 
 void preEraseRejections(){
@@ -90,6 +90,43 @@ void preEraseRejections(){
     resetWorker();body=image();body[damagedOffset]^=0x40;request=prepare(body);upload(&request);
     failed("wrong_device_image");assert(host.erases==0&&host.writeCalls==0&&host.ends==0&&host.aborts==0);
   }
+}
+
+void externalPowerAdmission(){
+  // High battery alone, unknown reads and stale USB state cannot authorize
+  // an upgrade. Full battery with external input remains eligible.
+  for(int source:{0,-1}){
+    resetWorker();otaSetPower(100,source);auto request=manifest(9000);begin(&request);
+    assert(request.responseStatus=="409 Conflict"&&request.response.find("external_power_required")!=std::string::npos);
+    assert(stage==OTA_IDLE&&!token[0]&&!host.erases&&!host.commits);
+  }
+  resetWorker();otaSetPower(85,1);host.clock+=2001;
+  auto stale=manifest(9000);begin(&stale);
+  assert(stale.response.find("external_power_required")!=std::string::npos&&stage==OTA_IDLE);
+  resetWorker();otaSetPower(100,1);auto full=manifest(9000);begin(&full);
+  assert(full.responseStatus=="200 OK"&&stage==OTA_CONFIRM);
+  resetWorker();host.clock=0xfffffff0u;otaSetPower(85,1);host.clock=0x20;
+  assert(otaPowerStatus().externalPower&&otaPowerStatus().level==85);
+
+  const auto body=image();
+  resetWorker();auto request=prepare(body,false);otaSetPower(85,0);
+  otaConfirm(otaSessionGeneration());failed("external_power_required");assert(!token[0]&&!host.erases);
+  resetWorker();request=prepare(body);otaSetPower(85,0);otaTick(millis());
+  failed("external_power_required");assert(!token[0]&&!host.erases);
+  resetWorker();request=prepare(body);otaSetPower(85,0);upload(&request);
+  failed("external_power_required");assert(request.receiveCalls==0&&!host.erases);
+
+  // Removing USB during receive, writing, hash verification or esp_ota_end
+  // must never select the new boot slot. Only an open handle is aborted.
+  resetWorker();request=prepare(body);
+  request.beforeReceive=[](httpd_req_t&){otaSetPower(85,0);};upload(&request);
+  failed("external_power_required");assert(!host.erases&&!host.writeCalls);
+  resetWorker();request=prepare(body);host.onWrite=[]{otaSetPower(85,0);};upload(&request);
+  failed("external_power_required");assert(host.writeCalls==1&&host.aborts==1&&!host.ends);
+  resetWorker();request=prepare(body);host.onShaFinish=[]{otaSetPower(85,0);};upload(&request);
+  failed("external_power_required");assert(host.aborts==1&&!host.ends);
+  resetWorker();request=prepare(body);host.onEnd=[]{otaSetPower(85,0);};upload(&request);
+  failed("external_power_required");assert(host.ends==1&&!host.aborts);
 }
 
 void successAndWorkerFailures(){
@@ -118,7 +155,8 @@ void successAndWorkerFailures(){
   assert(stage==OTA_FAIL&&std::string(otaLastErr())=="set_boot_failed");
   assert(host.commits==1&&host.bootPartition==&runningPartition&&!host.handleOpen&&host.aborts==0);
 
-  resetWorker();request=prepare(body);request.timeoutReads=2;request.receiveMs=6000;upload(&request);
+  resetWorker();request=prepare(body);request.timeoutReads=2;request.receiveMs=6000;
+  request.beforeReceive=[](httpd_req_t&){otaSetPower(85,1);};upload(&request);
   failed("receive_timeout");assert(host.erases==0&&host.aborts==0);
 }
 
@@ -161,7 +199,7 @@ void cancellationAndTiming(){
   otaTick(readySince+30001);failed("timeout");assert(!token[0]);
 
   resetWorker();request=prepare(body);request.receiveMs=0;host.clock=0xffffff00u;
-  since=host.clock;
+  since=host.clock;otaSetPower(85,1);
   otaTick(0x0000742fu);assert(stage==OTA_READY); // 29999 ms across uptime wrap.
   otaTick(0x00007431u);failed("timeout");
 }
@@ -210,6 +248,6 @@ void bootHealthNotice(){
 }
 
 int main(){
-  admissionAndManifest();preEraseRejections();successAndWorkerFailures();cancellationAndTiming();rollbackHealth();bootHealthNotice();
+  admissionAndManifest();preEraseRejections();externalPowerAdmission();successAndWorkerFailures();cancellationAndTiming();rollbackHealth();bootHealthNotice();
   std::printf("real ota.cpp host harness: %u scenarios passed (ASan/UBSan)\n",scenarios);
 }

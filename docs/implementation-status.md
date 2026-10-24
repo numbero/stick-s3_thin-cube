@@ -1,5 +1,9 @@
 # ThinCube 实施与验收状态
 
+## 外部供电升级限制 v0.4.73（2026-10-24）
+
+手机热点页新增实际供电状态与自动刷新，未接外部电源时禁用开始升级，保留保守电量至少 50% 的要求；满电仍接 USB 时允许。所有 HTTP OTA 共用设备端供电检查，确认或写入中检测到掉电时停止且不切换启动分区。正式/Base 构建、61 个真实 OTA ASan/UBSan 场景、实际手机脚本流程和完整本机回归通过（Swift 142 项，1 项原有跳过，0 失败）。发布包为 `artifacts/phone-ota-v0.4.73/for-iphone/thincube-v0.4.73.bin`，高于此前 v0.4.72 snapshot，文件名及内部版本一致。本次未 USB 安装，物理插拔及手机完整流程待安装新版后验收。详见[外部供电限制](phone-hotspot-ota-v0.4.73.md)。
+
 ## Wrong-file OTA protection v0.4.71 (2026-10-24)
 
 Device readback and the live Mac app confirmed the reported intended-v0.4.70 test selected the exact v0.4.67 image, which predates the new boot notices. Added phone/device release-downgrade rejection before erase, filename/descriptor agreement checks, and prominent current → target display; same-version reinstall remains supported. Release/Base builds, 49 OTA sanitizer scenarios, final-image phone checks and all local tests passed (Swift 142, one skip). USB installation and health passed. The user verified old-file rejection, then completed a real iPhone v0.4.71 → v0.4.71 hotspot upload and observed both amber self-check and green completion. Mac status transitioned from unverified to verified; final readback confirmed app1/seq=10/VALID, full image match, intact app0/seq=9 fallback, and a normal restart into app1. Details are recorded in [the diagnosis](phone-hotspot-ota-v0.4.71.md).

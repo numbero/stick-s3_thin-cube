@@ -43,7 +43,9 @@ int       otaConfirmLeftSec();         /* CONFIRM 页剩余秒数（倒计时显
 bool      otaMarkValid();              /* 仅健康检查后确认；失败则继续重试 */
 void      otaRollbackUnhealthy();      /* 90 秒仍未确认的 OTA 试启动回滚 */
 
-/* 电池电平缓存：httpd 在独立 task，不能直接读 I2C，由主循环刷新 */
-void      otaSetBattery(int level);
+/* httpd 不能读 I2C；主循环以同一快照刷新电量及实际输入电源。 */
+struct OtaPowerStatus { int level; bool externalPower; };
+void      otaSetPower(int level,int source); // source: 1 external, 0 battery, -1 unknown
+OtaPowerStatus otaPowerStatus();
 void      otaStopServer();             // main loop only, before AP provisioning
 void      otaCloseControlConnection(int fd); // main loop: revoke an existing Wi-Fi session
