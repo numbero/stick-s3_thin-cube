@@ -10,6 +10,7 @@
 #include "ota.h"
 #include "ota_confirmation_buttons.h"
 #include "ota_boot_notice_buttons.h"
+#include "ota_complete_badge.h"
 
 extern const char* firmwareVersion();
 #include "maintenance.h"
@@ -1334,18 +1335,17 @@ void renderBootNotice(uint32_t ms){
   auto label=[&](const char* text,int y,uint16_t ink,int size=2){
     pixelText(text,(W-int(strlen(text))*6*size)/2,y,ink,size);
   };
-  putCenter("FIRMWARE UPDATE",12,color,&fonts::Font0);
+  putCenter("FIRMWARE UPDATE",12,complete?C::ink:color,&fonts::Font0);
   canvas.drawFastHLine(10,29,W-20,C::dim2);
   putCenter(firmwareVersion(),40,C::dim,&fonts::Font0);
   if(complete){
-    canvas.drawCircle(W/2,82,15,color);
-    canvas.drawLine(W/2-8,82,W/2-2,88,color);
-    canvas.drawLine(W/2-2,88,W/2+9,76,color);
-    label("UPDATE",110,color);
-    label("COMPLETE",132,color);
-    putCenter("SAFE TO RESTART",155,color,&fonts::Font0);
-    putCenter("PRESS A / B",200,C::ink,&fonts::Font0);
-    putCenter("TO CONTINUE",222,C::dim,&fonts::Font0);
+    OtaCompleteBadge::draw(canvas,W/2,86);
+    label("UPDATE",121,color);
+    label("COMPLETE",143,color);
+    putCenter("SAFE TO RESTART",170,color,&fonts::Font0);
+    canvas.drawFastHLine(22,196,W-44,C::dim2);
+    putCenter("PRESS A / B",210,C::ink,&fonts::Font0);
+    putCenter("TO CONTINUE",224,C::dim,&fonts::Font0);
   }else{
     label("SELF CHECK",70,color);
     label("DO NOT",106,color);
