@@ -23,7 +23,7 @@
 extern const char* firmwareVersion();
 
 // Arduino 2.0.17 otherwise confirms PENDING_VERIFY inside initArduino(), before setup().
-// Strong C linkage overrides its weak hook; our 60-second local self-test owns confirmation.
+// Strong C linkage overrides its weak hook; our continuous local health check owns confirmation.
 extern "C" bool verifyRollbackLater(){return true;}
 
 namespace {
@@ -38,6 +38,8 @@ int battery=-1,powerSource=-1;
 httpd_handle_t server=nullptr;
 bool started=false;
 OtaBootNotice bootNotice=OtaBootNotice::None;
+OtaBootPolicy bootPolicy;
+uint32_t bootCompleteAt=0;
 
 OtaPowerStatus powerStatusLocked(){
   const uint32_t age=millis()-batteryAt;
@@ -213,25 +215,42 @@ int otaConfirmLeftSec(){std::lock_guard<std::mutex> lock(guard);return stage==OT
 void otaSetPower(int level,int source){std::lock_guard<std::mutex> lock(guard);battery=level;powerSource=source;batteryAt=millis();}
 OtaPowerStatus otaPowerStatus(){std::lock_guard<std::mutex> lock(guard);return powerStatusLocked();}
 void otaBootBegin(){
+  bootPolicy.reset();bootCompleteAt=0;
   esp_ota_img_states_t state;
   bootNotice=esp_ota_get_state_partition(esp_ota_get_running_partition(),&state)==ESP_OK&&state==ESP_OTA_IMG_PENDING_VERIFY
     ?OtaBootNotice::Checking:OtaBootNotice::None;
 }
 OtaBootNotice otaBootNotice(){return bootNotice;}
-uint32_t otaBootElapsedSec(){return millis()/1000;}
+uint32_t otaBootStableSec(){return bootPolicy.stableMs()/1000;}
+unsigned otaBootCompleteLeftSec(){
+  if(bootNotice!=OtaBootNotice::Complete)return 0;
+  const uint32_t elapsed=millis()-bootCompleteAt;
+  return elapsed>=OtaBootPolicy::CompleteMs?0:(OtaBootPolicy::CompleteMs-elapsed+999)/1000;
+}
 void otaBootDismiss(){if(bootNotice==OtaBootNotice::Complete)bootNotice=OtaBootNotice::None;}
+void otaBootTick(){
+  if(bootNotice==OtaBootNotice::Complete&&!otaBootCompleteLeftSec()){
+    otaBootDismiss();Serial.println("[ota-ui] completion countdown finished; normal mode");
+  }
+}
 bool otaMarkValid(){
-  if(!deviceBootHealthy()||!imuHealthy(millis())||millis()<60000)return false;
+  const uint32_t now=millis();
   esp_ota_img_states_t s;
-  if(esp_ota_get_state_partition(esp_ota_get_running_partition(),&s)!=ESP_OK)return false;
+  if(esp_ota_get_state_partition(esp_ota_get_running_partition(),&s)!=ESP_OK){bootPolicy.reset();return false;}
   if(s==ESP_OTA_IMG_PENDING_VERIFY){
+    // Recover the warning if the one early metadata read in otaBootBegin
+    // failed; a later successful read must not leave a trial on the home UI.
+    if(bootNotice==OtaBootNotice::None)bootNotice=OtaBootNotice::Checking;
+    if(now>OtaBootPolicy::RollbackMs)return false;
+    if(!bootPolicy.update(now,uiStartupReady()&&deviceBootHealthy()&&imuHealthy(now)))return false;
     const bool ok=esp_ota_mark_app_valid_cancel_rollback()==ESP_OK;
     if(ok){
       // Only the successful IDF confirmation can announce completion. A
       // normal VALID boot or a failed mark must never imply an OTA succeeded.
       bootNotice=OtaBootNotice::Complete;
-      Serial.println("[ota] local health passed; boot marked valid after 60s");
-    }
+      bootCompleteAt=millis();
+      Serial.printf("[ota] local health stable for %ums; boot marked valid at %ums\n",unsigned(OtaBootPolicy::StableMs),unsigned(now));
+    }else bootPolicy.reset();
     return ok;
   }
   return true;
@@ -244,7 +263,7 @@ void otaCloseControlConnection(int fd){
 }
 void otaRollbackUnhealthy(){
   esp_ota_img_states_t state;
-  if(millis()>90000&&esp_ota_get_state_partition(esp_ota_get_running_partition(),&state)==ESP_OK&&state==ESP_OTA_IMG_PENDING_VERIFY)
+  if(millis()>OtaBootPolicy::RollbackMs&&esp_ota_get_state_partition(esp_ota_get_running_partition(),&state)==ESP_OK&&state==ESP_OTA_IMG_PENDING_VERIFY)
     esp_ota_mark_app_invalid_rollback_and_reboot();
 }
 void otaTick(uint32_t ms){

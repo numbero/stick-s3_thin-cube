@@ -2,6 +2,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <esp_http_server.h>
+#include "ota_boot_policy.h"
 
 /* ThinCube v1 OTA，详见 docs/thincube-protocol-v1.md。
    配对鉴权 → {ver,size,sha256} → 设备 A 确认 → 校验设备镜像标识
@@ -19,12 +20,14 @@ enum OtaStage {
 };
 
 /* 本次启动的试运行提示；普通 VALID 开机不显示“升级完成”。
-   仅主循环调用，Complete 保留到用户确认，Checking 不允许关闭。 */
+   仅主循环调用，Complete 显示 5 秒或按键提前关闭，Checking 不允许关闭。 */
 enum class OtaBootNotice { None, Checking, Complete };
 void      otaBootBegin();              /* uiBegin 前缓存本次 PENDING_VERIFY */
 OtaBootNotice otaBootNotice();
-uint32_t  otaBootElapsedSec();         /* 与 60 秒健康门槛使用相同启动时钟 */
+uint32_t  otaBootStableSec();          /* 已实际观察到的连续健康时长，至多 15 秒 */
+unsigned  otaBootCompleteLeftSec();    /* 从真实 IDF 确认成功后计时 5 秒 */
 void      otaBootDismiss();
+void      otaBootTick();               /* 主循环总是调用；完成页超时不依赖无线服务 */
 
 void      otaTick(uint32_t ms);        /* 主循环里调：起 httpd / 确认超时 / 重启 */
 bool      otaRegisterRoutes(httpd_handle_t server); // maintenance server reuses the same OTA engine

@@ -1344,21 +1344,22 @@ void renderBootNotice(uint32_t ms){
     label("COMPLETE",143,color);
     putCenter("SAFE TO RESTART",170,color,&fonts::Font0);
     canvas.drawFastHLine(22,196,W-44,C::dim2);
-    putCenter("PRESS A / B",210,C::ink,&fonts::Font0);
-    putCenter("TO CONTINUE",224,C::dim,&fonts::Font0);
+    char countdown[24];snprintf(countdown,sizeof(countdown),"CONTINUE IN %u s",otaBootCompleteLeftSec());
+    putCenter(countdown,210,C::ink,&fonts::Font0);
+    putCenter("A / B: CONTINUE",224,C::dim,&fonts::Font0);
   }else{
     label("SELF CHECK",70,color);
     label("DO NOT",106,color);
     label("RESTART",126,color);
     putCenter("KEEP POWER ON",148,C::ink,&fonts::Font0);
-    const unsigned elapsed=otaBootElapsedSec();
+    const unsigned elapsed=otaBootStableSec(),required=OtaBootPolicy::StableMs/1000;
     char label[32];
-    if(elapsed<60)snprintf(label,sizeof(label),"%u / 60 s",elapsed);
+    if(elapsed<required)snprintf(label,sizeof(label),"STABLE %u/%u s",elapsed,required);
     else snprintf(label,sizeof(label),"CHECKING HEALTH...");
     putCenter(label,177,C::dim,&fonts::Font0);
     canvas.drawRect(12,198,W-24,7,C::dim2);
     // Filling the bar still means waiting; only the backend can turn it green.
-    canvas.fillRect(14,200,int((W-28)*std::min(60u,elapsed)/60),3,color);
+    canvas.fillRect(14,200,int((W-28)*std::min(required,elapsed)/required),3,color);
     putCenter("PLEASE WAIT",223,C::dim,&fonts::Font0);
   }
   present(ms);

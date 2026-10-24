@@ -6,6 +6,7 @@ unsigned scenarios=0;
 void resetWorker(){
   host=OtaHost{};stage=OTA_IDLE;cancel=false;written=0;sessionGeneration=0;
   bootNotice=OtaBootNotice::None;
+  bootPolicy=OtaBootPolicy{};bootCompleteAt=0;
   std::memset(token,0,sizeof(token));std::memset(version,0,sizeof(version));
   std::memset(error,0,sizeof(error));std::memset(digest,0,sizeof(digest));
   size=since=doneAt=batteryAt=0;battery=powerSource=-1;server=nullptr;started=false;++scenarios;
@@ -204,46 +205,77 @@ void cancellationAndTiming(){
   otaTick(0x00007431u);failed("timeout");
 }
 
+// Keep sampling to model a responsive main loop, rather than advancing the
+// clock once and incorrectly treating an unobserved interval as healthy.
+void sampleHealth(uint32_t start,uint32_t duration){
+  for(uint32_t elapsed=0;elapsed<=duration;elapsed+=50){host.clock=start+elapsed;otaMarkValid();}
+}
 void rollbackHealth(){
-  resetWorker();assert(verifyRollbackLater());host.imageState=ESP_OTA_IMG_PENDING_VERIFY;
-  host.clock=59999;assert(!otaMarkValid()&&host.markValidCalls==0);
-  host.clock=60000;host.localHealthy=false;assert(!otaMarkValid()&&host.markValidCalls==0);
-  host.localHealthy=true;host.imuHealthy=false;assert(!otaMarkValid()&&host.markValidCalls==0);
-  host.imuHealthy=true;host.failMarkValid=true;assert(!otaMarkValid()&&host.markValidCalls==1);
-  host.failMarkValid=false;assert(otaMarkValid()&&host.markValidCalls==2&&host.imageState==ESP_OTA_IMG_VALID);
+  resetWorker();assert(verifyRollbackLater());host.imageState=ESP_OTA_IMG_PENDING_VERIFY;otaBootBegin();
+  sampleHealth(1000,14950);assert(host.markValidCalls==0&&otaBootStableSec()==14);
+  host.clock=16000;assert(otaMarkValid()&&host.markValidCalls==1&&host.imageState==ESP_OTA_IMG_VALID);
   otaRollbackUnhealthy();assert(!host.rollbackCalls);
+  // Each failed prerequisite erases the accumulated window, including a
+  // healthy-looking loop which stopped being observed for more than 250ms.
+  for(int barrier=0;barrier<5;++barrier){
+    resetWorker();host.imageState=ESP_OTA_IMG_PENDING_VERIFY;otaBootBegin();sampleHealth(1000,5000);
+    if(barrier==0)host.localHealthy=false;
+    if(barrier==1)host.imuHealthy=false;
+    if(barrier==2)host.displayReady=false;
+    if(barrier==3)host.failGetState=true;
+    host.clock+=barrier==4?251:50;assert(!otaMarkValid());assert(otaBootStableSec()==0);
+    host.localHealthy=host.imuHealthy=host.displayReady=true;host.failGetState=false;
+    const uint32_t resume=host.clock+(barrier==4?0:50);sampleHealth(resume,14950);assert(!host.markValidCalls);
+    host.clock=resume+15000;assert(otaMarkValid()&&host.markValidCalls==1);
+  }
+  resetWorker();host.imageState=ESP_OTA_IMG_PENDING_VERIFY;otaBootBegin();host.failMarkValid=true;
+  sampleHealth(1000,15000);assert(host.markValidCalls==1&&otaBootNotice()==OtaBootNotice::Checking);
+  assert(!otaBootCompleteLeftSec());host.failMarkValid=false;
+  sampleHealth(16050,14950);assert(host.markValidCalls==1);
+  host.clock=31050;assert(otaMarkValid()&&host.markValidCalls==2);
+  // Even a recovered app cannot confirm after the original rollback deadline.
   resetWorker();host.imageState=ESP_OTA_IMG_PENDING_VERIFY;host.clock=90000;
   otaRollbackUnhealthy();assert(!host.rollbackCalls);
-  host.clock=90001;otaRollbackUnhealthy();assert(host.rollbackCalls==1);
+  host.clock=90001;assert(!otaMarkValid()&&!host.markValidCalls);
+  otaRollbackUnhealthy();assert(host.rollbackCalls==1);
 }
 
 void bootHealthNotice(){
-  // A normal confirmed boot never announces an upgrade completion.
   resetWorker();otaBootBegin();assert(otaBootNotice()==OtaBootNotice::None);
   assert(otaMarkValid()&&host.markValidCalls==0&&otaBootNotice()==OtaBootNotice::None);
+  assert(otaBootCompleteLeftSec()==0);
 
-  // The warning remains until the actual IDF mark succeeds, including health,
-  // timing, metadata-read and mark failures. Button dismissal cannot hide it.
   resetWorker();host.imageState=ESP_OTA_IMG_PENDING_VERIFY;host.clock=2000;
-  otaBootBegin();assert(otaBootNotice()==OtaBootNotice::Checking&&otaBootElapsedSec()==2);
+  otaBootBegin();assert(otaBootNotice()==OtaBootNotice::Checking&&otaBootStableSec()==0);
   otaBootDismiss();assert(otaBootNotice()==OtaBootNotice::Checking);
-  host.clock=59999;assert(!otaMarkValid()&&host.markValidCalls==0);
-  assert(otaBootNotice()==OtaBootNotice::Checking);
-  host.clock=60000;host.localHealthy=false;assert(!otaMarkValid());
-  host.localHealthy=true;host.imuHealthy=false;assert(!otaMarkValid());
-  host.imuHealthy=true;host.failGetState=true;assert(!otaMarkValid()&&host.markValidCalls==0);
-  host.failGetState=false;host.failMarkValid=true;assert(!otaMarkValid()&&host.markValidCalls==1);
-  assert(otaBootNotice()==OtaBootNotice::Checking);
-  host.failMarkValid=false;assert(otaMarkValid()&&host.markValidCalls==2);
+  sampleHealth(2000,14950);assert(!host.markValidCalls&&otaBootNotice()==OtaBootNotice::Checking);
+  host.clock=17000;assert(otaMarkValid()&&host.markValidCalls==1);
   assert(host.imageState==ESP_OTA_IMG_VALID&&otaBootNotice()==OtaBootNotice::Complete);
-  host.clock=65000;assert(otaMarkValid()&&host.markValidCalls==2);
-  assert(otaBootNotice()==OtaBootNotice::Complete);
-  otaBootDismiss();assert(otaBootNotice()==OtaBootNotice::None);
+  assert(otaBootCompleteLeftSec()==5);
+  // Repeated observations of VALID never restart the completion countdown.
+  host.clock=17999;assert(otaMarkValid()&&host.markValidCalls==1);assert(otaBootCompleteLeftSec()==5);
+  host.clock=18000;assert(otaBootCompleteLeftSec()==4);
+  host.clock=21999;otaBootTick();assert(otaBootNotice()==OtaBootNotice::Complete&&otaBootCompleteLeftSec()==1);
+  host.clock=22000;otaBootTick();assert(otaBootNotice()==OtaBootNotice::None&&!host.restarts);
   otaBootBegin();assert(otaBootNotice()==OtaBootNotice::None);
 
-  // A metadata read failure does not fabricate either a trial or success.
+  resetWorker();host.imageState=ESP_OTA_IMG_PENDING_VERIFY;otaBootBegin();sampleHealth(1000,15000);
+  otaBootDismiss();assert(otaBootNotice()==OtaBootNotice::None&&otaBootCompleteLeftSec()==0);
+  resetWorker();host.imageState=ESP_OTA_IMG_PENDING_VERIFY;otaBootBegin();host.clock=80000;
+  otaBootTick();assert(otaBootNotice()==OtaBootNotice::Checking); // Never auto-dismiss pending self-check.
+
+  // Metadata failure cannot fabricate either a trial or a success.
   resetWorker();host.failGetState=true;otaBootBegin();
   assert(otaBootNotice()==OtaBootNotice::None&&!otaMarkValid()&&host.markValidCalls==0);
+  host.failGetState=false;host.imageState=ESP_OTA_IMG_PENDING_VERIFY;host.clock=1000;
+  assert(!otaMarkValid()&&otaBootNotice()==OtaBootNotice::Checking);
+  sampleHealth(1000,15000);assert(otaBootNotice()==OtaBootNotice::Complete);
+  host.setup=true;host.clock+=5000;otaBootTick();assert(otaBootNotice()==OtaBootNotice::None);
+
+  // The five-second success timer is safe across the uptime counter wrap.
+  resetWorker();bootNotice=OtaBootNotice::Complete;bootCompleteAt=0xfffffff0u;
+  host.clock=bootCompleteAt+4999u;assert(otaBootCompleteLeftSec()==1);
+  host.clock=bootCompleteAt+5000u;otaBootTick();assert(otaBootNotice()==OtaBootNotice::None);
 }
 }
 

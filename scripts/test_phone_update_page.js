@@ -210,10 +210,10 @@ async function flows() {
   assert.equal(sawProgressWithoutSuccess,true); assert.equal(written.element('message').className,'pending');
   assert.equal(written.element('progressText').textContent,'固件已写入，正在重启自检');
   assert.match(written.element('message').textContent,/尚未确认升级完成/);
-  assert.match(written.element('message').textContent,/60–90 秒自检/);
+  assert.match(written.element('message').textContent,/15–20 秒自检/);
   assert.match(written.element('message').textContent,/勿手动重启、关机或插拔 USB/);
   assert.match(written.element('message').textContent,/本页无法跟踪自检结果/);
-  assert.match(written.element('message').textContent,/请以设备绿色“UPDATE COMPLETE”和版本号为准/);
+  assert.match(written.element('message').textContent,/显示绿色“UPDATE COMPLETE”，5 秒后自动回到正常界面/);
   assert.doesNotMatch(written.element('message').textContent,/升级成功|已升级完成/);
   assert.equal(written.element('start').disabled,true);
   assert.equal(written.element('start').textContent,'请查看设备自检结果');

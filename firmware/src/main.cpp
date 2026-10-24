@@ -173,12 +173,13 @@ void loop(){
   if(!maintenanceActive())provTick(); /* 配网和临时升级各自独占端口 80 */
   maintenanceTick(ms);
   if(!connectionSetupActive())otaTick(ms);
+  otaBootTick();
   imuPoll(ms);
   uiTick(ms);
 
-  /* 稳定运行 60 秒才认账，放弃回滚窗口（docs/wifi-prov-ota.md §3.4） */
+  /* 由 OTA 后端观察连续健康窗口后确认，异常启动保留回滚。 */
   static bool validMarked = false;
-  if (!validMarked && ms > 60000 && uiHealthy() && deviceBootHealthy() && motionDiag().updates>0){ validMarked=otaMarkValid(); }
+  if (!validMarked){ validMarked=otaMarkValid(); }
   if (!validMarked) otaRollbackUnhealthy();
   deviceTick(ms,petState()==PET_SLEEP,connectionSetupActive()||devicePairWindow()||provActive()||otaActive()||otaBootNotice()!=OtaBootNotice::None||maintenanceActive()||maintenancePending());
   uiSetOrientation(deviceDisplayRotation(),ms);

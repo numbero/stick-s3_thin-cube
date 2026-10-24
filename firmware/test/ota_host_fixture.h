@@ -51,7 +51,7 @@ struct OtaHost {
   std::string runningVersion="v0.4.64";
   bool paired=true,maintenance=false,maintenanceReady=true,maintenanceAuthorized=true;
   bool maintenancePending=false,setup=false,provisioning=false,calibration=false,sleep=false;
-  bool switching=false,connected=false,localHealthy=true,imuHealthy=true,haveSpare=true;
+  bool switching=false,connected=false,localHealthy=true,imuHealthy=true,displayReady=true,haveSpare=true;
   bool failErase=false,failEnd=false,failSetBoot=false,failMarkValid=false,failGetState=false;
   unsigned failWriteAt=0,erases=0,writeCalls=0,ends=0,aborts=0,commits=0;
   unsigned restarts=0,markValidCalls=0,rollbackCalls=0,touches=0,servers=0;
@@ -78,6 +78,7 @@ inline bool deviceAuthorized(httpd_req_t*){return host.paired;}
 inline bool deviceBootHealthy(){return host.localHealthy;}
 inline void deviceRegister(httpd_handle_t){}
 inline bool imuHealthy(uint32_t){return host.imuHealthy;}
+inline bool uiStartupReady(){return host.displayReady;}
 inline bool connectionSetupActive(){return host.setup;}
 inline bool provActive(){return host.provisioning;}
 inline bool powerCalibrationOwnsUI(){return host.calibration;}
