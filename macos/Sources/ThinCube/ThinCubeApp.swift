@@ -41,6 +41,9 @@ private struct ThinCubeMenu: View {
             set: { value in Task { await model.apply(["soundMuted": value]) } }
         )).disabled(!model.connected || model.status?.soundVolume == nil)
         Toggle("仅在菜单栏显示", isOn: Binding(get: { presentation.menuBarOnly }, set: { presentation.setMenuBarOnly($0) }))
+        LaunchAtLoginToggle(settings: presentation.loginItemSettings) {
+            presentation.showMainWindow(pane: .settings)
+        }
         Divider()
         Button("详细设置…") { presentation.showMainWindow() }
         Divider()
@@ -237,6 +240,7 @@ struct MainView: View {
 
     private var settings: some View {
         Form {
+            LoginItemSettingsSection(settings: presentation.loginItemSettings)
             Section {
                 Toggle("仅在菜单栏显示", isOn: Binding(get: { presentation.menuBarOnly }, set: { presentation.setMenuBarOnly($0) }))
                 Text("隐藏 Dock 图标并收起主窗口，连接与语音继续运行。可从菜单栏打开窗口或恢复 Dock 显示；重启后保留此选择。")

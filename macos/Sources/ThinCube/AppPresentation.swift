@@ -23,6 +23,7 @@ import SwiftUI
 @MainActor final class AppPresentation: NSObject, ObservableObject, NSWindowDelegate {
     private static let preferenceKey = "ui.menuBarOnly.v1"
     static let windowShown = Notification.Name("ThinCubeMainWindowShown")
+    let loginItemSettings = LoginItemSettings()
     @Published private(set) var menuBarOnly: Bool
     private let defaults: UserDefaults
     private let model: DeviceModel
