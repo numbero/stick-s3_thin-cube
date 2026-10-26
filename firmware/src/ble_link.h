@@ -18,5 +18,6 @@ uint32_t bleGeneration();
 void bleDisconnect();
 void bleClearAudio();
 void bleSetIdle(bool idle);
+void bleAdvertisingActivity(uint32_t now); // main loop: real button/handling only
 bool blePerformanceReady();
 uint16_t bleConnectionInterval(); // negotiated units of 1.25 ms; 0 unknown

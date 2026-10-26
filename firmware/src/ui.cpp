@@ -655,6 +655,7 @@ void uiTick(uint32_t ms){
   storyButton=button;storyMotion=motionActivityDetected()||ev!=MEV_NONE;
   storyStrongMotion=ev==MEV_SHAKE||ev==MEV_FACE_DOWN;
   if(button||motionActivityDetected()){
+    bleAdvertisingActivity(ms);
     deepSleepCancel();
     idlePower.activity(ms);
     standby=false;

@@ -343,11 +343,13 @@ struct TapSettingsPanel: View {
         guard s.verified == true, s.healthy == true else { return "检测状态异常" }
         guard s.enabled == true else { return "双敲已关闭" }
         if s.config?.manual == true { return "实验模式：仅记录" }
-        if s.config?.software == true, s.softwareFifo != true { return "检测尚未就绪" }
+        if s.config?.software == true, s.softwareFifo != true {
+            return s.context == false ? "双敲待命" : "检测尚未就绪"
+        }
         return "检测正常"
     }
     private var statusColor: Color {
-        statusLabel == "检测正常" ? .green : statusLabel == "双敲已关闭" ? .secondary : .orange
+        statusLabel == "检测正常" ? .green : ["双敲已关闭", "双敲待命"].contains(statusLabel) ? .secondary : .orange
     }
 }
 

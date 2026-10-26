@@ -2,6 +2,10 @@
 #include "ble_framing.h"
 #include "power_save_policy.h"
 #include "connection_timing.h"
+#include "ble_advertising_policy.h"
+#include "device.h"
+#include "connection_setup.h"
+#include "transport.h"
 #include <Arduino.h>
 #include <esp_bt.h>
 #include <esp_bt_main.h>
@@ -28,7 +32,9 @@ std::atomic<uint32_t> generation{0};
 std::atomic<uint32_t> notifyOK{0},notifyFailed{0},congestionCount{0};
 std::atomic<unsigned> notifyPending{0};
 uint8_t remote[6]={};
-bool advReady=false,scanReady=false;
+std::atomic<bool> advReady{false},scanReady{false};
+std::atomic<unsigned> advStartResult{0},advStopResult{0};
+BLEAdvertisingPolicy advertising;
 struct Fragment {uint16_t length;uint8_t data[512];};
 struct Message {uint16_t length,id,offset;uint32_t created;uint8_t data[2048];};
 struct AudioMessage {uint16_t length,id,offset;uint32_t created;uint8_t data[348];};
@@ -51,13 +57,15 @@ uint32_t observedIntervalRevision=0;
 uint16_t nextMessage=0;uint32_t observedGeneration=0,lastPump=0;
 esp_ble_adv_params_t params={.adv_int_min=0x30,.adv_int_max=0x60,.adv_type=ADV_TYPE_IND,.own_addr_type=BLE_ADDR_TYPE_PUBLIC,
   .channel_map=ADV_CHNL_ALL,.adv_filter_policy=ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY};
-void advertise(){if(advReady&&scanReady&&!linked)esp_ble_gap_start_advertising(&params);}
 void gap(esp_gap_ble_cb_event_t event,esp_ble_gap_cb_param_t* p){
   switch(event){
     case ESP_GAP_BLE_ADV_START_COMPLETE_EVT:
-      if(p->adv_start_cmpl.status==ESP_BT_STATUS_SUCCESS)connectionBootMark(ConnectionStage::Advertising);break;
-    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:advReady=p->adv_data_cmpl.status==ESP_BT_STATUS_SUCCESS;advertise();break;
-    case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:scanReady=p->scan_rsp_data_cmpl.status==ESP_BT_STATUS_SUCCESS;advertise();break;
+      if(p->adv_start_cmpl.status==ESP_BT_STATUS_SUCCESS)connectionBootMark(ConnectionStage::Advertising);
+      advStartResult=p->adv_start_cmpl.status==ESP_BT_STATUS_SUCCESS?1:2;break;
+    case ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT:
+      advStopResult=p->adv_stop_cmpl.status==ESP_BT_STATUS_SUCCESS?1:2;break;
+    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT:advReady=p->adv_data_cmpl.status==ESP_BT_STATUS_SUCCESS;break;
+    case ESP_GAP_BLE_SCAN_RSP_DATA_SET_COMPLETE_EVT:scanReady=p->scan_rsp_data_cmpl.status==ESP_BT_STATUS_SUCCESS;break;
     // Secure Connections with no input/output encrypts the link without a
     // system passkey. ThinCube's PIN authenticates the application separately.
     case ESP_GAP_BLE_SEC_REQ_EVT:esp_ble_gap_security_rsp(p->ble_security.ble_req.bd_addr,true);break;
@@ -107,7 +115,7 @@ void gatts(esp_gatts_cb_event_t event,esp_gatt_if_t iface,esp_ble_gatts_cb_param
     case ESP_GATTS_DISCONNECT_EVT:
       connectionTimingMark(ConnectionStage::Disconnected,p->disconnect.reason);
       Serial.printf("[ble] disconnect reason 0x%02x\n",p->disconnect.reason);
-      linked=secured=controlSubscribed=audioSubscribed=false;generation.fetch_add(1);advertise();break;
+      linked=secured=controlSubscribed=audioSubscribed=false;generation.fetch_add(1);break;
     case ESP_GATTS_MTU_EVT:mtu=std::min<uint16_t>(p->mtu.mtu,517);connectionTimingMark(ConnectionStage::MTU,mtu);break;
     case ESP_GATTS_CONGEST_EVT:congested=p->congest.congested;if(congested)congestionCount++;break;
     case ESP_GATTS_CONF_EVT:
@@ -205,6 +213,27 @@ bool bleBegin(const char* name){
 }
 void bleTick(uint32_t now){
   if(!incoming||!complete||!controlOut||!audioOut||!statusPending)return;
+  advertising.observe(now,generation.load());
+  if(const unsigned result=advStartResult.exchange(0)){
+    advertising.completed(true,result==1,now);
+    Serial.printf("[ble-adv] start %s interval %u..%u ms result %u\n",advertising.fast?"fast":"slow",
+      unsigned(params.adv_int_min)*5/8,unsigned(params.adv_int_max)*5/8,result);
+  }
+  if(const unsigned result=advStopResult.exchange(0))advertising.completed(false,result==1,now);
+  const auto advOp=advertising.next(now,advReady&&scanReady&&healthy,linked,
+    devicePairWindow()||connectionSetupActive()||transportBusy());
+  if(advOp!=BLEAdvertisingPolicy::Operation::None){
+    esp_err_t result;
+    if(advOp==BLEAdvertisingPolicy::Operation::Stop)result=esp_ble_gap_stop_advertising();
+    else {
+      const bool fast=advOp==BLEAdvertisingPolicy::Operation::StartFast;
+      params.adv_int_min=fast?BLEAdvertisingPolicy::FastMin:BLEAdvertisingPolicy::SlowMin;
+      params.adv_int_max=fast?BLEAdvertisingPolicy::FastMax:BLEAdvertisingPolicy::SlowMax;
+      result=esp_ble_gap_start_advertising(&params);
+    }
+    advertising.issued(advOp,now,result==ESP_OK);
+    if(result!=ESP_OK)Serial.printf("[ble-adv] request rejected %d\n",int(result));
+  }
   if(observedGeneration!=generation){
     observedGeneration=generation;rx={};controlTx={};audioTx={};
     if(statusPending)*statusPending={};if(snapshotPending)*snapshotPending={};
@@ -257,6 +286,7 @@ uint32_t bleGeneration(){return generation;}
 void bleClearAudio(){if(audioOut)xQueueReset(audioOut);audioTx={};}
 void bleDisconnect(){if(linked)esp_ble_gap_disconnect(remote);}
 void bleSetIdle(bool idle){idleRequested=idle;}
+void bleAdvertisingActivity(uint32_t now){advertising.activity(now);}
 bool blePerformanceReady(){return powerPolicy.audioReady();}
 uint16_t bleConnectionInterval(){return powerPolicy.actual;}
 

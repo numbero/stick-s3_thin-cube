@@ -19,7 +19,7 @@
 #include <nvs.h>
 #include "tap_nvs.h"
 #include <esp_heap_caps.h>
-#include "imu_fifo_capture.h"
+#include "imu_fifo_runtime.h"
 #endif
 
 namespace {
@@ -41,7 +41,7 @@ uint8_t lastTapOutput=0;
 int8_t lastError=0;
 TapDiagnostic taps,softwareTaps;
 SoftwareTapDetector softwareDetector;
-bool softwareFifo=false,softwareClockValid=false,softwareNeedsFlush=false;
+bool softwareClockValid=false,softwareSkipBatch=false;
 uint32_t softwareAt=0,softwareSamples=0;
 
 void tapGuards(){
@@ -75,49 +75,54 @@ constexpr unsigned WaveCapacity=12000; // Bounded 60s, allocated in PSRAM only o
 WavePoint* wave=nullptr;
 unsigned waveCount=0,waveExport=0;
 uint32_t waveStarted=0;
-bool waveActive=false,waveOverflow=false,waveExporting=false,waveRestored=true;
-ImuFifoCapture<FifoBus> fifoCapture;
+bool waveActive=false,waveOverflow=false,waveExporting=false;
+ImuFifoRuntime<FifoBus> fifoRuntime;
 void waveReport(){
   int16_t low[3]={32767,32767,32767},high[3]={-32768,-32768,-32768};
   for(unsigned i=0;i<waveCount;++i){const int16_t v[]={wave[i].x,wave[i].y,wave[i].z};for(unsigned a=0;a<3;++a){if(v[a]<low[a])low[a]=v[a];if(v[a]>high[a])high[a]=v[a];}}
   Serial.printf("[tap-wave] active=%d samples=%u period_us=5000 range_g=8 filtered=1 overflow=%d restored=%d min=%d,%d,%d max=%d,%d,%d\n",
-    waveActive,waveCount,waveOverflow,!waveActive&&(waveRestored||softwareFifo),low[0],low[1],low[2],high[0],high[1],high[2]);
+    waveActive,waveCount,waveOverflow,!waveActive&&(fifoRuntime.restored||fifoRuntime.software),low[0],low[1],low[2],high[0],high[1],high[2]);
 }
 bool waveStop(){
-  if(softwareFifo){waveActive=false;waveReport();return true;}
-  waveActive=false;FifoBus bus;waveRestored=fifoCapture.restore(bus);waveReport();return waveRestored;
+  waveActive=false;FifoBus bus;const bool ok=fifoRuntime.setRecording(bus,false);waveReport();return ok;
 }
 bool waveBegin(){
   if(waveActive||waveExporting||suspended||!ready||otaActive()||maintenanceActive()||maintenancePending()||provActive()||devicePairWindow()||transportBusy()||deepSleepPending())return false;
-  if(!waveRestored&&!softwareFifo&&!waveStop())return false;
+  if(!fifoRuntime.restored&&!fifoRuntime.software&&!waveStop())return false;
   if(!wave)wave=static_cast<WavePoint*>(heap_caps_malloc(WaveCapacity*sizeof(WavePoint),MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT));
   if(!wave){Serial.println("[tap-wave] unavailable: PSRAM allocation");return false;}
   waveCount=0;waveOverflow=false;FifoBus bus;
-  if(!softwareFifo&&!fifoCapture.begin(bus)){waveRestored=fifoCapture.restore(bus);return false;}
-  waveStarted=millis();waveActive=true;waveRestored=false;waveReport();return true;
+  if(!fifoRuntime.setRecording(bus,true))return false;
+  waveStarted=millis();waveActive=true;waveReport();return true;
 }
 bool softwareFifoStop(){
-  softwareDetector.reset();softwareClockValid=false;softwareNeedsFlush=false;
-  if(!softwareFifo)return waveRestored;
-  softwareFifo=false;FifoBus bus;waveRestored=fifoCapture.restore(bus);return waveRestored;
+  softwareDetector.reset();softwareClockValid=false;softwareSkipBatch=false;
+  const bool wasRunning=fifoRuntime.software;
+  FifoBus bus;const bool ok=fifoRuntime.setSoftware(bus,false);
+  if(wasRunning)Serial.printf("[tap-fifo] software stopped restored=%d recording=%d\n",ok,fifoRuntime.recording);
+  return ok;
+}
+bool softwareFifoStart(){
+  if(fifoRuntime.software)return true;
+  const bool shared=fifoRuntime.recording;
+  FifoBus bus;if(!fifoRuntime.setSoftware(bus,true))return false;
+  softwareClockValid=false;softwareDetector.reset();
+  // A recorder keeps its uninterrupted samples. On attachment discard its
+  // first batch from recognition; an exclusive start already flushed hardware.
+  softwareSkipBatch=shared;
+  Serial.printf("[tap-fifo] software started recording=%d\n",shared);
+  return true;
 }
 void fifoFailure(){
   ++errors;waveOverflow=true;
-  if(softwareFifo){softwareFifoStop();tapVerified=false;if(waveActive)waveStop();}
+  if(fifoRuntime.software){softwareFifoStop();tapVerified=tapReady=false;if(waveActive)waveStop();}
   else waveStop();
 }
 void wavePoll(uint32_t now){
-  if(waveActive||softwareFifo){
-    if(softwareFifo&&softwareNeedsFlush){
-      // Setup may spend seconds starting BLE after the IMU is configured.
-      // Discard pre-loop FIFO data once; normal backlog still fails closed.
-      const uint8_t flush=0xb0;
-      if(!imuWrite(0x7e,&flush,1)){fifoFailure();return;}
-      delay(2);softwareNeedsFlush=false;softwareClockValid=false;softwareDetector.reset();
-    }
+  if(waveActive||fifoRuntime.software){
     uint16_t length=0;
     if(!checked(bmi2_get_fifo_length(&length,&sensor))){fifoFailure();return;}
-    if(length>=2000||(softwareFifo&&length>240)){fifoFailure();return;}
+    if(length>=2000||(fifoRuntime.software&&length>240)){fifoFailure();return;}
     // Drain at most 40 complete samples per loop; FIFO bridges display stalls.
     uint8_t bytes[240];bmi2_sens_axes_data points[40];
     length=uint16_t((length>sizeof(bytes)?sizeof(bytes):length)/6*6);
@@ -126,13 +131,13 @@ void wavePoll(uint32_t now){
       if(!checked(bmi2_read_fifo_data(&frame,&sensor))){fifoFailure();return;}
       uint16_t count=40;const int8_t result=bmi2_extract_accel(points,&count,&frame,&sensor);
       if(result<0){checked(result);fifoFailure();return;}
-      if(softwareFifo&&count){
+      if(fifoRuntime.software&&count){
         const int32_t drift=int32_t(now-softwareAt);
         if(!softwareClockValid||drift>100||drift< -100){
           softwareAt=now-uint32_t(count)*5;softwareClockValid=true;softwareDetector.reset();
         }
         const auto g=sample.gyro;const float gyro=sqrtf(g.x*g.x+g.y*g.y+g.z*g.z);
-        const bool blocked=!imuHealthy(now)||M5.BtnA.isPressed()||M5.BtnB.isPressed()||!softwareTaps.context;
+        const bool blocked=softwareSkipBatch||!imuHealthy(now)||M5.BtnA.isPressed()||M5.BtnB.isPressed()||!softwareTaps.context;
         for(unsigned i=0;i<count;++i){
           softwareAt+=5;++softwareSamples;
           if(blocked){softwareDetector.reset();continue;}
@@ -146,6 +151,7 @@ void wavePoll(uint32_t now){
               unsigned(now),unsigned(softwareAt),unsigned(softwareTaps.raw),unsigned(softwareTaps.accepted),unsigned(softwareTaps.blocked),TapDiagnostic::name(reason));
           }
         }
+        softwareSkipBatch=false;
       }
       if(waveActive){
         const auto g=sample.gyro;const float gyro=sqrtf(g.x*g.x+g.y*g.y+g.z*g.z);
@@ -209,15 +215,17 @@ bool configureTap(bool enable){
   if(!clearEvents())return false;
   tapReady=true;return true;
 }
+bool diagnosticContext(uint32_t now);
 bool configureTapRuntime(bool enable){
-  if(softwareFifo&&!softwareFifoStop())return false;
-  if(!waveRestored&&!softwareFifo&&!waveStop())return false;
+  if(fifoRuntime.software&&!softwareFifoStop())return false;
+  if(!fifoRuntime.restored&&!fifoRuntime.software&&!waveStop())return false;
   if(!configureTap(enable))return false;
   softwareDetector.reset();softwareClockValid=false;
   if(enable&&tapParameters.software){
-    FifoBus bus;
-    if(!fifoCapture.begin(bus)){waveRestored=fifoCapture.restore(bus);return false;}
-    softwareFifo=true;softwareNeedsFlush=true;waveRestored=false;
+    // Verify FIFO acquisition even when saving outside the talk context. Idle
+    // configuration must not leave a producer running during BLE startup.
+    if(!softwareFifoStart())return false;
+    if(!diagnosticContext(millis())&&!softwareFifoStop())return false;
   }
   return true;
 }
@@ -253,8 +261,8 @@ bool imuWrite(uint8_t reg,const uint8_t* data,size_t length){
 }
 bool imuBegin(){
 #ifdef THINCUBE_IMU_LEGACY
-  if(softwareFifo)softwareFifoStop();
-  if(waveActive||!waveRestored)waveStop();waveExporting=false;
+  if(fifoRuntime.software)softwareFifoStop();
+  if(waveActive||!fifoRuntime.restored)waveStop();waveExporting=false;
 #endif
   ready=false;suspended=false;sample={};havePolled=false;
 #ifdef THINCUBE_IMU_LEGACY
@@ -330,6 +338,11 @@ void imuPoll(uint32_t now){
         tapParameters.manual?"manual":"voice",unsigned(devicePose()),unsigned(M5.BtnA.isPressed())|(unsigned(M5.BtnB.isPressed())<<1));
     }else ++taps.unknown;
   }
+  const bool wanted=tapVerified&&tapReady&&tapParameters.enabled&&tapParameters.software&&active;
+  if(wanted!=fifoRuntime.software){
+    const bool ok=wanted?softwareFifoStart():softwareFifoStop();
+    if(!ok){tapVerified=tapReady=false;Serial.println("[tap-fifo] transaction failed; recognition disarmed");}
+  }
   wavePoll(now);
 #else
   const auto result=M5.Imu.update();if(!result)return;
@@ -341,8 +354,8 @@ void imuPoll(uint32_t now){
 }
 bool imuSuspendForSleep(){
 #ifdef THINCUBE_IMU_LEGACY
-  waveExporting=false;if(softwareFifo&&!softwareFifoStop())return false;
-  if((waveActive||!waveRestored)&&!waveStop())return false;
+  waveExporting=false;if(fifoRuntime.software&&!softwareFifoStop())return false;
+  if((waveActive||!fifoRuntime.restored)&&!waveStop())return false;
   if(!ready||!configureTapRuntime(false))return false;
   invalidate();
 #endif
@@ -375,7 +388,7 @@ void imuTapConfigure(const TapParameters& parameters,const char* requestId){
 #ifdef THINCUBE_IMU_LEGACY
   snprintf(tapRequest,sizeof(tapRequest),"%s",requestId);++tapRevision;
   if(!parameters.valid()){strcpy(tapResult,"invalid_parameters");return;}
-  if(!ready||suspended||waveActive||(!waveRestored&&!softwareFifo)||otaActive()||maintenanceActive()||maintenancePending()||provActive()||transportBusy()||deepSleepPending()){
+  if(!ready||suspended||waveActive||(!fifoRuntime.restored&&!fifoRuntime.software)||otaActive()||maintenanceActive()||maintenancePending()||provActive()||transportBusy()||deepSleepPending()){
     strcpy(tapResult,"busy");return;
   }
   TapNvsStore store;
@@ -431,7 +444,7 @@ bool imuTapFormatJSON(char* out,size_t length){
     p.filtered?"true":"false",p.wait?"true":"false",p.manual?"true":"false",
     p.axis,p.sensitivity,p.windowMs,p.quietMs,p.settleMs,p.buttonGuardMs,p.cooldownMs,
     p.software?"true":"false",p.softThresholdMg,p.softReboundMs,p.softWindowMs,p.softGyroDps,p.softMotionGuardMs,p.softBaselineMs,p.softRatioPercent,p.softGyroFilterMs,
-    unsigned(softwareTaps.raw),unsigned(softwareTaps.accepted),unsigned(softwareTaps.blocked),unsigned(softwareDetector.candidates),unsigned(softwareDetector.rejected),unsigned(softwareSamples),softwareFifo?"true":"false",
+    unsigned(softwareTaps.raw),unsigned(softwareTaps.accepted),unsigned(softwareTaps.blocked),unsigned(softwareDetector.candidates),unsigned(softwareDetector.rejected),unsigned(softwareSamples),fifoRuntime.software?"true":"false",
     unsigned(softwareDetector.rejectedMotion),unsigned(softwareDetector.rejectedSingle),unsigned(softwareDetector.rejectedMultiple),softwareDetector.maxGyro,
     unsigned(taps.raw),unsigned(taps.accepted),unsigned(taps.blocked),unsigned(singleCount),unsigned(tripleCount),unsigned(taps.unknown),
     unsigned(taps.inactive),unsigned(taps.buttons),unsigned(taps.settling),unsigned(taps.cooldown),
@@ -461,7 +474,7 @@ bool imuDiagnosticCommand(const char* command){
   if(!strcmp(command,"tap finish")){if(waveActive)wavePoll(millis());waveStop();return true;}
   if(!strcmp(command,"tap wave")){waveReport();return true;}
   if(!strcmp(command,"tap export")){
-    if(!waveCount||waveActive||(!waveRestored&&!softwareFifo)||deviceStreaming()||deviceCaptureRequested())Serial.println("[tap-wave] export requires stopped capture and idle voice");
+    if(!waveCount||waveActive||(!fifoRuntime.restored&&!fifoRuntime.software)||deviceStreaming()||deviceCaptureRequested())Serial.println("[tap-wave] export requires stopped capture and idle voice");
     else{waveExport=0;waveExporting=true;Serial.printf("TCWAVE-BEGIN %u 200 8 sensor\n",waveCount);}
     return true;
   }
