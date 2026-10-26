@@ -188,6 +188,16 @@ class ReleaseTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "403"):
                 publish.get_release("owner/repo", "v0.4.79")
 
+    def test_new_draft_visibility_delay_is_retried_and_bounded(self):
+        draft = {"draft": True, "body": "marker"}
+        with patch.object(publish, "get_release", side_effect=[None, None, draft]), patch.object(publish.time, "sleep") as sleep:
+            self.assertEqual(publish.wait_for_draft("owner/repo", "v0.4.79", "marker"), draft)
+            self.assertEqual(sleep.call_count, 2)
+        with patch.object(publish, "get_release", return_value=None), patch.object(publish.time, "sleep") as sleep:
+            with self.assertRaisesRegex(ValueError, "did not become visible"):
+                publish.wait_for_draft("owner/repo", "v0.4.79", "marker", attempts=2)
+            sleep.assert_called_once_with(3)
+
 
 if __name__ == "__main__":
     unittest.main()

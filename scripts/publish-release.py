@@ -7,6 +7,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import time
 
 from release import ROOT, digest, run, validate_tag
 
@@ -60,6 +61,19 @@ def require_draft(release, marker):
         raise ValueError("Existing draft belongs to another build; refusing to replace it")
 
 
+def wait_for_draft(repo, tag, marker, attempts=20):
+    # GitHub can acknowledge creation before the draft appears in listings.
+    # Bound the wait to 57 seconds instead of requiring a manual workflow rerun.
+    for attempt in range(attempts):
+        current = get_release(repo, tag)
+        if current is not None:
+            require_draft(current, marker)
+            return current
+        if attempt + 1 < attempts:
+            time.sleep(3)
+    raise ValueError("Release draft did not become visible; retry this run")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--directory", required=True, type=Path)
@@ -94,13 +108,12 @@ def main():
         if not current:
             gh("release", "create", args.tag, "--repo", repo, "--verify-tag", "--target", manifest["commit"],
                "--draft", "--title", f"ThinCube {args.tag}", "--notes-file", str(notes))
-        current = get_release(repo, args.tag)
-        require_draft(current, marker)
+        current = wait_for_draft(repo, args.tag, marker)
         names = {p.name for p in directory.iterdir()}
         if {item["name"] for item in current["assets"]} - names:
             raise ValueError("Draft has unexpected assets; refusing to publish")
         gh("release", "upload", args.tag, "--repo", repo, "--clobber", *[str(directory / name) for name in sorted(names)])
-        require_draft(get_release(repo, args.tag), marker)
+        wait_for_draft(repo, args.tag, marker)
         downloaded = Path(temp) / "downloaded"
         gh("release", "download", args.tag, "--repo", repo, "--dir", str(downloaded))
         verify(downloaded, args.tag)
