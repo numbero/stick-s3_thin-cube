@@ -43,7 +43,7 @@ def verify(directory, tag):
 def get_release(repo, tag):
     # The by-tag REST endpoint only returns published releases. The authenticated
     # release listing also includes drafts, including one left by a failed run.
-    result = subprocess.run(["gh", "api", f"repos/{repo}/releases?per_page=100", "--paginate", "--slurp"], capture_output=True, text=True)
+    result = subprocess.run(["gh", "api", f"repos/{repo}/releases?per_page=100", "--paginate", "--slurp", "-H", "Cache-Control: no-cache"], capture_output=True, text=True)
     if result.returncode:
         raise RuntimeError(result.stderr.strip())
     matches = [item for page in json.loads(result.stdout) for item in page if item["tag_name"] == tag]
@@ -61,9 +61,9 @@ def require_draft(release, marker):
         raise ValueError("Existing draft belongs to another build; refusing to replace it")
 
 
-def wait_for_draft(repo, tag, marker, attempts=20):
+def wait_for_draft(repo, tag, marker, attempts=31):
     # GitHub can acknowledge creation before the draft appears in listings.
-    # Bound the wait to 57 seconds instead of requiring a manual workflow rerun.
+    # Allow up to 90 seconds for API propagation instead of a manual workflow rerun.
     for attempt in range(attempts):
         current = get_release(repo, tag)
         if current is not None:
