@@ -32,6 +32,8 @@
 
 也可在 GitHub 仓库 Settings → Secrets and variables → Actions 中手动设置。Base64 不是加密，不要贴到 issue、日志或提交中。配置脚本只更新上述两个 Secrets 和一个 variable。
 
+已明确授权将该身份传到 GitHub 时，也可直接执行 `python3 scripts/setup-github-signing.py --export-pinned-identity`。此模式通过 Security API 精确匹配本机固定证书，仅导出对应身份；随机生成导出密码，在临时目录保存加密 `.p12`，上传后清理。系统可能要求批准私钥导出；不允许导出时改用上面的手动方式。
+
 工作流在临时钥匙串导入该身份，并继续调用现有 `sign-macos.sh` 验证；缺少身份直接失败。临时导出文件、钥匙串和 pin 目录会清理，不会随 artifact 上传。
 
 ## 首次验证与正式发布
