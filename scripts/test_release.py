@@ -171,6 +171,23 @@ class ReleaseTests(unittest.TestCase):
             publish.require_draft({"draft": True, "body": "someone else's draft"}, "marker")
         publish.require_draft({"draft": True, "body": "marker"}, "marker")
 
+    def test_draft_lookup_uses_paginated_listing_instead_of_published_tag_endpoint(self):
+        draft = {"tag_name": "v0.4.79", "draft": True, "body": "marker"}
+        response = subprocess.CompletedProcess([], 0, json.dumps([[{"tag_name": "v0.4.78", "draft": False}], [draft]]), "")
+        with patch.object(publish.subprocess, "run", return_value=response) as api:
+            self.assertEqual(publish.get_release("owner/repo", "v0.4.79"), draft)
+            self.assertIn("repos/owner/repo/releases?per_page=100", api.call_args.args[0])
+            self.assertIn("--paginate", api.call_args.args[0])
+            self.assertIsNone(publish.get_release("owner/repo", "v0.4.80"))
+        with self.assertRaisesRegex(ValueError, "not visible"):
+            publish.require_draft(None, "marker")
+
+    def test_release_lookup_does_not_treat_permission_errors_as_missing_tags(self):
+        response = subprocess.CompletedProcess([], 1, "", "HTTP 403")
+        with patch.object(publish.subprocess, "run", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "403"):
+                publish.get_release("owner/repo", "v0.4.79")
+
 
 if __name__ == "__main__":
     unittest.main()

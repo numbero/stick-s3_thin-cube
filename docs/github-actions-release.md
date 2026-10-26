@@ -52,12 +52,12 @@ gh workflow run Release --ref main
 
 首次验收应检查：Mac 启动、保留配对、钥匙串访问、辅助功能、语音与设备 OTA。USB ZIP 另做一次首刷验收，不能将其当作 OTA 应用固件。本流程不自动连接或烧录任何设备。
 
-正式发布时，先更新 `release.json.version`，核对组件版本与源码一致，提交到主干，再打标签。例如当前首版清单为 `v0.4.79` / Mac `0.4.39` build `60`：
+正式发布时，先更新 `release.json.version`，核对组件版本与源码一致，提交到主干，再打标签。例如当前发布清单为 Release `v0.4.80`、固件 `v0.4.79`、Mac `0.4.39` build `60`：
 
 ```sh
 git push origin main
-git tag -a v0.4.79 -m "ThinCube v0.4.79"
-git push origin refs/tags/v0.4.79
+git tag -a v0.4.80 -m "ThinCube v0.4.80"
+git push origin refs/tags/v0.4.80
 ```
 
 后续版本使用新的标签。若只改 Mac，可以保留固件版本，同时增加发布版本、Mac 版本和 build；不要为匹配整套 Release 而给 OTA `.bin` 改名。标签必须等于 `v` + `release.json.version`，对应提交必须在 `main` 历史内。

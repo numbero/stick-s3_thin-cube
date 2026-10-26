@@ -40,15 +40,20 @@ def verify(directory, tag):
 
 
 def get_release(repo, tag):
-    result = subprocess.run(["gh", "api", f"repos/{repo}/releases/tags/{tag}"], capture_output=True, text=True)
-    if result.returncode == 0:
-        return json.loads(result.stdout)
-    if "(HTTP 404)" in result.stderr:
-        return None
-    raise RuntimeError(result.stderr.strip())
+    # The by-tag REST endpoint only returns published releases. The authenticated
+    # release listing also includes drafts, including one left by a failed run.
+    result = subprocess.run(["gh", "api", f"repos/{repo}/releases?per_page=100", "--paginate", "--slurp"], capture_output=True, text=True)
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip())
+    matches = [item for page in json.loads(result.stdout) for item in page if item["tag_name"] == tag]
+    if len(matches) > 1:
+        raise ValueError("Multiple releases have the selected tag")
+    return matches[0] if matches else None
 
 
 def require_draft(release, marker):
+    if release is None:
+        raise ValueError("Release draft is not visible yet; retry this run")
     if not release["draft"]:
         raise ValueError("This version is already published; use a new version/tag")
     if marker not in (release.get("body") or ""):
