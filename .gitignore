@@ -23,3 +23,9 @@ __pycache__/
 # Device flash dumps and archived source snapshots (kept locally)
 /firmware-backup/*.bin
 /firmware-backup/*.tar.gz
+
+# Local research notes and implementation proposals
+/docs/*-research*.md
+/docs/*-plan*.md
+# Local machine audio investigation snapshot
+/docs/validation/blackhole-input-volume-2026-10-26.json
