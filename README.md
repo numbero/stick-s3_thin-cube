@@ -97,6 +97,8 @@ Mac 客户端的常用入口：
 
 环境：StickS3、PlatformIO；Mac 端需要 macOS 13+、Xcode 命令行工具及 Swift 5.9+。固件依赖版本见 [platformio.ini](firmware/platformio.ini)。
 
+GitHub Actions 会在 PR / 推送主干时运行测试与编译；推送主干上的正式版本标签后，构建固件及签名的 Apple Silicon Mac 应用并发布到 [Releases](https://github.com/numbero/stick-s3_thin-cube/releases)。首次需配置固定签名证书，版本清单、下载文件与发布操作见[自动发布说明](docs/github-actions-release.md)。首版 Mac 包供个人使用，尚未公证。
+
 ```sh
 # 构建固件并生成分发镜像、校验清单
 pio run -d firmware -e m5stack-sticks3
