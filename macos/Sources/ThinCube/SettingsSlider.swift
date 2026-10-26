@@ -41,6 +41,7 @@ struct SettingsSliderRow: View {
                 Text("自动保存").font(.caption).foregroundStyle(.secondary).frame(width: 58)
             }
         }
+        .foregroundStyle(isEnabled ? Color.primary : Color.secondary)
     }
 }
 

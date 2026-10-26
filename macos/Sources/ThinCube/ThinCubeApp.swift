@@ -28,18 +28,18 @@ private struct ThinCubeMenu: View {
     @ObservedObject var presentation: AppPresentation
     var body: some View {
         Text(model.name)
-        Text(model.phoneUpgradeActive ? "手机升级 · 等待重新连接" : model.pairingRequired ? "等待设备配对" : !model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已静音" : "语音待命")))
+        Text(model.phoneUpgradeActive ? "手机升级 · 等待重新连接" : model.pairingRequired ? "等待设备配对" : !model.connected ? "设备未连接" : (model.status?.streaming == true ? "正在传音" : (model.status?.muted == true ? "麦克风已关闭" : "语音待命")))
         if model.pairingRequired {
             Button("完成配对…") { presentation.showMainWindow(pane: .device) }
         }
-        Toggle("麦克风静音", isOn: Binding(
-            get: { model.status?.muted ?? false },
-            set: { value in Task { await model.apply(["muted": value]) } }
-        )).disabled(!model.connected)
-        Toggle("扬声器静音", isOn: Binding(
-            get: { model.status?.soundMuted ?? false },
-            set: { value in Task { await model.apply(["soundMuted": value]) } }
-        )).disabled(!model.connected || model.status?.soundVolume == nil)
+        Toggle("启用麦克风", isOn: Binding(
+            get: { model.microphoneEnabled },
+            set: { value in Task { await model.setMicrophoneEnabled(value) } }
+        )).disabled(!model.canEditDeviceSettings)
+        Toggle("启用扬声器", isOn: Binding(
+            get: { model.speakerEnabled },
+            set: { value in Task { await model.setSpeakerEnabled(value) } }
+        )).disabled(!model.canEditDeviceSettings || model.status?.soundVolume == nil)
         Toggle("仅在菜单栏显示", isOn: Binding(get: { presentation.menuBarOnly }, set: { presentation.setMenuBarOnly($0) }))
         LaunchAtLoginToggle(settings: presentation.loginItemSettings) {
             presentation.showMainWindow(pane: .settings)
@@ -352,7 +352,7 @@ struct MainView: View {
                         Image(systemName: model.status?.faceCalibrated == true ? "checkmark.circle.fill" : "circle")
                     }
                     Text("当前姿态：" + (model.status?.poseDescription ?? "等待设备连接"))
-                }.disabled(!model.connected || model.updating || model.switching)
+                }.disabled(!model.canEditDeviceSettings)
             } header: {
                 HStack {
                     Text("姿态校准")
@@ -368,7 +368,7 @@ struct MainView: View {
                                   valueLabel: "\(Int(model.brightness))") {
                     Task { await model.apply(["brightness": Int(model.brightness)]) }
                 }
-            }.disabled(!model.connected || model.updating || model.switching)
+            }.disabled(!model.canEditDeviceSettings)
             if model.connected || !model.networkConfigurationNote.isEmpty {
                 Section {
                     if model.connected {
@@ -399,62 +399,83 @@ struct MainView: View {
         Form {
             Section {
                 Group {
-                    Toggle("允许语音输入", isOn: Binding(get: { model.status?.allowed ?? false }, set: { value in Task { await model.apply(["allowed": value]) } }))
-                    Toggle("麦克风静音", isOn: Binding(get: { model.status?.muted ?? false }, set: { value in Task { await model.apply(["muted": value]) } }))
-                    Toggle("声音互动", isOn: Binding(get: { model.status?.localSound ?? true }, set: { value in Task { await model.apply(["localSound": value]) } }))
-                    SettingsSliderRow(title: "输入增益", value: $model.gain, range: 0.1...4, step: 0.1,
-                                      valueLabel: String(format: "%.1f×", model.gain)) {
-                        Task { await model.apply(["gain": model.gain]) }
-                    }
-                    HStack {
-                        Text("输入电平")
-                        ProgressView(value: model.status?.level ?? 0).accessibilityLabel("麦克风音量")
-                    }
-                    HStack {
-                        if model.status?.streaming == true {
-                            Button("停止语音") { Task { await model.command("stop") } }
-                        } else {
-                            Button("开始持续语音") { Task { await model.command("start") } }
-                                .disabled(!model.audioPrepared || model.status?.allowed != true || model.status?.muted == true)
+                    Toggle("启用麦克风", isOn: Binding(get: { model.microphoneEnabled }, set: { value in Task { await model.setMicrophoneEnabled(value) } }))
+                    VStack(alignment: .leading, spacing: 16) {
+                        Toggle("允许向 Mac 传音", isOn: Binding(get: { model.status?.allowed ?? false }, set: { value in Task { await model.apply(["allowed": value]) } }))
+                            .help("开启后，可倒置设备或点击“开始持续语音”向 Mac 传音。")
+                        SettingsSliderRow(title: "输入增益", value: $model.gain, range: 0.1...4, step: 0.1,
+                                          valueLabel: String(format: "%.1f×", model.gain)) {
+                            Task { await model.apply(["gain": model.gain]) }
                         }
-                        Spacer()
-                        Label(model.status?.streaming == true ? "正在传音" : "待命", systemImage: "mic")
-                            .foregroundStyle(model.status?.streaming == true ? .green : .secondary)
+                        .disabled(!model.canAdjustInputGain)
+                        .help("允许向 Mac 传音后可调节输入增益，仅影响传给 Mac 的声音。")
+                        HStack {
+                            Text("输入电平")
+                            ProgressView(value: model.status?.level ?? 0).accessibilityLabel("麦克风音量")
+                        }
+                        HStack {
+                            if model.status?.streaming == true {
+                                Button("停止语音") { Task { await model.command("stop") } }
+                            } else {
+                                Button("开始持续语音") { Task { await model.command("start") } }
+                                    .disabled(!model.canStartVoice)
+                            }
+                            Spacer()
+                            Label(model.status?.streaming == true ? "正在传音" : "待命", systemImage: "mic")
+                                .foregroundStyle(model.status?.streaming == true ? .green : .secondary)
+                        }
+                        if model.status?.muted != true {
+                            Text(model.connected ? (model.status?.voiceHint ?? "等待设备状态") : "请先连接设备")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        Divider()
+                        Toggle("环境声音互动", isOn: Binding(get: { model.status?.localSound ?? true }, set: { value in Task { await model.apply(["localSound": value]) } }))
+                            .disabled(!model.canToggleAmbientSound)
+                            .help("设备根据环境声音作出反应，与向 Mac 传音独立。")
                     }
-                    Text(model.connected ? (model.status?.voiceHint ?? "等待设备状态") : "请先连接设备")
-                        .font(.callout).foregroundStyle(.secondary)
+                    .padding(.leading, 16)
+                    .disabled(!model.microphoneEnabled)
+                    .foregroundStyle(model.canToggleVoiceTransmission ? Color.primary : Color.secondary)
+                    if model.connected && model.status?.muted == true {
+                        Text("麦克风已关闭，传音和环境声音互动已暂停，相关设置保留。")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     if model.connected && !model.audioPrepared {
                         Text("Mac 音频输入尚未就绪，请在下方准备音频。").font(.callout).foregroundStyle(.orange)
                     }
-                }.disabled(!model.connected || model.updating || model.switching)
+                }.disabled(!model.canEditDeviceSettings)
             } header: {
-                HelpSectionHeader("语音输入", helpTitle: "语音帮助") {
-                    HelpParagraph("语音与静音", "允许语音输入后，设备可向 Mac 传音。麦克风静音会真正停止采集；开始持续语音会保持传音，直到点击停止。")
+                HelpSectionHeader("麦克风", helpTitle: "麦克风帮助") {
+                    HelpParagraph("麦克风总开关", "关闭后停止设备采音、向 Mac 传音及环境声音互动；下方设置保留。重新开启后，已停止的传音需要重新开始。")
+                    HelpParagraph("允许向 Mac 传音", "开启后，设备可向 Mac 传音。开始持续语音会保持传音，直到点击停止。关闭此项仍可独立使用环境声音互动。")
                     HelpParagraph("姿态与按键", "完成校准后，屏幕朝上平放，再倒立并稍作停稳可开始传音。对讲机内 A/B 只控制各自快捷键，松开不会停止持续语音。")
-                    HelpParagraph("声音互动", "设备在空闲时可根据环境声音作出反应，此开关与向 Mac 传音、扬声器播放分别控制。")
+                    HelpParagraph("环境声音互动", "麦克风开启时，设备在空闲主页根据环境声音显示声纹并作出反应；不向 Mac 发送环境音频。")
                     HelpParagraph("输入增益", "调整麦克风输入幅度后点击保存。")
                 }
             }
             Section {
                 if model.status?.soundVolume != nil {
                     Group {
-                        Toggle("扬声器静音", isOn: Binding(get: { model.status?.soundMuted ?? false }, set: { value in Task { await model.apply(["soundMuted": value]) } }))
+                        Toggle("启用扬声器", isOn: Binding(get: { model.speakerEnabled }, set: { value in Task { await model.setSpeakerEnabled(value) } }))
                         SettingsSliderRow(title: "扬声器音量", value: $model.soundVolume, range: 0...100, step: 1,
                                           valueLabel: "\(Int(model.soundVolume))%")
+                            .disabled(!model.canAdjustSpeakerVolume)
                             .onChange(of: model.soundVolume) { value in model.scheduleSoundVolume(Int(value)) }
                         Button("试听声音") { Task { await model.command("sound_preview") } }
-                            .disabled(model.status?.soundMuted == true || model.soundVolume == 0 || model.status?.streaming == true)
-                        if model.status?.streaming == true {
+                            .disabled(!model.canPreviewSpeaker)
+                        if !model.speakerEnabled {
+                            Text("扬声器已关闭，开启后可调节音量和试听。").font(.callout).foregroundStyle(.secondary)
+                        } else if model.status?.streaming == true {
                             Text("正在传音，扬声器播放已暂停。").font(.callout).foregroundStyle(.secondary)
                         }
-                    }.disabled(!model.connected || model.updating || model.switching)
+                    }.disabled(!model.canEditDeviceSettings)
                 } else {
                     Text(model.connected ? "此设备固件尚不支持声音设置。" : "连接设备后可调整声音设置。")
                         .foregroundStyle(.secondary)
                 }
             } header: {
                 HelpSectionHeader("设备声音", helpTitle: "设备声音帮助") {
-                    HelpParagraph("设备扬声器", "设备扬声器播放唤醒、互动、扫描和发现等声音。扬声器静音控制设备外放；音量设为 0% 也会停止播放。")
+                    HelpParagraph("设备扬声器", "开启后播放唤醒、互动、扫描和发现等声音，并可调节音量和试听。关闭后保留原音量；音量设为 0% 也会停止播放。")
                     HelpParagraph("保存与传音", "扬声器音量自动保存到设备，断开 Mac 后仍生效。传音时暂停扬声器播放。")
                 }
             }

@@ -46,8 +46,8 @@ struct DeviceStatus: Decodable {
     var voiceHint: String {
         if streaming { return (held || heldB == true) ? "正在传音 · 快捷键保持中" : "正在持续传音" }
         switch voiceBlock {
-        case "disabled": return "语音输入已禁用"
-        case "muted": return "已静音，麦克风停止采集"
+        case "disabled": return "向 Mac 传音未开启，环境声音互动可独立使用"
+        case "muted": return "麦克风已关闭，开启后可传音和使用环境声音互动"
         case "busy": return "设备正在配网或升级"
         case "disconnected": return "等待 Mac 音频连接就绪"
         case "calibration": return "请先完成竖向倒立校准"
@@ -170,6 +170,22 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     @Published var gain = 1.0
     @Published var brightness = 128.0
     @Published var soundVolume = 35.0
+    var canEditDeviceSettings: Bool {
+        connected && status?.bootVerified == true && !connecting && !updating && !switching &&
+            !calibrationBusy && !requestingPhoneUpgrade && !phoneUpgradeActive
+    }
+    var microphoneEnabled: Bool { status != nil && status?.muted != true }
+    var canToggleVoiceTransmission: Bool { canEditDeviceSettings && microphoneEnabled }
+    var canAdjustInputGain: Bool { canToggleVoiceTransmission && status?.allowed == true }
+    // Ambient capture is independent of transmitting voice, but microphone
+    // mute stops both capture paths.
+    var canToggleAmbientSound: Bool { canEditDeviceSettings && microphoneEnabled }
+    var speakerEnabled: Bool { status?.soundVolume != nil && status?.soundMuted != true }
+    var canAdjustSpeakerVolume: Bool {
+        canEditDeviceSettings && speakerEnabled && status?.streaming != true
+    }
+    var canPreviewSpeaker: Bool { canAdjustSpeakerVolume && soundVolume > 0 }
+    var canStartVoice: Bool { canAdjustInputGain && audioPrepared }
     @Published var audioDiagnostics = "尚未接收音频"
     let keys = KeyInjector()
     let keyDiagnostics = KeyDiagnostics()
@@ -752,6 +768,7 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if status == nil || brightness == Double(status!.brightness) { brightness = Double(next.brightness) }
         if status == nil || soundVolume == Double(status?.soundVolume ?? 35) { soundVolume = Double(next.soundVolume ?? 35) }
         status = next
+        if !canAdjustSpeakerVolume, soundUpdateTask != nil { cancelSoundVolumeUpdate() }
         stagedDeepSleep = next.deepSleepStaged ?? false
         unifiedDeepSleep = next.deepSleepUnified ?? false
         if let power = next.power {
@@ -812,8 +829,8 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
         if updating { return "固件升级中" }
         if switching { return "连接模式切换中" }
         if voiceGate.waitingForStandby { return "已在 Mac 停止语音" }
-        if !status.allowed { return "语音输入未开启" }
-        if status.muted { return "麦克风已静音" }
+        if !status.allowed { return "向 Mac 传音未开启" }
+        if status.muted { return "麦克风已关闭" }
         if !status.streaming { return "设备未处于传音状态" }
         if !status.inverted { return "设备未处于倒置语音姿态" }
         if shortcutRecording { return "正在编辑快捷键" }
@@ -865,9 +882,10 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
             // An immediate click after connection must establish the audio lease
             // before start, even if the first periodic heartbeat has not run yet.
             if op == "start" {
-                guard audioPrepared, !updating else { return }
+                guard canStartVoice else { return }
                 try await sendControl(["op": "heartbeat", "epoch": epoch, "ack": ack, "keyProtocol": supportsBShortcut ? 2 : 1, "gestureProtocol": supportsDoubleTap ? 1 : 0, "tapProtocol": supportsDoubleTap ? 1 : 0, "gestureAck": gestureStream.acknowledgement, "port": Int(receiver.port), "ready": true])
             }
+            if op == "sound_preview", !canPreviewSpeaker { return }
             try await sendControl(["op": op, "epoch": epoch])
         } catch { note = error.localizedDescription }
     }
@@ -881,14 +899,33 @@ private final class UploadProgress: NSObject, URLSessionTaskDelegate {
     }
     func scheduleSoundVolume(_ value: Int) {
         soundUpdateTask?.cancel()
-        guard connected, value != status?.soundVolume else { return }
+        soundUpdateTask = nil
+        guard canAdjustSpeakerVolume, value != status?.soundVolume else { return }
+        let connectionID = generation
         soundUpdateTask = Task { [weak self] in
             do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
-            guard let self, self.connected, !self.updating else { return }
+            guard let self, self.generation == connectionID, self.canAdjustSpeakerVolume else { return }
+            self.soundUpdateTask = nil
             await self.apply(["soundVolume": value])
         }
     }
+    private func cancelSoundVolumeUpdate() {
+        soundUpdateTask?.cancel(); soundUpdateTask = nil
+        if let value = status?.soundVolume { soundVolume = Double(value) }
+    }
+    func setSpeakerEnabled(_ enabled: Bool) async {
+        await apply(["soundMuted": !enabled])
+    }
+    func setMicrophoneEnabled(_ enabled: Bool) async {
+        await apply(["muted": !enabled])
+    }
     func apply(_ settings: [String: Any]) async {
+        guard canEditDeviceSettings else { return }
+        if settings["allowed"] != nil, !canToggleVoiceTransmission { return }
+        if settings["gain"] != nil, !canAdjustInputGain { return }
+        if settings["localSound"] != nil, !canToggleAmbientSound { return }
+        if settings["soundVolume"] != nil, !canAdjustSpeakerVolume { return }
+        if settings["soundMuted"] as? Bool == true { cancelSoundVolumeUpdate() }
         if settings["muted"] as? Bool == true || settings["allowed"] as? Bool == false { voiceGate.waitForStandby(); keys.release(); buffer.setSession(nil) }
         do { _ = try await json("api/settings", body: settings) } catch { note = error.localizedDescription }
     }

@@ -13,6 +13,7 @@ python3 -m unittest discover -s scripts -p 'test_battery_calibration.py'
 python3 -m unittest discover -s scripts -p 'test_tap_sampling.py'
 python3 -m unittest discover -s scripts -p 'test_release.py'
 bash scripts/test-legacy-imu.sh
+python3 scripts/test-audio-power-host.py
 python3 scripts/test-ota-host.py
 if command -v node >/dev/null 2>&1; then
     node scripts/test_phone_update_page.js

@@ -204,7 +204,7 @@ struct TapSettingsPanel: View {
         HStack(spacing: 14) {
             VStack(alignment: .leading, spacing: 4) {
                 Text("开启双敲").font(.system(size: 13))
-                Text("倒置对讲时，双敲正面面板执行快捷键。")
+                Text(settings.draft.enabled ? "倒置对讲时，双敲正面面板执行快捷键。" : "双敲已关闭，参数保留；重新开启后可调整。")
                     .font(.system(size: 11.5)).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -372,7 +372,7 @@ private struct TapAdvancedSettings: View {
                 Text("关闭后改用芯片原生报告，日常档位将不可用。")
                     .font(.caption).foregroundStyle(.secondary)
                 Toggle("手持实验模式（始终只记录）", isOn: $configuration.manual)
-            }
+            }.disabled(!configuration.enabled)
             section("软件识别参数") {
                 number("敲击阈值 · mg", value: $configuration.softThresholdMg, range: 100...2000)
                 number("回弹排除 · ms", value: $configuration.softReboundMs, range: 80...300)
@@ -382,12 +382,12 @@ private struct TapAdvancedSettings: View {
                 number("旋转滤波时间 · ms", value: $configuration.softGyroFilterMs, range: 0...1000)
                 number("旋转后抑制 · ms", value: $configuration.softMotionGuardMs, range: 100...2000)
                 number("重力基线滤波 · ms", value: $configuration.softBaselineMs, range: 50...1000)
-            }
+            }.disabled(!configuration.enabled || !configuration.software)
             section("动作过滤") {
                 number("进入场景后稳定 · ms", value: $configuration.settleMs, range: 0...5000)
                 number("按 A/B 后抑制 · ms", value: $configuration.buttonGuardMs, range: 0...5000)
                 number("双敲后冷却 · ms", value: $configuration.cooldownMs, range: 0...10000)
-            }
+            }.disabled(!configuration.enabled)
             section("芯片原生参数") {
                 HStack {
                     Toggle("单敲", isOn: $configuration.single)
@@ -404,11 +404,12 @@ private struct TapAdvancedSettings: View {
                 Toggle("等待窗口结束后按次数分类", isOn: $configuration.wait)
                 Text("加速度固定为 200 Hz / ±8g。原生单敲与三敲只统计，不触发快捷键；当前驱动未实现 tap_shock_dur、min_const_thres。")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
+            }.disabled(!configuration.enabled)
             HStack {
                 Button("撤销未保存的调整") {
                     if let config = snapshot?.config { configuration = config }
                 }
+                .disabled(snapshot?.config == configuration)
                 Spacer()
                 Button("清零识别计数", action: clearCounters)
             }.buttonStyle(.bordered).controlSize(.small)

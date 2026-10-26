@@ -85,7 +85,7 @@ bool powerFormatJSON(char* out,size_t capacity,uint32_t ms){
     gauge.level(ms),gauge.otaLevel(ms),powerInputSource(ms),vbusMv,
     chargeKnown&&charging?"true":"false",chargeKnown?"true":"false",gauge.low(ms)?"true":"false",cutoffMv,unsigned(failures),
     (unsigned long long)ESP.getEfuseMac(),curveModel,unsigned(uiActualBrightness()),unsigned(uiIdleAgeMs(ms)),
-    unsigned(getCpuFrequencyMhz()),unsigned(bleConnectionInterval()),powerSaveActive()?"true":"false",
+    unsigned(getCpuFrequencyMhz()),unsigned(bleConnectionInterval()),powerSaveReduced()?"true":"false",
     unsigned(calibration.id()),int(calibration.state()),unsigned(calibration.elapsed(ms)),calibration.phase(ms),
     unsigned(calibration.phaseAge(ms)),unsigned(calibration.chargeStable(ms)),int(calibration.reason()));
   return size>=0&&size_t(size)<capacity;

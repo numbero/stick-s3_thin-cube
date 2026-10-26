@@ -775,7 +775,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   const bool voiceReserved=voice.streaming||voice.pendingGesture||voice.pendingManual||voicePreparing;
   soundTick(millis(),voiceReserved||voice.busy||devicePairWindow());
   captureRequested=voice.captureWanted(voicePreparing,uiAmbientCaptureWanted(ms));
-  audioTick(captureRequested&&!soundPlaying());
+  audioTick(captureRequested&&!soundPlaying(),voiceReserved);
   voice.captureReady=audioReady()&&(transportMode()!=TransportMode::BLE||blePerformanceReady());
   poseVoice.update(voice,pose.stable,uiButtonAForVoice(),uiLandscapeActive(),imuHealthy(millis())&&pose.candidate==pose.stable);
   // A pause and recovery can both occur in this tick. Reset the physical key
@@ -829,7 +829,7 @@ void deviceTick(uint32_t ms,bool sleeping,bool busy) {
   }
   static SwitchPhase lastTransportPhase=SwitchPhase::Stable;
   if(lastTransportPhase!=transportRecord().phase){lastTransportPhase=transportRecord().phase;bleSnapshotDirty=true;}
-  if(ms-lastPublish>=(powerSaveActive()?IdleWorkProfile::IdlePublishMs:40u)||commandChanged||(bleAuthenticated&&bleSnapshotDirty)){publish();lastPublish=ms;}
+  if(ms-lastPublish>=(powerSaveReduced()?IdleWorkProfile::IdlePublishMs:40u)||commandChanged||(bleAuthenticated&&bleSnapshotDirty)){publish();lastPublish=ms;}
   static uint32_t lastBleStatus=0;
   if(bleAuthenticated){
     unsigned flags=unsigned(voice.allowed)|(unsigned(voice.muted)<<1)|(unsigned(voice.localSound)<<2)|

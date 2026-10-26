@@ -2,9 +2,18 @@
 #include <stdint.h>
 
 struct IdleWorkProfile {
-  static constexpr unsigned FastMHz=240, IdleMHz=160;
+  static constexpr unsigned FastMHz=240, IdleMHz=160, HomeMHz=160;
   static constexpr uint32_t IdleMotionMs=40, IdleDrawMs=200, IdlePublishMs=200;
 };
+
+enum class PowerWorkMode { Performance, Home, Standby };
+inline PowerWorkMode powerWorkMode(bool standby,bool home){
+  return standby?PowerWorkMode::Standby:home?PowerWorkMode::Home:PowerWorkMode::Performance;
+}
+inline unsigned powerWorkMHz(PowerWorkMode mode){
+  return mode==PowerWorkMode::Performance?IdleWorkProfile::FastMHz:
+    mode==PowerWorkMode::Home?IdleWorkProfile::HomeMHz:IdleWorkProfile::IdleMHz;
+}
 
 // Main-loop owned. The GAP callback supplies observations, never mutates policy.
 // A rejected/slow update disables idle requests for this connection; audio must

@@ -93,6 +93,7 @@ float lightTilt(){
 bool startLight(uint32_t ms,const ClawdWords::Gate& gate,bool demo=false,bool direct=false){
   if(!demo&&words.talking())return false;
   if(!light.start(ms,gate,lightTilt(),demo,direct))return false;
+  powerSavePerformance();
   soundMeter.reset();
   if(direct)words.hide();
   else words.say(ClawdLight::Invitation,ClawdLight::Later,ms,gate,true);
@@ -870,6 +871,7 @@ void uiStoriesTick(uint32_t ms){
   const auto event=stories.update(ms,in,esp_random());
   if(event==ClawdStory::Event::Started){
     // Story admission happens after uiPowerTick; restore before its first frame.
+    powerSavePerformance();
     idleDim.update(ms,idlePower.elapsed(ms),deviceBrightness(),false,false);
     M5.Display.setBrightness(deviceBrightness());
     Serial.printf("[story] start %s auto\n",ClawdStory::name(stories.current()));
@@ -1026,7 +1028,12 @@ void uiPowerTick(uint32_t ms,bool bootVerified){
     codecAttemptAt=ms;codecOff=audioPowerDown();
     Serial.printf("[idle] codec power-down %s\n",codecOff?"ok":"retry");
   }
-  powerSaveTick(bootVerified&&settled&&!soundPlaying());
+  // Local RMS capture remains continuous at 160MHz. Voice/game/rotation/setup
+  // retain full performance; the home profile never slows BLE or IMU input.
+  const bool home=bootVerified&&dimEligible&&!light.active()&&!landscapeVisible&&
+    W==135&&displayRotation==0&&rotation.target==0&&
+    (petState()==PET_IDLE||petState()==PET_CHARGING);
+  powerSaveTick(bootVerified&&settled&&!soundPlaying(),home);
 }
 
 /* 诊断页：IMU 链路是否通、原始三轴、静止判定、事件计数 */

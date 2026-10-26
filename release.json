@@ -1,7 +1,7 @@
 {
-  "version": "0.4.80",
-  "firmware": "v0.4.79",
-  "macos": "0.4.39",
-  "macos_build": 60,
+  "version": "0.4.81",
+  "firmware": "v0.4.80",
+  "macos": "0.4.42",
+  "macos_build": 63,
   "protocol": 1
 }

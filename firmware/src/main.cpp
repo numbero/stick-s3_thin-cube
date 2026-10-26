@@ -201,7 +201,7 @@ void loop(){
     static bool homePrinted = false;
     const int bat = powerBatteryLevel(ms);
     powerReport(ms);
-    Serial.printf("[audio] ready %d frames %u dropped %u level %.3f live %d muted %d health %d\n",audioReady(),unsigned(audioFrameCount()),unsigned(audioDropCount()),deviceLevel(),deviceStreaming(),deviceMuted(),deviceHealthy());
+    Serial.printf("[audio] ready %d rate %u frames %u dropped %u level %.3f live %d muted %d health %d\n",audioReady(),audioSampleRate(),unsigned(audioFrameCount()),unsigned(audioDropCount()),deviceLevel(),deviceStreaming(),deviceMuted(),deviceHealthy());
     Serial.printf("[hb] up %us bat %d%%%s heap %uKB run %s mood %d still %.1fs\n",
                   (unsigned)(ms / 1000), bat,
                   powerCharging() ? " chg" : "",

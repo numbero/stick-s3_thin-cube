@@ -34,8 +34,8 @@ void audioBegin(bool ble) {
   completed=xQueueCreate(8,sampleCount*sizeof(int16_t));
   M5.Mic.setBufferReleaseCallback(nullptr,captured);
 }
-void audioTick(bool capture) {
-  if(capture)powerSavePerformance();
+void audioTick(bool capture,bool voice) {
+  if(capture&&voice)powerSavePerformance();
   if (!capture||refillFailed.load()) {
     const bool wasRunning=running.exchange(false);
     if(wasRunning){M5.Mic.end();if(!capture)retryAt=millis()-1000;} // intentional handoff can restart immediately
@@ -53,6 +53,7 @@ void audioTick(bool capture) {
 }
 bool audioInitialized() { return completed&&M5.Mic.isEnabled(); }
 bool audioReady() { return running.load()&&!refillFailed.load(); }
+unsigned audioSampleRate() { return sampleRate; }
 bool audioPowerDown() {
   if(running.load()||M5.Speaker.isPlaying())return false;
   // Speaker.end disables the amplifier but leaves the shared ES8311 powered

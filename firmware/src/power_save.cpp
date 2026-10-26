@@ -2,16 +2,20 @@
 #include "power_save_policy.h"
 #include "ble_link.h"
 #include <Arduino.h>
-namespace { bool idleMode=false; }
-void powerSaveTick(bool idle){
-  if(idleMode!=idle){
-    const unsigned target=idle?IdleWorkProfile::IdleMHz:IdleWorkProfile::FastMHz;
-    if(setCpuFrequencyMhz(target)){
-      idleMode=idle;
-      Serial.printf("[power-save] online %s cpu %u MHz\n",idle?"idle":"active",getCpuFrequencyMhz());
+namespace { PowerWorkMode mode=PowerWorkMode::Performance; }
+void powerSaveTick(bool idle,bool home){
+  const auto next=powerWorkMode(idle,home);
+  if(mode!=next){
+    const unsigned target=powerWorkMHz(next);
+    if(getCpuFrequencyMhz()==target||setCpuFrequencyMhz(target)){
+      mode=next;
+      Serial.printf("[power-save] online %s cpu %u MHz\n",idle?"idle":home?"home":"active",getCpuFrequencyMhz());
     }
   }
-  bleSetIdle(idleMode);
+  // A visible home screen keeps the fast radio/input/render profile, including
+  // continuous local sound. Only settled standby requests a slower BLE link.
+  bleSetIdle(powerSaveActive());
 }
 void powerSavePerformance(){powerSaveTick(false);}
-bool powerSaveActive(){return idleMode;}
+bool powerSaveActive(){return mode==PowerWorkMode::Standby;}
+bool powerSaveReduced(){return mode!=PowerWorkMode::Performance;}
