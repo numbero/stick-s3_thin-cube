@@ -1,0 +1,124 @@
+name: Build components
+
+on:
+  workflow_call:
+    inputs:
+      signed:
+        description: Package the Mac app with the fixed Apple identity
+        type: boolean
+        default: false
+    secrets:
+      MACOS_CERTIFICATE_P12_BASE64:
+        required: false
+      MACOS_CERTIFICATE_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  firmware:
+    name: Firmware and host tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: clang
+      CXX: clang++
+      PLATFORMIO_SETTING_ENABLE_TELEMETRY: 'No'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: |
+            ~/.platformio/packages
+            ~/.platformio/platforms
+            ~/.platformio/.cache
+          key: pio-${{ runner.os }}-${{ runner.arch }}-6.1.19-${{ hashFiles('firmware/platformio.ini') }}
+      - name: Install PlatformIO
+        run: python3 -m pip install platformio==6.1.19
+      - name: Validate component versions
+        run: |
+          python3 scripts/release.py validate
+      - name: Run firmware and phone-page tests
+        run: bash scripts/test-local.sh
+      - name: Build production firmware
+        run: pio run -d firmware -e m5stack-sticks3
+      - name: Package OTA and USB firmware
+        run: |
+          mkdir -p artifacts
+          pio project metadata -d firmware -e m5stack-sticks3 --json-output-path artifacts/pio-metadata.json
+          python3 scripts/release.py firmware --metadata artifacts/pio-metadata.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: release-firmware
+          path: artifacts/release-firmware/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+
+  macos:
+    name: Mac arm64 and firmware compatibility
+    needs: firmware
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '13.0'
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-firmware
+          path: artifacts/release-firmware
+      - name: Read component versions
+        id: versions
+        run: python3 scripts/release.py validate --github-output "$GITHUB_OUTPUT"
+      - name: Swift tests against the actual firmware
+        env:
+          THINCUBE_TEST_FIRMWARE: ${{ github.workspace }}/artifacts/release-firmware/thincube-${{ steps.versions.outputs.firmware }}.bin
+          THINCUBE_TEST_VERSION: ${{ steps.versions.outputs.firmware }}
+        run: swift test --package-path macos --disable-sandbox
+      - name: Compile Mac app
+        if: ${{ !inputs.signed }}
+        run: swift build --package-path macos -c release --disable-sandbox
+      - name: Import fixed Apple signing identity
+        if: inputs.signed
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGNING_IDENTITY_SHA1: ${{ vars.MACOS_SIGNING_IDENTITY_SHA1 }}
+        run: bash scripts/import-ci-macos-signing.sh
+      - name: Build and package signed application
+        if: inputs.signed
+        run: |
+          bash scripts/build-macos.sh --no-install
+          python3 scripts/release.py macos
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: inputs.signed
+        with:
+          name: release-macos
+          path: artifacts/release-macos/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: true
+      - name: Remove temporary signing material
+        if: ${{ always() && inputs.signed }}
+        shell: bash
+        run: |
+          if [ -n "${THINCUBE_CI_KEYCHAIN:-}" ]; then
+            security delete-keychain "$THINCUBE_CI_KEYCHAIN"
+          fi
+          rm -f "$RUNNER_TEMP/thincube-signing.p12"
+          rm -rf "$RUNNER_TEMP/thincube-signing"

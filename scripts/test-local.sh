@@ -11,6 +11,7 @@ for task_test in firmware/test/*_test.cpp; do
 done
 python3 -m unittest discover -s scripts -p 'test_battery_calibration.py'
 python3 -m unittest discover -s scripts -p 'test_tap_sampling.py'
+python3 -m unittest discover -s scripts -p 'test_release.py'
 bash scripts/test-legacy-imu.sh
 python3 scripts/test-ota-host.py
 if command -v node >/dev/null 2>&1; then
