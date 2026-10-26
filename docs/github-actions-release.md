@@ -8,7 +8,7 @@
 - **Release**：推送 `vX.Y.Z` 标签时验证版本与主干来源，构建固件、签名并打包上位机，汇总校验后自动发布。
 - **Release 手动运行**：执行相同的签名构建并生成 `release-downloads` Actions artifact，保留 7 天，**不会创建或发布 Release**。用于首次验收签名配置。
 
-固件在 `ubuntu-24.04` 构建；Mac 在 `macos-15` arm64 构建，目标 macOS 13。GitHub 官方 actions 均固定提交 SHA。PlatformIO Core 为 `6.1.19`，Python 为 `3.12`，Node 为 `22`，固件平台和库沿用 `platformio.ini` 固定值。构建清单记录实际 PlatformIO / Swift / Xcode 版本。
+固件在 `ubuntu-24.04` 构建；Mac 在 `macos-15` arm64 构建，显式选择镜像内的 Xcode `26.3`，目标 macOS 13。源码用到了 macOS 26 SDK 的 AppKit API，不能依赖该镜像默认的 Xcode 16.4；运行时仍通过 availability 判断兼容旧系统。GitHub 官方 actions 均固定提交 SHA。PlatformIO Core 为 `6.1.19`，Python 为 `3.12`，Node 为 `22`，固件平台和库沿用 `platformio.ini` 固定值。构建清单记录实际 PlatformIO / Swift / Xcode 版本。
 
 ## 首次签名配置
 
