@@ -35,6 +35,7 @@ extern const char* firmwareVersion();
 #include "clawd_light_render.h"
 #include "clawd_sound_meter.h"
 #include <WiFi.h>
+#include <Preferences.h>
 #include <esp_heap_caps.h>
 #include <stdarg.h>
 #include <string.h>
@@ -53,6 +54,8 @@ LandscapeGames games;
 Exploration& exploration=games.exploration;
 StarCatch& catchStars=games.catchStars;
 LandscapeButton gameButton;
+LandscapePressOwner gameAOwner,gameBOwner;
+uint32_t gamePreferencesAt=0,gamePreferencesRetryAt=0;
 bool landscapeVisible=false;
 IdlePowerPolicy idlePower;
 FaceDownRestPolicy faceDownRest;
@@ -61,6 +64,7 @@ SleepFrameGate sleepFrames;
 bool standby=false,screenOff=false,codecOff=false;
 bool presented=false;
 bool wakeAConsumed=false;
+bool wakeBConsumed=false;
 ClawdStory::Policy stories;
 ClawdStory::Id storyDemoRequest=ClawdStory::Id::None;
 uint8_t storyDemoNext=0;
@@ -339,6 +343,15 @@ const char* connectionCaption(uint32_t ms){
 }
 
 void uiBegin(){
+  {
+    Preferences prefs;uint8_t bytes[4]{};size_t size=0;
+    if(prefs.begin("tcgames",true)){
+      if(prefs.getBytesLength("modes")==sizeof(bytes))size=prefs.getBytes("modes",bytes,sizeof(bytes));
+      prefs.end();
+    }
+    games.loadPreferences(bytes,size);
+    Serial.printf("[games] memories left %s right %s\n",LandscapeGames::name(games.left),LandscapeGames::name(games.right));
+  }
   soundMeter.reset();
   light=ClawdLight::Policy();physicalLightPoke=false;lightDemoRequest=0;
   wordsFont.begin(fonts::Font2.widthtbl,reinterpret_cast<const uint8_t* const*>(fonts::Font2.chartbl));
@@ -591,7 +604,7 @@ void tickOta(){
 }
 }
 
-bool uiButtonAForVoice(){return !bootNoticeActive()&&!maintenanceActive()&&!maintenancePending()&&M5.BtnA.isPressed()&&!wakeAConsumed&&!gestures.suppressA&&!games.active()&&!gameButton.blocked;}
+bool uiButtonAForVoice(){return !(deviceDisplayRotation()&1)&&!(gameAOwner.tracking&&(gameAOwner.owner&1))&&!bootNoticeActive()&&!maintenanceActive()&&!maintenancePending()&&M5.BtnA.isPressed()&&!wakeAConsumed&&!gestures.suppressA&&!games.active()&&!gameButton.blocked;}
 bool uiLandscapeActive(){return games.active();}
 
 void uiWakeForVoice(){ if(bootNoticeActive())return;faceDownRest.overrideWake();idlePower.activity(millis());goWake("Mac voice start"); }
@@ -602,6 +615,11 @@ void uiTick(uint32_t ms){
   s_chgShown = powerCharging();
   // Keep sensor acquisition and diagnostics alive while setup/OTA own the UI.
   const MotionEv ev = motionPoll(ms);
+  const uint8_t gameRotation=deviceDisplayRotation();
+  const bool gameKeysAllowed=petState()!=PET_SLEEP&&!uiRotationActive()&&!bootNoticeActive()&&!powerCalibrationOwnsUI()&&
+    !connectionSetupActive()&&!provActive()&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!devicePairWindow()&&!transportBusy()&&!s_debug;
+  const auto ownedA=gameAOwner.update(M5.BtnA.isPressed(),M5.BtnA.wasClicked(),gameRotation,gameKeysAllowed&&!wakeAConsumed);
+  const auto ownedB=gameBOwner.update(M5.BtnB.isPressed(),M5.BtnB.wasClicked(),gameRotation,gameKeysAllowed&&!wakeBConsumed);
   // A new admitted maintenance operation can replace an acknowledged healthy
   // boot result. Checking itself always owns input and display until IDF VALID.
   if(otaBootNotice()==OtaBootNotice::Complete&&(otaActive()||maintenanceActive()||maintenancePending()||transportBusy()))otaBootDismiss();
@@ -629,7 +647,9 @@ void uiTick(uint32_t ms){
     return;
   }
   if(!M5.BtnA.isPressed()&&!M5.BtnA.wasClicked())wakeAConsumed=false;
+  if(!M5.BtnB.isPressed()&&!M5.BtnB.wasClicked())wakeBConsumed=false;
   if(petState()==PET_SLEEP&&M5.BtnA.isPressed())wakeAConsumed=true;
+  if(petState()==PET_SLEEP&&M5.BtnB.isPressed())wakeBConsumed=true;
   const bool button=M5.BtnA.isPressed()||M5.BtnB.isPressed()||M5.BtnA.wasClicked()||M5.BtnB.wasClicked()||M5.BtnPWR.wasClicked()||M5.BtnPWR.wasHold();
   storyButton=button;storyMotion=motionActivityDetected()||ev!=MEV_NONE;
   storyStrongMotion=ev==MEV_SHAKE||ev==MEV_FACE_DOWN;
@@ -677,13 +697,22 @@ void uiTick(uint32_t ms){
   static bool debugHeld=false,debugBlocked=false;
   if(!M5.BtnA.isPressed()&&!M5.BtnA.wasClicked()){debugHeld=false;debugBlocked=false;}
   const bool deck=(deviceDisplayRotation()&1)&&!devicePairWindow();
+  if(!special)games.observe(deck?gameRotation:0);
   const auto gameAction=gameButton.update(ms,M5.BtnA.isPressed(),M5.BtnA.wasClicked(),games.active(),
-    deck&&!uiRotationActive()&&!special&&!debugHeld,gestures.suppressA||devicePairWindow()||transportBusy());
+    deck&&!uiRotationActive()&&!special&&!debugHeld&&ownedA.valid,
+    gestures.suppressA||devicePairWindow()||transportBusy()||(deck&&!ownedA.valid)||wakeAConsumed,true);
   if(M5.BtnA.isPressed()&&(gestures.suppressA||deviceStreaming()||devicePairWindow()||transportBusy()))debugBlocked=true;
-  if(M5.BtnA.isPressed()&&M5.BtnA.pressedFor(1200)&&!debugHeld&&!debugBlocked&&!games.active()&&!gameButton.blocked){
+  if(M5.BtnA.isPressed()&&M5.BtnA.pressedFor(1200)&&!deck&&!ownedA.landscape&&!debugHeld&&!debugBlocked&&!games.active()&&!gameButton.blocked){
     debugHeld=true;s_debug=!s_debug;goWake("diagnostics");idlePower.activity(ms);
   }
-  if(gesture==ButtonGestures::Action::Mute&&!devicePairWindow()){deviceToggleMute();uiLog(deviceMuted()?"mic muted":"mic unmuted");}
+  if(gesture==ButtonGestures::Action::Mute&&!devicePairWindow()){
+    if(ownedB.landscape||deck){
+      if(ownedB.valid&&!wakeBConsumed&&!uiRotationActive()&&!special){
+        games.next(gameRotation);idlePower.activity(ms);
+        uiLog("game %s",LandscapeGames::name(games.selected));
+      }
+    }else if(!wakeBConsumed){deviceToggleMute();uiLog(deviceMuted()?"mic muted":"mic unmuted");}
+  }
   if(devicePairWindow()){
     if(M5.BtnA.wasClicked()&&!gestures.suppressA)deviceRefreshPairing();
     if(gesture==ButtonGestures::Action::Mute)deviceCancelPairing();
@@ -698,26 +727,32 @@ void uiTick(uint32_t ms){
   }
   if(devicePairWindow()||transportBusy()||gestures.switchReady||gestures.comboReady)games.cancel();
   if(deck&&!landscapeVisible)goWake("landscape");
-  if(!deck)games.cancel();
   landscapeVisible=deck;
   if(deck&&!special){
     const MotionDiag input=motionDiag();
-    const float tilt=LandscapeTilt::tiltDegrees(input.ax,input.ay,deviceDisplayRotation());
-    const float vertical=LandscapeTilt::verticalDegrees(input.ax,input.ay,input.az);
-    const bool catching=LandscapeGames::scene(deviceDisplayRotation())==LandscapeGames::Scene::Catch;
+    const bool healthy=motionActivityHealthy(ms);
+    const bool mazeInput=games.selected==LandscapeGames::Scene::Maze;
+    const float tilt=!healthy?NAN:mazeInput?LandscapeTilt::mazeHorizontalDegrees(input.ax,input.ay,gameRotation):
+      LandscapeTilt::tiltDegrees(input.ax,input.ay,gameRotation);
+    const float vertical=!healthy?NAN:mazeInput?
+      LandscapeTilt::mazePitchDegrees(input.ax,input.ay,input.az,gameRotation):LandscapeTilt::verticalDegrees(input.ax,input.ay,input.az);
+    if(M5.BtnA.wasPressed()&&ownedA.valid&&!gestures.suppressA)games.latchAim();
     if(gameAction==LandscapeButton::Action::Exit){
-      games.cancel();idlePower.activity(ms);uiLog(catching?"catch cancelled":"explore cancelled");
+      games.cancel();idlePower.activity(ms);uiLog("game ended");
     }
     if(gameAction==LandscapeButton::Action::Enter&&!wakeAConsumed&&!debugHeld&&!s_debug){
       if(petState()==PET_SLEEP)goWake("game A");
-      else if(games.begin(deviceDisplayRotation(),tilt,vertical,ms)){
+      else if(games.active()){
+        if(games.fire(ms)){idlePower.activity(ms);soundRequest(SoundCue::Poke);uiLog("launch shot %u",games.launch.shots);}
+      }else if(games.begin(gameRotation,tilt,vertical,ms)){
         wordsGamePlayed=true;wordsCaught=false;
-        idlePower.activity(ms);uiLog(catching?"catch start":"explore start");
-        if(catching)Serial.printf("[catch] begin rot %u base %.1f round %u duration %ums\n",deviceDisplayRotation(),tilt,catchStars.rounds,unsigned(StarCatch::RoundMs));
-        else Serial.printf("[explore] begin rot %u base %.1f,%.1f target %.1f,%.1f\n",deviceDisplayRotation(),tilt,vertical,exploration.targetX(),exploration.targetY());
+        idlePower.activity(ms);uiLog("%s start",LandscapeGames::name(games.selected));
+        if(games.preferencesDirty)gamePreferencesAt=ms;
+        Serial.printf("[games] start %s rot %u base %.1f,%.1f left %s right %s\n",LandscapeGames::name(games.selected),gameRotation,tilt,vertical,LandscapeGames::name(games.left),LandscapeGames::name(games.right));
       }
     }
-    const auto event=games.update(deviceDisplayRotation(),tilt,vertical,petState()!=PET_SLEEP,ms);
+    if(!M5.BtnA.isPressed()&&!M5.BtnA.wasClicked())games.shotLatched=false;
+    const auto event=games.update(gameRotation,tilt,vertical,petState()!=PET_SLEEP,ms);
     if(event.explore==Exploration::Event::Locked){
       idlePower.activity(ms);petPoke();soundRequest(SoundCue::Scan);s_stateAt=ms;uiLog("target locked");
     }else if(event.explore==Exploration::Event::Found){
@@ -731,8 +766,12 @@ void uiTick(uint32_t ms){
     if(event.catchStars.missed){petBlinkNow();Serial.printf("[catch] missed score %u combo %u\n",catchStars.score,catchStars.combo);}
     if(event.catchStars.finished){
       idlePower.activity(ms);petBlinkNow();soundRequest(SoundCue::Discovery);
-      uiLog("catch done %u",catchStars.score);Serial.printf("[catch] finished score %u best %u elapsed %ums\n",catchStars.score,catchStars.bestCombo,unsigned(ms-catchStars.started));
+      uiLog("catch done %u",catchStars.score);Serial.printf("[catch] finished score %u best %u elapsed %ums\n",catchStars.score,catchStars.bestCombo,unsigned(games.clock-catchStars.started));
     }
+    if(event.mazeFinished||event.launch.finished){
+      idlePower.activity(ms);petBlinkNow();soundRequest(SoundCue::Discovery);
+      uiLog(event.mazeFinished?"maze complete":games.launch.won?"orbits lit":"launch retry");
+    }else if(event.launch.hits){idlePower.activity(ms);petPoke();soundRequest(SoundCue::Scan);uiLog("orbit %u / 3",games.launch.litCount());}
   }
 
   /* ---- 姿态输入 ---- */
@@ -781,6 +820,16 @@ void uiTick(uint32_t ms){
   if (petState()==PET_CHARGING && !s_chgShown)setPet(PET_IDLE,"charged");
 
   if (petState() == PET_IDLE && ms - lastBlink > 3200){ petBlinkNow(); lastBlink = ms; }
+  if(games.preferencesDirty&&uint32_t(ms-gamePreferencesAt)>=800&&int32_t(ms-gamePreferencesRetryAt)>=0&&
+     !deviceStreaming()&&!deviceVoicePreparing()&&!otaActive()&&!maintenanceActive()&&!maintenancePending()&&!provActive()&&
+     !connectionSetupActive()&&!devicePairWindow()&&!transportBusy()&&!M5.BtnA.isPressed()&&!M5.BtnB.isPressed()){
+    Preferences prefs;uint8_t wanted[4],actual[4]{};games.preferences(wanted);
+    bool ok=prefs.begin("tcgames",false);
+    if(ok){ok=prefs.putBytes("modes",wanted,sizeof(wanted))==sizeof(wanted)&&
+      prefs.getBytes("modes",actual,sizeof(actual))==sizeof(actual)&&!memcmp(wanted,actual,sizeof(wanted));prefs.end();}
+    if(ok){games.preferencesDirty=false;Serial.println("[games] memories saved");}
+    else{gamePreferencesRetryAt=ms+5000;Serial.println("[games] preference write failed; retry deferred");}
+  }
 }
 
 bool uiScreenOff(){return screenOff;}
@@ -1203,6 +1252,19 @@ void renderOta(uint32_t ms){
 
 // A landscape scene, rather than a rotated portrait dashboard. Everything in
 // the play field is local fiction; battery and status icons remain real state.
+void drawGameFooter(uint32_t ms){
+  canvas.drawFastHLine(8,118,224,C::dim2);
+  const auto scene=games.scene(canvasRotation(ms));
+  const bool asleep=petState()==PET_SLEEP;
+  const char* action=asleep?"A:WAKE":games.resumable()?"A:RESUME":games.active()?
+    (!games.ready(ms)?"READY...":scene==LandscapeGames::Scene::Launch?
+      (games.launch.phase==TelekineticLaunch::Phase::Flight?"FLYING":"A:FIRE"):"HOLD A:EXIT"):
+    games.result()?((scene==LandscapeGames::Scene::Maze||(scene==LandscapeGames::Scene::Launch&&games.launch.won))?"A:NEXT LV":scene==LandscapeGames::Scene::Launch?"A:RETRY":"A:AGAIN"):"A:START";
+  pixelText(action,8,124,C::ink);
+  pixelText(asleep?"B:WAKE":"B:GAME",163,124,C::dim);
+  for(unsigned i=0;i<4;i++)canvas.fillRect(214+i*5,126,3,i+1==unsigned(scene)?5:2,i+1==unsigned(scene)?C::glow:C::dim2);
+}
+
 void renderExploration(uint32_t ms){
   canvas.fillSprite(C::screen);
   auto text=[&](const char* s,int x,int y,uint16_t color){
@@ -1219,9 +1281,9 @@ void renderExploration(uint32_t ms){
   for(int i=0;i<5;i++)canvas.fillRect(15+i*20,111,8,1,C::dim2);
   petSetScale(1.35f);petDraw(&canvas,38,ms,deviceStreaming()?2:10,exploration.offset);
 
-  text(asleep?"REST / A:WAKE":exploration.scanning?"LOCKED / SCAN":exploration.active?"AIM / ROT LOCK":exploration.revealed?"DISCOVERY":"A:EXPLORE",130,26,exploration.scanning?C::ok:C::glow);
+  text(asleep?"REST / A:WAKE":games.resumable()?"PAUSED":exploration.scanning?"LOCKED / SCAN":exploration.active?"AIM / ROT LOCK":exploration.revealed?"DISCOVERY":"A:EXPLORE",130,26,exploration.scanning?C::ok:C::glow);
   for(int x=136;x<232;x+=12)for(int y=43;y<100;y+=12)canvas.drawPixel(x,y,C::dim2);
-  const float progress=exploration.progress(ms);
+  const float progress=exploration.progress(games.clock);
   const int px=lroundf(exploration.probeX());
   const int tx=lroundf(exploration.targetX());
   const int ty=lroundf(exploration.targetY());
@@ -1264,10 +1326,7 @@ void renderExploration(uint32_t ms){
   canvas.clearClipRect();
   if(exploration.scanning){canvas.fillRect(130,111,100,2,C::dim2);canvas.fillRect(130,111,int(progress*100),2,C::ok);}
   text(asleep?"probe parked":exploration.scanning?"scanning...":exploration.active?(exploration.near?"hold to lock":"tilt to aim"):exploration.revealed?names[exploration.artifact()]:"A to start",130,101,C::dim);
-  canvas.drawFastHLine(8,118,224,C::dim2);
-  text(asleep?"A:WAKE":exploration.active?"TILT:AIM HOLD A:EXIT":"A:EXPLORE",8,124,C::ink);
-  char found[18];snprintf(found,sizeof(found),"FOUND %02u",exploration.discoveries%100);
-  text(found,183,124,C::dim);
+  drawGameFooter(ms);
   present(ms);
 }
 
@@ -1283,7 +1342,7 @@ void renderStarCatch(uint32_t ms){
   drawBattery(W-8-BATTERY_W,3);
   canvas.drawFastHLine(8,19,224,C::dim2);canvas.drawFastVLine(75,26,86,C::dim2);
   const bool asleep=petState()==PET_SLEEP;
-  text(asleep?"REST":catchStars.active?"FOCUS":"READY",8,26,C::dim);
+  text(asleep?"REST":games.resumable()?"PAUSED":catchStars.active?"FOCUS":"READY",8,26,C::dim);
   canvas.setClipRect(1,38,73,63);
   petSetScale(deviceStreaming()?.74f:.87f);petDraw(&canvas,47,ms,deviceStreaming()?2:8,catchStars.offset);
   canvas.clearClipRect();
@@ -1291,10 +1350,10 @@ void renderStarCatch(uint32_t ms){
   if(catchStars.combo>1){snprintf(label,sizeof(label),"X%u",catchStars.combo);text(label,8,102,C::ok);}
   else text("CLAWD",8,102,C::dim);
   snprintf(label,sizeof(label),"STARS %02u",catchStars.score);text(label,84,26);
-  snprintf(label,sizeof(label),"%02uS",unsigned((catchStars.leftMs(ms)+999)/1000));text(label,208,26,catchStars.active?C::glow:C::dim);
+  snprintf(label,sizeof(label),"%02uS",unsigned((catchStars.leftMs(games.clock)+999)/1000));text(label,208,26,catchStars.active?C::glow:C::dim);
   for(int x=88;x<232;x+=12)for(int y=43;y<116;y+=12)canvas.drawPixel(x,y,C::dim2);
   canvas.setClipRect(82,38,151,79);
-  const bool recent=catchStars.feedback!=StarCatch::Feedback::None&&uint32_t(ms-catchStars.feedbackAt)<500;
+  const bool recent=catchStars.feedback!=StarCatch::Feedback::None&&uint32_t(games.clock-catchStars.feedbackAt)<500;
   if(catchStars.active){
     for(const auto& star:catchStars.stars)if(star.active)drawCatchStar(lroundf(star.x),lroundf(star.y),C::glow);
     const int x=lroundf(catchStars.trayX()),half=StarCatch::TrayWidth/2;
@@ -1314,10 +1373,56 @@ void renderStarCatch(uint32_t ms){
   canvas.clearClipRect();
   // Detached particles, never arms or a solid tether to the tray.
   if(catchStars.active){canvas.fillRect(69,73,2,2,C::lite);canvas.fillRect(79,83,2,2,C::lite);}
-  canvas.drawFastHLine(8,118,224,C::dim2);
-  text(asleep?"A:WAKE":catchStars.active?"TILT:MOVE HOLD A:EXIT":"A:START",8,124);
-  text(catchStars.active?"LOCK":"20S",208,124,C::dim);
+  drawGameFooter(ms);
   present(ms);
+}
+
+void drawNewGameHeader(const char* title,uint32_t ms){
+  canvas.fillSprite(C::screen);pixelText(title,8,6,C::ink);
+  drawStatusIcons(W-8-BATTERY_W-6-UIStatus::Width,4,ms);drawBattery(W-8-BATTERY_W,3);
+  canvas.drawFastHLine(8,19,224,C::dim2);
+  pixelText(petState()==PET_SLEEP?"REST":games.resumable()?"PAUSED":games.active()?"FOCUS":"READY",8,26,C::dim);
+  canvas.setClipRect(1,38,70,64);petSetScale(.83f);petDraw(&canvas,47,ms,8,games.offsetX);canvas.clearClipRect();
+  pixelText("CLAWD",8,106,C::dim);
+  for(int x=83;x<231;x+=12)for(int y=40;y<112;y+=12)canvas.drawPixel(x,y,C::dim2);
+}
+void renderStarMaze(uint32_t ms){
+  drawNewGameHeader("CLAWD // MAZE",ms);
+  const auto& g=games.maze;
+  char label[28];snprintf(label,sizeof(label),"L%u %s",g.level+1,g.finished?"DELIVERED":"TILT:ROLL");pixelText(label,80,24,g.finished?C::ok:C::ink);
+  canvas.drawRect(76,34,155,79,C::dim2);
+  for(const auto& w:g.walls)canvas.fillRect(lroundf(w.x),lroundf(w.y),lroundf(w.w),lroundf(w.h),C::dim);
+  const int gx=lroundf(g.goalX),gy=lroundf(g.goalY);
+  canvas.drawCircle(gx,gy,6,g.finished?C::ok:C::glow);canvas.drawPixel(gx,gy,C::glow);
+  const int x=lroundf(g.x),y=lroundf(g.y);
+  canvas.fillCircle(x,y,3,C::glow);canvas.drawPixel(x-1,y-1,C::lite);
+  if(!games.active()&&!g.finished)pixelText(games.resumable()?"A:RESUME":"A:START",110,104,C::ink);
+  drawGameFooter(ms);present(ms);
+}
+void renderTelekineticLaunch(uint32_t ms){
+  drawNewGameHeader("CLAWD // LAUNCH",ms);
+  const auto& g=games.launch;
+  char label[28];snprintf(label,sizeof(label),"L%u %u/3 %s",g.level+1,g.litCount(),g.finished?(g.won?"CLEAR":"RETRY"):g.phase==TelekineticLaunch::Phase::Flight?"FLYING":"AIM");
+  pixelText(label,80,24,g.won?C::ok:C::ink);
+  canvas.drawRect(80,38,152,75,C::dim2);
+  for(const auto& w:g.walls)canvas.fillRect(lroundf(w.x),lroundf(w.y),lroundf(w.w),lroundf(w.h),C::dim);
+  for(const auto& r:g.rings){
+    canvas.drawCircle(lroundf(r.x),lroundf(r.y),6,r.lit?C::ok:C::dim);
+    canvas.fillRect(lroundf(r.x)-1,lroundf(r.y)-1,2,2,r.lit?C::ok:C::glow);
+  }
+  for(unsigned i=0;i<3;i++)canvas.fillRect(12+i*11,44,6,3,i<g.shots?C::dim2:C::glow);
+  const float a=g.angle*.01745329252f;
+  if(g.phase==TelekineticLaunch::Phase::Aim){
+    for(int d=5;d<29;d+=5)canvas.drawPixel(lroundf(93+cosf(a)*d),lroundf(98+sinf(a)*d),C::glow);
+    canvas.drawCircle(93,98,4,C::dim);
+  }else if(g.phase==TelekineticLaunch::Phase::Flight){
+    for(unsigned i=0;i<g.trailCount;i+=2)canvas.drawPixel(lroundf(g.trail[i].x),lroundf(g.trail[i].y),C::dim);
+  }
+  canvas.fillCircle(lroundf(g.x),lroundf(g.y),2,C::glow);
+  if(g.shotHits>1){snprintf(label,sizeof(label),"X%u",g.shotHits);pixelText(label,50,44,C::ok);}
+  snprintf(label,sizeof(label),"%dD",int(lroundf(g.angle)));pixelText(label,8,94,C::dim);
+  canvas.fillRect(8,102,50,2,C::dim2);canvas.fillRect(8,102,int(g.power*50),2,C::glow);
+  drawGameFooter(ms);present(ms);
 }
 
 // The timer is informational only. Completion comes exclusively from the
@@ -1421,7 +1526,10 @@ void uiDraw(uint32_t ms){
   }
   if (s_debug&&!stories.isDemo()){ renderDebug(ms); return; }
   if(W==240){
-    if(LandscapeGames::scene(canvasRotation(ms))==LandscapeGames::Scene::Catch)renderStarCatch(ms);
+    const auto scene=games.scene(canvasRotation(ms));
+    if(scene==LandscapeGames::Scene::Catch)renderStarCatch(ms);
+    else if(scene==LandscapeGames::Scene::Maze)renderStarMaze(ms);
+    else if(scene==LandscapeGames::Scene::Launch)renderTelekineticLaunch(ms);
     else renderExploration(ms);
     return;
   }
